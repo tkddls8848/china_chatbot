@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>관심종목</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/css/telegram-theme.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/components.css">
+</head>
+<body>
+<div class="container pb-nav">
+  <div class="page-title">⭐ 관심종목</div>
+
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <input id="ticker-in" class="input" placeholder="코드 (예: 600519)" style="flex:1">
+    <input id="market-in" class="input" placeholder="시장 (sh/sz/hk)" style="width:120px">
+  </div>
+  <button class="btn" id="add-btn" style="margin-bottom:16px">추가</button>
+  <div id="wl-list"><div class="loading">로딩 중…</div></div>
+
+  <div class="page-title" style="margin-top:20px;font-size:15px">가격 알림</div>
+  <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+    <input id="al-ticker" class="input" placeholder="코드" style="flex:1;min-width:80px">
+    <select id="al-cond" class="input" style="width:80px">
+      <option value="above">이상</option>
+      <option value="below">이하</option>
+    </select>
+    <input id="al-price" class="input" placeholder="가격" type="number" style="width:100px">
+  </div>
+  <button class="btn" id="alert-btn" style="margin-bottom:16px">알림 설정</button>
+  <div id="alert-list"><div class="loading">로딩 중…</div></div>
+</div>
+
+<nav class="bottom-nav">
+  <a href="/index.html"><span class="icon">📊</span>시장</a>
+  <a href="/stock.html"><span class="icon">🔍</span>종목</a>
+  <a href="/news.html"><span class="icon">📰</span>뉴스</a>
+  <a href="/watchlist.html" class="active"><span class="icon">⭐</span>관심</a>
+  <a href="/settings.html"><span class="icon">⚙️</span>설정</a>
+</nav>
+
+<script type="module">
+import { api } from "/static/js/api.js";
+import { showError } from "/static/js/utils.js";
+
+function esc(str) {
+  return String(str ?? "").replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":`&#39;` }[c]));
+}
+
+const wlEl  = document.getElementById("wl-list");
+const alEl  = document.getElementById("alert-list");
+
+async function loadWatchlist() {
+  try {
+    const items = await api.getWatchlist();
+    if (!items.length) { wlEl.innerHTML = '<div class="loading">관심종목 없음</div>'; return; }
+    wlEl.innerHTML = "";
+    items.forEach(i => {
+      const row = document.createElement("div");
+      row.className = "card";
+      row.style.display = "flex";
+      row.style.justifyContent = "space-between";
+      row.style.alignItems = "center";
+      row.innerHTML = `<div><b>${esc(i.ticker)}</b> <span style="color:var(--tg-hint);font-size:12px">${esc(i.market)}</span></div>`;
+      const btn = document.createElement("button");
+      btn.textContent = "×";
+      btn.style.cssText = "border:none;background:none;color:#c00;cursor:pointer;font-size:20px";
+      btn.addEventListener("click", () => removeTicker(i.ticker));
+      row.appendChild(btn);
+      wlEl.appendChild(row);
+    });
+  } catch { showError(wlEl, "불러오기 실패"); }
+}
+
+async function loadAlerts() {
+  try {
+    const items = await api.getAlerts();
+    if (!items.length) { alEl.innerHTML = '<div class="loading">알림 없음</div>'; return; }
+    alEl.innerHTML = "";
+    items.forEach(a => {
+      const row = document.createElement("div");
+      row.className = "card";
+      row.style.display = "flex";
+      row.style.justifyContent = "space-between";
+      row.style.alignItems = "center";
+      const dir = a.condition === "above" ? "이상" : "이하";
+      row.innerHTML = `<div>${esc(a.ticker)} — ${dir} <b>${a.price}</b></div>`;
+      const btn = document.createElement("button");
+      btn.textContent = "×";
+      btn.style.cssText = "border:none;background:none;color:#c00;cursor:pointer;font-size:20px";
+      btn.addEventListener("click", () => removeAlert(a.id));
+      row.appendChild(btn);
+      alEl.appendChild(row);
+    });
+  } catch { showError(alEl, "불러오기 실패"); }
+}
+
+async function removeTicker(ticker) {
+  await api.removeWatchlist(ticker).catch(() => {});
+  await loadWatchlist();
+}
+
+async function removeAlert(id) {
+  await api.deleteAlert(id).catch(() => {});
+  await loadAlerts();
+}
+
+document.getElementById("add-btn").addEventListener("click", async () => {
+  const ticker = document.getElementById("ticker-in").value.trim();
+  const market = document.getElementById("market-in").value.trim() || "sh";
+  if (!ticker) return;
+  await api.addWatchlist(ticker, market).catch(() => {});
+  await loadWatchlist();
+});
+
+document.getElementById("alert-btn").addEventListener("click", async () => {
+  const ticker = document.getElementById("al-ticker").value.trim();
+  const condition = document.getElementById("al-cond").value;
+  const price = parseFloat(document.getElementById("al-price").value);
+  if (!ticker || isNaN(price)) return;
+  await api.createAlert({ ticker, condition, price }).catch(() => {});
+  await loadAlerts();
+});
+
+loadWatchlist();
+loadAlerts();
+</script>
+</body>
+</html>

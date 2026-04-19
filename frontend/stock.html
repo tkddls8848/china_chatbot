@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>종목 검색</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<link rel="stylesheet" href="/static/css/telegram-theme.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/components.css">
+</head>
+<body>
+<div class="container pb-nav">
+  <div class="page-title">🔍 종목 검색</div>
+  <div style="display:flex;gap:8px;margin-bottom:16px">
+    <input id="q" class="input" placeholder="종목명 또는 코드 입력" type="search">
+    <button class="btn" id="search-btn" style="width:auto;padding:10px 16px">검색</button>
+  </div>
+  <div id="results"></div>
+  <div id="detail" style="display:none">
+    <div id="stock-header" class="card"></div>
+    <canvas id="chart" style="margin:16px 0"></canvas>
+    <div class="page-title" style="font-size:15px">뉴스</div>
+    <div id="stock-news"></div>
+  </div>
+</div>
+
+<nav class="bottom-nav">
+  <a href="/index.html"><span class="icon">📊</span>시장</a>
+  <a href="/stock.html" class="active"><span class="icon">🔍</span>종목</a>
+  <a href="/news.html"><span class="icon">📰</span>뉴스</a>
+  <a href="/watchlist.html"><span class="icon">⭐</span>관심</a>
+  <a href="/settings.html"><span class="icon">⚙️</span>설정</a>
+</nav>
+
+<script type="module">
+import { api } from "/static/js/api.js";
+import { fmtNum, fmtPct, badgeClass, showError } from "/static/js/utils.js";
+import { renderCandlestick } from "/static/js/chart.js";
+
+const qEl     = document.getElementById("q");
+const btn     = document.getElementById("search-btn");
+const results = document.getElementById("results");
+const detail  = document.getElementById("detail");
+
+function esc(str) {
+  return String(str ?? "").replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":`&#39;` }[c]));
+}
+
+async function showDetail(ticker) {
+  results.innerHTML = "";
+  detail.style.display = "block";
+  const header = document.getElementById("stock-header");
+  const newsEl = document.getElementById("stock-news");
+  header.innerHTML = '<div class="loading">로딩 중…</div>';
+
+  try {
+    const info = await api.getStock(ticker);
+    const name  = esc(info["股票简称"] || info.shortName || ticker);
+    const price = fmtNum(info["最新价"] || info.currentPrice || 0);
+    header.innerHTML = `<div class="card-title">${name} (${esc(ticker)})</div>
+                        <div class="index-value">${price}</div>`;
+  } catch { header.innerHTML = '<div class="error">종목 정보 없음</div>'; }
+
+  try {
+    const chartData = await api.getChart(ticker, "3mo", "1d");
+    renderCandlestick("chart", chartData);
+  } catch { /* 차트 없으면 스킵 */ }
+
+  try {
+    const newsItems = await api.getStockNews(ticker);
+    newsEl.innerHTML = newsItems.slice(0, 5).map(n => `
+      <div class="news-item">
+        <div class="news-title">${esc(n["新闻标题"] || n.title || "")}</div>
+        <div class="news-meta">${esc(n["发布时间"] || "")}</div>
+      </div>`).join("");
+  } catch { newsEl.innerHTML = ""; }
+}
+
+btn.onclick = async () => {
+  const q = qEl.value.trim();
+  if (!q) return;
+  results.innerHTML = '<div class="loading">검색 중…</div>';
+  detail.style.display = "none";
+  try {
+    const list = await api.searchStocks(q);
+    if (!list.length) { results.innerHTML = '<div class="loading">결과 없음</div>'; return; }
+
+    results.innerHTML = "";
+    list.forEach(s => {
+      const ticker = s["代码"] || "";
+      const name   = s["名称"] || ticker;
+      const price  = s["最新价"] || 0;
+      const chgPct = s["涨跌幅"] || 0;
+
+      const card = document.createElement("div");
+      card.className = "card";
+      card.style.cursor = "pointer";
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div class="card-title">${esc(name)}</div>
+            <div style="color:var(--tg-hint);font-size:12px">${esc(ticker)}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-weight:600">${fmtNum(price)}</div>
+            <span class="${badgeClass(chgPct)}">${fmtPct(chgPct)}</span>
+          </div>
+        </div>`;
+      card.addEventListener("click", () => showDetail(ticker));
+      results.appendChild(card);
+    });
+  } catch { showError(results, "검색 실패"); }
+};
+
+qEl.onkeydown = e => { if (e.key === "Enter") btn.click(); };
+
+const params = new URLSearchParams(location.search);
+const initTicker = params.get("ticker");
+if (initTicker) showDetail(initTicker);
+</script>
+</body>
+</html>

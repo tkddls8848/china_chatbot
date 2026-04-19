@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>설정</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/css/telegram-theme.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/components.css">
+</head>
+<body>
+<div class="container pb-nav">
+  <div class="page-title">⚙️ 설정</div>
+  <div class="card">
+    <div class="card-title">버전</div>
+    <div style="color:var(--tg-hint)">0.4.0</div>
+  </div>
+  <div class="card">
+    <div class="card-title">데이터 출처</div>
+    <div style="color:var(--tg-hint);font-size:13px">
+      중국 A주: akshare<br>
+      홍콩: yfinance<br>
+      데이터는 최대 15분 지연
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">거래 시간 (KST)</div>
+    <div style="color:var(--tg-hint);font-size:13px">
+      중국 A주: 09:30 ~ 15:00<br>
+      홍콩 HKEX: 09:30 ~ 16:00
+    </div>
+  </div>
+</div>
+
+<nav class="bottom-nav">
+  <a href="/index.html"><span class="icon">📊</span>시장</a>
+  <a href="/stock.html"><span class="icon">🔍</span>종목</a>
+  <a href="/news.html"><span class="icon">📰</span>뉴스</a>
+  <a href="/watchlist.html"><span class="icon">⭐</span>관심</a>
+  <a href="/settings.html" class="active"><span class="icon">⚙️</span>설정</a>
+</nav>
+</body>
+</html>

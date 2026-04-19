@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>경제 캘린더</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/css/telegram-theme.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/components.css">
+</head>
+<body>
+<div class="container pb-nav">
+  <div class="page-title">📅 경제 캘린더</div>
+  <div id="cal-list"><div class="loading">로딩 중…</div></div>
+</div>
+
+<nav class="bottom-nav">
+  <a href="/index.html"><span class="icon">📊</span>시장</a>
+  <a href="/stock.html"><span class="icon">🔍</span>종목</a>
+  <a href="/news.html"><span class="icon">📰</span>뉴스</a>
+  <a href="/watchlist.html"><span class="icon">⭐</span>관심</a>
+  <a href="/settings.html"><span class="icon">⚙️</span>설정</a>
+</nav>
+
+<script type="module">
+import { api } from "/static/js/api.js";
+import { showError } from "/static/js/utils.js";
+
+const listEl = document.getElementById("cal-list");
+
+api.getCalendar().then(items => {
+  if (!items.length) { listEl.innerHTML = '<div class="loading">데이터 없음</div>'; return; }
+  listEl.innerHTML = items.map(item => `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div class="card-title">${item.type}</div>
+        <div style="font-weight:600">${item.value}</div>
+      </div>
+      <div style="color:var(--tg-hint);font-size:12px">${item.date}</div>
+    </div>`).join("");
+}).catch(e => showError(listEl, "캘린더 데이터를 불러올 수 없습니다."));
+</script>
+</body>
+</html>

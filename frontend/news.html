@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>뉴스</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/css/telegram-theme.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/components.css">
+</head>
+<body>
+<div class="container pb-nav">
+  <div class="page-title">📰 뉴스</div>
+  <div class="tab-bar" id="tabs">
+    <div class="tab active" data-market="all">전체</div>
+    <div class="tab" data-market="sh_main">상해</div>
+    <div class="tab" data-market="sz_main">선전</div>
+    <div class="tab" data-market="star">과창판</div>
+    <div class="tab" data-market="hk">홍콩</div>
+  </div>
+  <div id="news-list"><div class="loading">로딩 중…</div></div>
+</div>
+
+<nav class="bottom-nav">
+  <a href="/index.html"><span class="icon">📊</span>시장</a>
+  <a href="/stock.html"><span class="icon">🔍</span>종목</a>
+  <a href="/news.html" class="active"><span class="icon">📰</span>뉴스</a>
+  <a href="/watchlist.html"><span class="icon">⭐</span>관심</a>
+  <a href="/settings.html"><span class="icon">⚙️</span>설정</a>
+</nav>
+
+<script type="module">
+import { api } from "/static/js/api.js";
+import { showError } from "/static/js/utils.js";
+
+const listEl = document.getElementById("news-list");
+let currentMarket = "all";
+
+async function load(market) {
+  listEl.innerHTML = '<div class="loading">로딩 중…</div>';
+  try {
+    const items = await api.getNews(market);
+    if (!items.length) { listEl.innerHTML = '<div class="loading">뉴스 없음</div>'; return; }
+    listEl.innerHTML = items.map(n => {
+      const title = n["新闻标题"] || n.title || "";
+      const time  = n["发布时间"] || n.date || "";
+      const url   = n["新闻链接"] || n.url || "";
+      return `
+      <div class="news-item" ${url ? `onclick="open('${url}','_blank')"` : ""} style="${url?'cursor:pointer':''}">
+        <div class="news-title">${title}</div>
+        <div class="news-meta">${time}</div>
+      </div>`;
+    }).join("");
+  } catch(e) { showError(listEl, "뉴스를 불러올 수 없습니다."); }
+}
+
+document.getElementById("tabs").addEventListener("click", e => {
+  const tab = e.target.closest(".tab");
+  if (!tab) return;
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  tab.classList.add("active");
+  currentMarket = tab.dataset.market;
+  load(currentMarket);
+});
+
+load(currentMarket);
+</script>
+</body>
+</html>
