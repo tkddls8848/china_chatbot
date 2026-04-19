@@ -7,5 +7,7 @@ class Base(DeclarativeBase):
 
 from src.db.models.watchlist import Watchlist  # noqa: E402
 from src.db.models.alert import Alert  # noqa: E402
+from src.db.models.rss_feed import RssFeed  # noqa: E402
+from src.db.models.translation import Translation  # noqa: E402
 
-__all__ = ["Base", "Watchlist", "Alert"]
+__all__ = ["Base", "Watchlist", "Alert", "RssFeed", "Translation"]

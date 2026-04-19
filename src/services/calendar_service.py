@@ -5,7 +5,11 @@ from datetime import date
 import akshare as ak
 from sqlalchemy.orm import Session
 
+from src.cache import TtlCache
+
 logger = logging.getLogger(__name__)
+
+_cache = TtlCache(ttl_seconds=3600)  # 경제지표는 1시간 캐시
 
 
 class CalendarService:
@@ -13,6 +17,10 @@ class CalendarService:
         self._db = db
 
     async def get_calendar(self, start: date | None = None, end: date | None = None) -> list[dict]:
+        hit, data = _cache.get("calendar")
+        if hit:
+            return data
+
         loop = asyncio.get_event_loop()
         results: list[dict] = []
 
@@ -29,9 +37,10 @@ class CalendarService:
                 logger.warning("%s 조회 실패: %s", label, e)
 
         await asyncio.gather(
-            fetch(ak.macro_china_cpi_monthly,        "CPI (소비자물가)",   "日期", "今值"),
-            fetch(ak.macro_china_pmi_manufacturing,  "PMI 제조업",         "日期", "今值"),
+            fetch(ak.macro_china_cpi_monthly,       "CPI (소비자물가)", "日期", "今值"),
+            fetch(ak.macro_china_pmi_manufacturing, "PMI 제조업",       "日期", "今值"),
         )
 
         results.sort(key=lambda x: x["date"], reverse=True)
+        _cache.set("calendar", results)
         return results

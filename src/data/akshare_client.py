@@ -1,10 +1,15 @@
 import asyncio
+import os
 from functools import partial
 from typing import Any
+
+os.environ.setdefault("TQDM_DISABLE", "1")
 
 import akshare as ak
 import pandas as pd
 
+from src.cache import TtlCache
+from src.config import settings
 from src.exceptions import DataFetchError
 
 MARKET_INDEX_MAP: dict[str, str] = {
@@ -20,6 +25,10 @@ MARKET_NAMES: dict[str, str] = {
     "star": "과창판(STAR)",
     "chinext": "창업판(ChiNext)",
 }
+
+# 전체 A주 종목 스냅샷 — 가장 비싼 호출(58페이지)이므로 모듈 단위 캐시
+_spot_cache: TtlCache = TtlCache(settings.CACHE_TTL_SECONDS)
+_info_cache: TtlCache = TtlCache(settings.CACHE_TTL_SECONDS)
 
 
 class AkshareClient:
@@ -59,11 +68,21 @@ class AkshareClient:
         return [r for r in results if isinstance(r, dict)]
 
     async def get_stock_spot(self) -> pd.DataFrame:
-        return await self._run(ak.stock_zh_a_spot_em)
+        hit, data = _spot_cache.get("spot")
+        if hit:
+            return data
+        df: pd.DataFrame = await self._run(ak.stock_zh_a_spot_em)
+        _spot_cache.set("spot", df)
+        return df
 
     async def get_stock_info(self, symbol: str) -> dict:
+        hit, data = _info_cache.get(symbol)
+        if hit:
+            return data
         df: pd.DataFrame = await self._run(ak.stock_individual_info_em, symbol=symbol)
-        return dict(zip(df.iloc[:, 0], df.iloc[:, 1]))
+        result = dict(zip(df.iloc[:, 0], df.iloc[:, 1]))
+        _info_cache.set(symbol, result)
+        return result
 
     async def get_stock_news(self, symbol: str, limit: int = 20) -> list[dict]:
         df: pd.DataFrame = await self._run(ak.stock_news_em, symbol=symbol)

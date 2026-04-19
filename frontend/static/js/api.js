@@ -14,7 +14,7 @@ export const api = {
   getStock:        (ticker)       => request(`/api/stock/${encodeURIComponent(ticker)}`),
   getChart:        (ticker, p, i) => request(`/api/stock/${encodeURIComponent(ticker)}/chart?period=${p}&interval=${i}`),
   getStockNews:    (ticker)       => request(`/api/stock/${encodeURIComponent(ticker)}/news`),
-  getNews:         (market="all") => request(`/api/news?market=${market}&limit=30`),
+  getNews:         (market="all", source="all") => request(`/api/news?market=${market}&source=${source}&limit=30`),
   getCalendar:     ()             => request("/api/calendar"),
 
   getWatchlist:    ()             => request("/api/watchlist"),

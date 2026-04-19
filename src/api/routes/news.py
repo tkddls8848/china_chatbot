@@ -10,6 +10,7 @@ router = APIRouter()
 async def get_news(
     market: str = Query("all"),
     limit: int = Query(20, le=50),
+    source: str = Query("all"),
     svc: NewsService = Depends(get_news_service),
 ) -> list[dict]:
-    return await svc.get_news(market, limit)
+    return await svc.get_news(market, limit, source)

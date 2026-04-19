@@ -30,23 +30,25 @@ class YfinanceClient:
         if not symbol:
             raise DataFetchError(f"Unknown HK market_id: {market_id}")
         ticker = yf.Ticker(symbol)
-        hist = await self._run(ticker.history, period="2d")
-        if hist.empty or len(hist) < 2:
+        hist = await self._run(ticker.history, period="5d", auto_adjust=True)
+        if hist.empty:
             raise DataFetchError(f"No data for {symbol}")
         latest = hist.iloc[-1]
-        prev = hist.iloc[-2]
-        change = float(latest["Close"]) - float(prev["Close"])
-        change_pct = change / float(prev["Close"]) * 100
+        prev = hist.iloc[-2] if len(hist) >= 2 else latest
+        close = float(latest["Close"])
+        prev_close = float(prev["Close"])
+        change = close - prev_close
+        change_pct = (change / prev_close * 100) if prev_close else 0.0
         return {
             "market_id": market_id,
             "name": HK_NAMES.get(market_id, market_id),
             "symbol": symbol,
             "date": str(latest.name.date()),
-            "close": round(float(latest["Close"]), 2),
+            "close": round(close, 2),
             "open": round(float(latest["Open"]), 2),
             "high": round(float(latest["High"]), 2),
             "low": round(float(latest["Low"]), 2),
-            "volume": int(latest["Volume"]),
+            "volume": int(latest.get("Volume", 0)),
             "change": round(change, 2),
             "change_pct": round(change_pct, 2),
         }

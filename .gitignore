@@ -13,4 +13,5 @@ build/
 *.db
 *.db-shm
 *.db-wal
+data/app.db
 .claude/

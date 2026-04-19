@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>어드민</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #252836;
+  --border: #2e3347;
+  --text: #e2e8f0;
+  --hint: #8892a4;
+  --accent: #4f9cf9;
+  --green: #34d399;
+  --red: #f87171;
+  --yellow: #fbbf24;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace; background: var(--bg); color: var(--text); font-size: 14px; min-height: 100vh; }
+header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+header h1 { font-size: 18px; font-weight: 700; }
+header .ver { font-size: 12px; color: var(--hint); }
+#login-overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.login-box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px; width: 320px; }
+.login-box h2 { margin-bottom: 20px; font-size: 16px; }
+.main { padding: 20px 24px; max-width: 900px; margin: 0 auto; }
+.section { margin-bottom: 28px; }
+.section-title { font-size: 13px; font-weight: 600; color: var(--hint); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 10px; }
+.row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.row:last-child { margin-bottom: 0; }
+.label { font-size: 12px; color: var(--hint); width: 140px; flex-shrink: 0; }
+.value { font-weight: 500; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+.badge.ok  { background: rgba(52,211,153,.15); color: var(--green); }
+.badge.stale { background: rgba(251,191,36,.15); color: var(--yellow); }
+.badge.active { background: rgba(79,156,249,.15); color: var(--accent); }
+.badge.off { background: rgba(136,146,164,.15); color: var(--hint); }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity .15s; }
+.btn:hover { opacity: .8; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-danger  { background: var(--red); color: #fff; }
+.btn-ghost   { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+input[type=text], input[type=password] { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-size: 14px; outline: none; }
+input[type=text]:focus, input[type=password]:focus { border-color: var(--accent); }
+.feed-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.feed-row:last-child { border-bottom: none; }
+.feed-url { flex: 1; font-size: 12px; color: var(--hint); word-break: break-all; }
+.feed-src { font-size: 11px; font-weight: 600; color: var(--accent); min-width: 60px; }
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th { text-align: left; padding: 8px 10px; color: var(--hint); font-weight: 500; border-bottom: 1px solid var(--border); }
+.table td { padding: 10px 10px; border-bottom: 1px solid var(--border); }
+.table tr:last-child td { border-bottom: none; }
+.toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 18px; font-size: 13px; z-index: 200; opacity: 0; transition: opacity .3s; pointer-events: none; }
+.toast.show { opacity: 1; }
+.add-feed-row { display: flex; gap: 8px; margin-top: 12px; }
+.add-feed-row input { flex: 1; }
+</style>
+</head>
+<body>
+
+<div id="login-overlay">
+  <div class="login-box">
+    <h2>🔐 어드민 로그인</h2>
+    <input id="token-input" type="password" placeholder="ADMIN_TOKEN 입력" style="margin-bottom:12px">
+    <button class="btn btn-primary" style="width:100%" onclick="login()">로그인</button>
+    <div id="login-err" style="color:var(--red);font-size:12px;margin-top:8px"></div>
+  </div>
+</div>
+
+<header>
+  <h1>🇨🇳 China Market Bot — 어드민</h1>
+  <span class="ver" id="hdr-ver">v0.5.1</span>
+</header>
+
+<div class="main" id="main" style="display:none">
+
+  <!-- 시스템 상태 -->
+  <div class="section">
+    <div class="section-title">시스템 상태</div>
+    <div class="card" id="status-card"><div style="color:var(--hint)">로딩 중…</div></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-ghost" onclick="loadStatus()">↻ 새로고침</button>
+    </div>
+  </div>
+
+  <!-- 캐시 강제 갱신 -->
+  <div class="section">
+    <div class="section-title">캐시 강제 갱신</div>
+    <div class="card" style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-primary" id="btn-idx" onclick="refreshIndex()">📊 지수 캐시 갱신</button>
+      <button class="btn btn-primary" id="btn-rss" onclick="refreshRss()">📰 RSS 피드 갱신</button>
+    </div>
+  </div>
+
+  <!-- RSS 피드 관리 -->
+  <div class="section">
+    <div class="section-title">RSS 피드 관리</div>
+    <div class="card">
+      <div id="feed-list"><div style="color:var(--hint)">로딩 중…</div></div>
+      <div class="add-feed-row" style="flex-wrap:wrap;gap:8px;margin-top:12px">
+        <input type="text" id="new-feed-url" placeholder="http://localhost:1200/cls/telegraph" style="flex:2;min-width:200px">
+        <input type="text" id="new-feed-label" placeholder="레이블 (예: 财联社전보)" style="flex:1;min-width:120px">
+        <select id="new-feed-market" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;outline:none">
+          <option value="cn">cn (중국)</option>
+          <option value="hk">hk (홍콩)</option>
+          <option value="global">global (글로벌)</option>
+        </select>
+        <button class="btn btn-primary" onclick="addFeed()">+ 추가</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 관심종목 -->
+  <div class="section">
+    <div class="section-title">관심종목</div>
+    <div class="card">
+      <table class="table">
+        <thead><tr><th>ID</th><th>티커</th><th>시장</th><th>등록일</th></tr></thead>
+        <tbody id="watchlist-body"><tr><td colspan="4" style="color:var(--hint)">로딩 중…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 알림 -->
+  <div class="section">
+    <div class="section-title">가격 알림</div>
+    <div class="card">
+      <table class="table">
+        <thead><tr><th>ID</th><th>티커</th><th>조건</th><th>기준가</th><th>상태</th><th>발동시각</th></tr></thead>
+        <tbody id="alert-body"><tr><td colspan="6" style="color:var(--hint)">로딩 중…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let TOKEN = "";
+
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "X-Admin-Token": TOKEN, "Content-Type": "application/json", ...(opts.headers || {}) },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function toast(msg, ok = true) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.style.borderColor = ok ? "var(--green)" : "var(--red)";
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 2500);
+}
+
+async function login() {
+  TOKEN = document.getElementById("token-input").value.trim();
+  try {
+    await apiFetch("/api/admin/status");
+    document.getElementById("login-overlay").style.display = "none";
+    document.getElementById("main").style.display = "block";
+    loadAll();
+  } catch {
+    document.getElementById("login-err").textContent = "토큰이 올바르지 않습니다.";
+  }
+}
+document.getElementById("token-input").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
+
+function loadAll() { loadStatus(); loadFeeds(); loadWatchlist(); loadAlerts(); }
+
+async function loadStatus() {
+  try {
+    const s = await apiFetch("/api/admin/status");
+    document.getElementById("hdr-ver").textContent = "v" + s.version;
+    const cacheRows = Object.entries(s.cache).flatMap(([section, entries]) =>
+      Object.entries(entries || {}).map(([k, v]) =>
+        `<div class="row">
+          <span class="label" style="width:180px">${section}/${k}</span>
+          <span class="badge ${v.fresh ? "ok" : "stale"}">${v.fresh ? "fresh" : "stale"} (${v.age_seconds}s)</span>
+        </div>`
+      )
+    ).join("") || '<div class="row"><span class="label">캐시 없음</span></div>';
+    document.getElementById("status-card").innerHTML = `
+      <div class="row"><span class="label">버전</span><span class="value">${s.version}</span></div>
+      <div class="row"><span class="label">RSSHub URL</span><span class="value" style="font-size:12px;color:var(--hint)">${s.rsshub_base_url || "-"}</span></div>
+      <div class="row"><span class="label">활성 피드 수</span><span class="value">${s.feeds_count}</span></div>
+      <div class="row"><span class="label">캐시 TTL</span><span class="value">${s.cache_ttl_seconds}초</span></div>
+      <div style="margin-top:10px;font-size:12px;color:var(--hint);margin-bottom:6px">캐시 상태</div>
+      ${cacheRows}`;
+  } catch(e) { document.getElementById("status-card").innerHTML = `<span style="color:var(--red)">로드 실패</span>`; }
+}
+
+async function refreshIndex() {
+  const btn = document.getElementById("btn-idx");
+  btn.disabled = true;
+  try {
+    await apiFetch("/api/admin/refresh/index", { method: "POST" });
+    toast("지수 캐시 갱신 완료");
+    loadStatus();
+  } catch { toast("갱신 실패", false); }
+  btn.disabled = false;
+}
+
+async function refreshRss() {
+  const btn = document.getElementById("btn-rss");
+  btn.disabled = true;
+  try {
+    await apiFetch("/api/admin/refresh/rss", { method: "POST" });
+    toast("RSS 피드 갱신 완료");
+  } catch { toast("갱신 실패", false); }
+  btn.disabled = false;
+}
+
+async function loadFeeds() {
+  try {
+    const feeds = await apiFetch("/api/admin/feeds");
+    document.getElementById("feed-list").innerHTML = feeds.length
+      ? feeds.map(f => `
+        <div class="feed-row" style="opacity:${f.is_active ? 1 : 0.45}">
+          <span class="feed-src">${f.label || f.url}</span>
+          <span class="badge ${f.market_tag === 'hk' ? 'active' : f.market_tag === 'global' ? 'stale' : 'ok'}" style="font-size:10px">${f.market_tag}</span>
+          <span class="feed-url">${f.url}</span>
+          <button class="btn btn-ghost" style="padding:4px 10px;font-size:11px;flex-shrink:0" onclick="toggleFeed(${f.id})">${f.is_active ? '비활성' : '활성'}</button>
+          <button class="btn btn-danger" style="padding:4px 10px;font-size:11px;flex-shrink:0" onclick="removeFeed('${f.url.replace(/'/g,"\\'")}')">삭제</button>
+        </div>`).join("")
+      : '<div style="color:var(--hint);padding:8px 0">등록된 피드 없음</div>';
+  } catch { document.getElementById("feed-list").innerHTML = '<span style="color:var(--red)">로드 실패</span>'; }
+}
+
+async function toggleFeed(id) {
+  try {
+    const r = await apiFetch(`/api/admin/feeds/${id}`, { method: "PATCH" });
+    toast(r.is_active ? "피드 활성화됨" : "피드 비활성화됨");
+    loadFeeds(); loadStatus();
+  } catch { toast("변경 실패", false); }
+}
+
+async function addFeed() {
+  const url = document.getElementById("new-feed-url").value.trim();
+  const label = document.getElementById("new-feed-label").value.trim();
+  const market_tag = document.getElementById("new-feed-market").value;
+  if (!url) return;
+  try {
+    await apiFetch("/api/admin/feeds", { method: "POST", body: JSON.stringify({ url, label, market_tag }) });
+    document.getElementById("new-feed-url").value = "";
+    document.getElementById("new-feed-label").value = "";
+    toast("피드 추가됨");
+    loadFeeds();
+    loadStatus();
+  } catch(e) { toast(e.message.includes("409") ? "이미 등록된 피드" : "추가 실패", false); }
+}
+
+async function removeFeed(url) {
+  if (!confirm(`삭제하시겠습니까?\n${url}`)) return;
+  try {
+    await apiFetch("/api/admin/feeds", { method: "DELETE", body: JSON.stringify({ url }) });
+    toast("피드 삭제됨");
+    loadFeeds();
+    loadStatus();
+  } catch { toast("삭제 실패", false); }
+}
+
+async function loadWatchlist() {
+  try {
+    const rows = await apiFetch("/api/admin/watchlist");
+    document.getElementById("watchlist-body").innerHTML = rows.length
+      ? rows.map(r => `<tr><td>${r.id}</td><td><b>${r.ticker}</b></td><td><span class="badge active">${r.market}</span></td><td style="color:var(--hint)">${r.created_at.slice(0,16)}</td></tr>`).join("")
+      : '<tr><td colspan="4" style="color:var(--hint)">없음</td></tr>';
+  } catch { document.getElementById("watchlist-body").innerHTML = '<tr><td colspan="4" style="color:var(--red)">로드 실패</td></tr>'; }
+}
+
+async function loadAlerts() {
+  try {
+    const rows = await apiFetch("/api/admin/alerts");
+    document.getElementById("alert-body").innerHTML = rows.length
+      ? rows.map(r => `<tr>
+          <td>${r.id}</td>
+          <td><b>${r.ticker}</b></td>
+          <td>${r.condition === "above" ? "▲ 이상" : "▼ 이하"}</td>
+          <td>${r.price.toLocaleString()}</td>
+          <td><span class="badge ${r.is_active ? "ok" : "off"}">${r.is_active ? "활성" : "발동"}</span></td>
+          <td style="color:var(--hint)">${r.triggered_at ? r.triggered_at.slice(0,16) : "-"}</td>
+        </tr>`).join("")
+      : '<tr><td colspan="6" style="color:var(--hint)">없음</td></tr>';
+  } catch { document.getElementById("alert-body").innerHTML = '<tr><td colspan="6" style="color:var(--red)">로드 실패</td></tr>'; }
+}
+</script>
+</body>
+</html>
