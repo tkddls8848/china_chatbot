@@ -19,6 +19,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from stock_db import StockDatabase
 from translator import TranslationService
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 SENT_IDS_FILE     = BASE_DIR / "data" / "sent_ids.json"
 WATCHLIST_FILE    = BASE_DIR / "data" / "watchlist.json"
+STOCK_DB_FILE     = BASE_DIR / "data" / "stock_db.json"
 PROMPT_DIR        = Path(os.environ.get("TRANSLATE_PROMPT_DIR", "prompts"))
 if not PROMPT_DIR.is_absolute():
     PROMPT_DIR = BASE_DIR / PROMPT_DIR
@@ -45,6 +47,7 @@ CLS_FUTU_NEWS_LIMIT = int(os.environ.get("CLS_FUTU_NEWS_LIMIT", "10"))
 STOCK_NEWS_LIMIT = int(os.environ.get("STOCK_NEWS_LIMIT", "5"))
 SCHEDULE_INTERVAL_MINUTES = int(os.environ.get("SCHEDULE_INTERVAL_MINUTES", "3"))
 TRANSLATE_CONCURRENCY = int(os.environ.get("TRANSLATE_CONCURRENCY", "2"))
+STOCK_DB_ENABLED = os.environ.get("STOCK_DB_ENABLED", "true").lower() == "true"
 DEFAULT_WATCHLIST: Dict[str, str] = {
     "09988":  "알리바바",
     "300750": "CATL",
@@ -201,15 +204,22 @@ def _build_news_message(
     title: str,
     content: str,
     footer: str = "",
+    related_stocks: list[tuple[str, str]] | None = None,
 ) -> str:
     truncation = "..."
     safe_title = html.escape(title)
     raw_content = content
 
+    if related_stocks:
+        items = ", ".join(f"{code}({html.escape(name)})" for code, name in related_stocks)
+        related_line = f"\n\n🔖 관련종목 : {items}"
+    else:
+        related_line = ""
+
     while True:
         safe_content = html.escape(raw_content)
         title_part = f"<b>{safe_title}</b>\n\n" if safe_title else ""
-        text = f"{header}{title_part}{safe_content}{footer}"
+        text = f"{header}{title_part}{safe_content}{related_line}{footer}"
         if len(text) <= TELEGRAM_MESSAGE_LIMIT:
             return text
 
@@ -217,10 +227,8 @@ def _build_news_message(
         keep = max(0, len(raw_content) - overflow - len(truncation) - 20)
         next_content = raw_content[:keep].rstrip() + truncation
         if next_content == raw_content:
-            # header+title+footer만으로 한도를 초과하는 극단적 케이스
-            # HTML 태그 절단을 피하기 위해 원문을 strip 후 재조합
             safe_content = ""
-            text = f"{header}{title_part}{footer}"
+            text = f"{header}{title_part}{related_line}{footer}"
             return text[: TELEGRAM_MESSAGE_LIMIT - len(truncation)] + truncation
         raw_content = next_content
 
@@ -231,7 +239,7 @@ async def _translate_article(
     source: str,
     title: str,
     content: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, list[str]]:
     async with semaphore:
         return await asyncio.to_thread(
             translator.translate_article,
@@ -249,6 +257,7 @@ async def fetch_cls(
     translator: TranslationService,
     translate_semaphore: asyncio.Semaphore,
     chat_id: str,
+    stock_db: StockDatabase,
 ) -> None:
     try:
         df = await asyncio.to_thread(_fetch_cls_raw)
@@ -263,13 +272,18 @@ async def fetch_cls(
                 return None
             raw_title = str(row["标题"])
             raw_content = str(row["内容"])
-            title, content = await _translate_article(
+            title, content, related_codes = await _translate_article(
                 translator,
                 translate_semaphore,
                 "cls",
                 raw_title,
                 raw_content,
             )
+            related_stocks = [
+                (code, name)
+                for code in related_codes
+                if (name := stock_db.get_cn_name(code))
+            ]
             text = _build_news_message(
                 header=(
                     f"📰 <b>財联社 속보</b>\n"
@@ -277,6 +291,7 @@ async def fetch_cls(
                 ),
                 title=title,
                 content=content,
+                related_stocks=related_stocks,
             )
             return article_id, text, title
         except Exception as e:
@@ -285,7 +300,7 @@ async def fetch_cls(
             return None
 
     prepared_rows = await asyncio.gather(
-        *(prepare_row(row) for _, row in df.head(CLS_FUTU_NEWS_LIMIT).iterrows())
+        *(prepare_row(row) for _, row in df.tail(CLS_FUTU_NEWS_LIMIT).iterrows())
     )
 
     for prepared in prepared_rows:
@@ -311,6 +326,7 @@ async def fetch_futu(
     translator: TranslationService,
     translate_semaphore: asyncio.Semaphore,
     chat_id: str,
+    stock_db: StockDatabase,
 ) -> None:
     try:
         df = await asyncio.to_thread(_fetch_futu_raw)
@@ -325,13 +341,18 @@ async def fetch_futu(
                 return None
             raw_title = str(row["标题"]) if row["标题"] else ""
             raw_content = str(row["内容"])
-            title, content = await _translate_article(
+            title, content, related_codes = await _translate_article(
                 translator,
                 translate_semaphore,
                 "futu",
                 raw_title,
                 raw_content,
             )
+            related_stocks = [
+                (code, name)
+                for code in related_codes
+                if (name := stock_db.get_cn_name(code))
+            ]
             link_url = str(row.get("链接") or "")
             link_part = (
                 f'\n🔗 <a href="{html.escape(link_url)}">{html.escape(link_url)}</a>'
@@ -345,6 +366,7 @@ async def fetch_futu(
                 title=title,
                 content=content,
                 footer=link_part,
+                related_stocks=related_stocks,
             )
             return article_id, text, content
         except Exception as e:
@@ -353,7 +375,7 @@ async def fetch_futu(
             return None
 
     prepared_rows = await asyncio.gather(
-        *(prepare_row(row) for _, row in df.head(CLS_FUTU_NEWS_LIMIT).iterrows())
+        *(prepare_row(row) for _, row in df.head(CLS_FUTU_NEWS_LIMIT).iloc[::-1].iterrows())
     )
 
     for prepared in prepared_rows:
@@ -381,6 +403,7 @@ async def fetch_stock_news(
     wm: WatchlistManager,
     chat_id: str,
     bot_data: dict,
+    stock_db: StockDatabase,
 ) -> None:
     watchlist = await wm.get_all()
     if not watchlist:
@@ -419,13 +442,18 @@ async def fetch_stock_news(
                         return None
                     raw_title = str(row["新闻标题"])
                     raw_content = str(row["新闻内容"])
-                    title, content = await _translate_article(
+                    title, content, related_codes = await _translate_article(
                         translator,
                         translate_semaphore,
                         "stock",
                         raw_title,
                         raw_content,
                     )
+                    related_stocks = [
+                        (rc, rn)
+                        for rc in related_codes
+                        if (rn := stock_db.get_cn_name(rc))
+                    ]
                     source = html.escape(str(row["文章来源"]))
                     link_url = str(row["新闻链接"])
                     link = f'<a href="{html.escape(link_url)}">{html.escape(link_url)}</a>'
@@ -438,6 +466,7 @@ async def fetch_stock_news(
                         title=title,
                         content=content,
                         footer=f"\n\n🔗 {link}",
+                        related_stocks=related_stocks,
                     )
                     return article_id, text, title
                 except Exception as e:
@@ -468,13 +497,22 @@ async def fetch_stock_news(
             logger.error("[STOCK] %s 오류: %s", name, e)
 
 
+async def _refresh_stock_db(stock_db: StockDatabase) -> None:
+    try:
+        await asyncio.to_thread(stock_db.build)
+        logger.info("[StockDB] 일별 갱신 완료")
+    except Exception as e:
+        logger.warning("[StockDB] 일별 갱신 실패: %s", e)
+
+
 async def fetch_all(app: Application) -> None:
     tracker: SentNewsTracker = app.bot_data["sent_tracker"]
     wm: WatchlistManager     = app.bot_data["watchlist_manager"]
     translator: TranslationService = app.bot_data["translator"]
     translate_semaphore: asyncio.Semaphore = app.bot_data["translate_semaphore"]
-    await fetch_cls(app.bot, tracker, translator, translate_semaphore, CHAT_ID)
-    await fetch_futu(app.bot, tracker, translator, translate_semaphore, CHAT_ID)
+    stock_db: StockDatabase = app.bot_data["stock_db"]
+    await fetch_cls(app.bot, tracker, translator, translate_semaphore, CHAT_ID, stock_db)
+    await fetch_futu(app.bot, tracker, translator, translate_semaphore, CHAT_ID, stock_db)
     await fetch_stock_news(
         app.bot,
         tracker,
@@ -483,6 +521,7 @@ async def fetch_all(app: Application) -> None:
         wm,
         CHAT_ID,
         app.bot_data,
+        stock_db,
     )
     await tracker.persist()
 
@@ -609,9 +648,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 def main() -> None:
     app = Application.builder().token(BOT_TOKEN).build()
 
+    stock_db = StockDatabase(cache_file=STOCK_DB_FILE, enabled=STOCK_DB_ENABLED)
+    stock_db.load_or_build()
+
     app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE)
     app.bot_data["watchlist_manager"]    = WatchlistManager(WATCHLIST_FILE)
     app.bot_data["stock_news_first_run"] = True
+    app.bot_data["stock_db"]             = stock_db
     app.bot_data["translator"]           = TranslationService(
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
         model=os.environ.get("TRANSLATE_MODEL", "gemma4"),
@@ -641,6 +684,14 @@ def main() -> None:
         next_run_time=datetime.now(),
         max_instances=1,
         coalesce=True,
+    )
+    scheduler.add_job(
+        _refresh_stock_db,
+        trigger="cron",
+        hour=8,
+        minute=30,
+        args=[stock_db],
+        id="refresh_stock_db",
     )
     scheduler.start()
 

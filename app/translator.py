@@ -44,9 +44,11 @@ class TranslationService:
             prompts[source] = path.read_text(encoding="utf-8")
         return prompts
 
-    def translate_article(self, source: str, title: str, content: str) -> tuple[str, str]:
+    def translate_article(
+        self, source: str, title: str, content: str
+    ) -> tuple[str, str, list[str]]:
         if not self._enabled:
-            return title, content
+            return title, content, []
 
         prompt = self._prompts.get(source)
         if prompt is None:
@@ -58,7 +60,7 @@ class TranslationService:
         except Exception as e:
             if self._fallback_to_original:
                 logger.warning("[TRANSLATE] failed, fallback to original: %s", e)
-                return title, content
+                return title, content, []
             raise TranslationError(str(e)) from e
 
     def _request_translation(self, prompt: str, title: str, content: str) -> str:
@@ -97,14 +99,18 @@ class TranslationService:
             raise ValueError("empty Ollama response content")
         return translated
 
-    def _parse_translation(self, translated: str) -> tuple[str, str]:
+    def _parse_translation(self, translated: str) -> tuple[str, str, list[str]]:
         data = json.loads(translated)
         title = data.get("title")
         content = data.get("content")
+        related = data.get("related", [])
 
         if not isinstance(title, str) or not title.strip():
             raise ValueError("translation JSON missing title")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("translation JSON missing content")
+        if not isinstance(related, list):
+            related = []
 
-        return title.strip(), content.strip()
+        related_codes = [c for c in related if isinstance(c, str) and c.strip()]
+        return title.strip(), content.strip(), related_codes
