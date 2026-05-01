@@ -3,11 +3,12 @@ import html
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
 
 import akshare as ak
+import pandas as pd
 import requests.exceptions
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
@@ -266,7 +267,7 @@ async def fetch_cls(
         return
 
     async def prepare_row(row):
-        article_id = str(row["发布日期"]) + str(row["发布时间"]) + str(row["标题"])
+        article_id = str(row["发布日期"]) + " " + str(row["发布时间"]) + str(row["标题"])
         try:
             if not await tracker.reserve(article_id):
                 return None
@@ -435,6 +436,11 @@ async def fetch_stock_news(
             if df.empty:
                 continue
 
+            cutoff = datetime.now() - timedelta(days=14)
+            df = df[pd.to_datetime(df["发布时间"], errors="coerce") >= cutoff]
+            if df.empty:
+                continue
+
             async def prepare_row(row):
                 article_id = str(row["发布时间"]) + str(row["新闻标题"])[:20]
                 try:
@@ -568,6 +574,7 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     wm: WatchlistManager = context.bot_data["watchlist_manager"]
+    stock_db: StockDatabase = context.bot_data["stock_db"]
     if len(context.args) < 1:
         await update.message.reply_text(
             "사용법: /add 종목코드\n"
@@ -583,12 +590,20 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    # StockDB 우선 조회 (A주/홍콩 전 종목 포함)
+    name = stock_db.get_cn_name(code)
+    if name:
+        await wm.add(code, name)
+        await update.message.reply_text(f"✅ 추가됨: {name} ({code})\n/menu 로 목록 확인")
+        logger.info("[WATCHLIST] 추가 (DB): %s %s", code, name)
+        return
+
     await update.message.reply_text(f"🔍 {code} 종목명 조회 중...")
     try:
         name = await asyncio.to_thread(_resolve_stock_name, code)
         await wm.add(code, name)
         await update.message.reply_text(f"✅ 추가됨: {name} ({code})\n/menu 로 목록 확인")
-        logger.info("[WATCHLIST] 추가: %s %s", code, name)
+        logger.info("[WATCHLIST] 추가 (API): %s %s", code, name)
     except Exception as e:
         logger.error("[WATCHLIST] 종목명 조회 실패: %s %s", code, e)
         await update.message.reply_text(

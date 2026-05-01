@@ -81,6 +81,7 @@ class TranslationService:
                 "options": {
                     "temperature": 0.1,
                     "num_predict": 512,
+                    "num_gpu": 0,  # CPU 전용 강제
                 },
             },
             timeout=self._timeout,
