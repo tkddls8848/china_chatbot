@@ -145,3 +145,17 @@ class StockDatabase:
 
     def is_valid_code(self, code: str) -> bool:
         return code in self._db
+
+    def get_all(self) -> dict[str, dict]:
+        return self._db.copy()
+
+    def get_candidate_universe(self, limit: int | None = None) -> list[dict[str, str]]:
+        items = [
+            {
+                "code": code,
+                "name": str(entry.get("name") or ""),
+                "market": str(entry.get("market") or ""),
+            }
+            for code, entry in self._db.items()
+        ]
+        return items[:limit] if limit else items
