@@ -4,63 +4,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import requests
+from llm.client import OllamaJsonClient
 
 logger = logging.getLogger(__name__)
 
 
 class MarketViewError(RuntimeError):
     """Raised when market view analysis cannot be completed."""
-
-
-class MarketViewManager:
-    def __init__(self, file_path: Path):
-        self._file_path = file_path
-        self._data: dict[str, Any] = {}
-        self._load()
-
-    def _load(self) -> None:
-        if not self._file_path.exists():
-            self._file_path.parent.mkdir(parents=True, exist_ok=True)
-            self._data = {"view": None, "updated_at": None, "last_result": None}
-            self._persist()
-            return
-
-        try:
-            self._data = json.loads(self._file_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.warning("[MarketView] failed to load state, resetting: %s", e)
-            self._data = {"view": None, "updated_at": None, "last_result": None}
-            self._persist()
-
-    def _persist(self) -> None:
-        self._file_path.write_text(
-            json.dumps(self._data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-    def get_view(self) -> str | None:
-        view = self._data.get("view")
-        return view if isinstance(view, str) and view.strip() else None
-
-    def set_view(self, text: str) -> None:
-        self._data["view"] = text.strip()
-        self._data["updated_at"] = datetime.now().isoformat(timespec="seconds")
-        self._persist()
-
-    def clear_view(self) -> None:
-        self._data["view"] = None
-        self._data["updated_at"] = None
-        self._data["last_result"] = None
-        self._persist()
-
-    def get_last_result(self) -> dict[str, Any] | None:
-        result = self._data.get("last_result")
-        return result if isinstance(result, dict) else None
-
-    def save_result(self, result: dict[str, Any]) -> None:
-        self._data["last_result"] = result
-        self._persist()
 
 
 class MarketViewAnalyzer:
@@ -81,6 +31,12 @@ class MarketViewAnalyzer:
         self._num_predict = num_predict
         self._num_gpu = num_gpu
         self._prompt = prompt_file.read_text(encoding="utf-8")
+        self._client = OllamaJsonClient(
+            base_url=base_url,
+            model=model,
+            timeout=timeout,
+            num_gpu=num_gpu,
+        )
 
     def analyze(
         self,
@@ -98,40 +54,13 @@ class MarketViewAnalyzer:
             "news_items": news_items,
             "candidate_universe": candidate_universe or [],
         }
-        raw = self._request_analysis(payload)
-        return self._parse_analysis(raw)
-
-    def _request_analysis(self, payload: dict[str, Any]) -> str:
-        response = requests.post(
-            f"{self._base_url}/api/chat",
-            json={
-                "model": self._model,
-                "messages": [
-                    {"role": "system", "content": self._prompt},
-                    {
-                        "role": "user",
-                        "content": json.dumps(payload, ensure_ascii=False),
-                    },
-                ],
-                "stream": False,
-                "think": False,
-                "format": "json",
-                "options": {
-                    "temperature": 0.2,
-                    "num_predict": self._num_predict,
-                    "num_gpu": self._num_gpu,
-                },
-            },
-            timeout=self._timeout,
+        raw = self._client.chat_json(
+            system_prompt=self._prompt,
+            user_payload=payload,
+            temperature=0.2,
+            num_predict=self._num_predict,
         )
-        response.raise_for_status()
-
-        data = response.json()
-        message = data.get("message") or {}
-        content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise MarketViewError("empty Ollama response content")
-        return content
+        return self._parse_analysis(raw)
 
     def _parse_analysis(self, raw: str) -> dict[str, Any]:
         try:
@@ -178,10 +107,7 @@ class MarketViewAnalyzer:
                     "action": action,
                     "confidence": max(0.0, min(1.0, confidence)),
                     "reason": str(item.get("reason") or "").strip(),
-                    "evidence": [
-                        e for e in evidence
-                        if isinstance(e, dict)
-                    ],
+                    "evidence": [e for e in evidence if isinstance(e, dict)],
                 }
             )
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict
 
 import requests
+from llm.client import OllamaJsonClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class TranslationService:
         "cls": "cls_ko.txt",
         "futu": "futu_ko.txt",
         "stock": "stock_ko.txt",
+        "xinhua": "xinhua_ko.txt",
     }
 
     def __init__(
@@ -49,6 +51,12 @@ class TranslationService:
         self._num_gpu = num_gpu
         self._num_predict = num_predict
         self._prompts = self._load_prompts(prompt_dir)
+        self._client = OllamaJsonClient(
+            base_url=base_url,
+            model=model,
+            timeout=timeout,
+            num_gpu=num_gpu,
+        )
 
     def _load_prompts(self, prompt_dir: Path) -> Dict[str, str]:
         prompts: Dict[str, str] = {}
@@ -163,7 +171,6 @@ class TranslationService:
         stripped = text.strip()
         if stripped.startswith("{") and stripped.endswith("}"):
             return stripped
-
         start = stripped.find("{")
         end = stripped.rfind("}")
         if start == -1 or end == -1 or end <= start:
@@ -207,7 +214,6 @@ class TranslationService:
             return value.replace('\\"', '"').strip()
 
     def translate_stock_name(self, cn_name: str) -> str:
-        """중국어 종목명을 한국어/영문으로 번역한다. 실패 시 원래 이름 반환."""
         if not self._enabled or not cn_name.strip():
             return cn_name
         try:

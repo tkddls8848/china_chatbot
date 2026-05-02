@@ -72,8 +72,6 @@ class StockDatabase:
         hk_before = len(db)
         try:
             df_hk = _fetch_hk_spot()
-            # stock_hk_spot(): 代码(col1), 中文名称(col2)
-            # stock_hk_spot_em(): 代码(col0), 名称(col1) — 혹시 fallback 시 대응
             cols = list(df_hk.columns)
             if "代码" in cols and "中文名称" in cols:
                 hk_code_col, hk_name_col = "代码", "中文名称"
