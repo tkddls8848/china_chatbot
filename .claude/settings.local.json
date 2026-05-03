@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.hkex.com.hk)",
+      "WebFetch(domain:www.hkexgroup.com)",
+      "Bash(find /c/china_chat_bot/china_chatbot/src -type f \\\\\\(-name *.py -o -name *.js -o -name *.jsx -o -name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(find /c/china_chat_bot/china_chatbot/frontend -type f \\\\\\(-name *.js -o -name *.jsx -o -name *.ts -o -name *.tsx -o -name *.vue \\\\\\))",
+      "Bash(find /c/china_chat_bot/china_chatbot/frontend -type f -name *.html)",
+      "Bash(python -m py_compile store.py)",
+      "Bash(python -m py_compile llm.py)",
+      "Bash(python -m py_compile news.py)",
+      "Bash(python -m py_compile bot.py)",
+      "Bash(python -m py_compile main.py)",
+      "Bash(python -m py_compile market_view.py)"
+    ]
+  }
+}

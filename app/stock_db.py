@@ -72,6 +72,8 @@ class StockDatabase:
         hk_before = len(db)
         try:
             df_hk = _fetch_hk_spot()
+            # stock_hk_spot(): 代码(col1), 中文名称(col2)
+            # stock_hk_spot_em(): 代码(col0), 名称(col1) — 혹시 fallback 시 대응
             cols = list(df_hk.columns)
             if "代码" in cols and "中文名称" in cols:
                 hk_code_col, hk_name_col = "代码", "中文名称"
@@ -95,6 +97,7 @@ class StockDatabase:
                 return
             raise RuntimeError("A주와 홍콩 주식 DB 빌드가 모두 실패했습니다")
 
+        self._cache_file.parent.mkdir(parents=True, exist_ok=True)
         self._cache_file.write_text(json.dumps(db, ensure_ascii=False), encoding="utf-8")
         self._db = db
         logger.info("[StockDB] DB 빌드 완료: 총 %d종목", len(db))
