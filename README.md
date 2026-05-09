@@ -6,9 +6,9 @@
 
 | 소스 | 내용 | 주기 |
 |------|------|------|
-| 財联社 (CLS) | 중국 금융 속보 (최신 10건) | 3분 |
-| 富途牛牛 (Futu) | 홍콩·중국 증시 속보 (최신 10건) | 3분 |
-| 관심종목 뉴스 | 지정 종목 최신 뉴스 (각 5건) | 3분 |
+| 재련사(財联社, CLS) | 신규 금융 속보 확인 (최대 10건 훑기) | 5분 |
+| 푸투니우니우(富途牛牛, Futu) | 신규 홍콩중국 증시 속보 확인 (최대 10건 훑기) | 5분 |
+| 관심종목 뉴스 | 지정 종목 신규 뉴스 확인 (종목별 최대 5건 훑기) | 5분 |
 
 ## 설치
 
@@ -35,8 +35,11 @@ TRANSLATE_FALLBACK_TO_ORIGINAL=false
 TRANSLATE_CONCURRENCY=1
 CLS_FUTU_NEWS_LIMIT=10
 STOCK_NEWS_LIMIT=5
-SCHEDULE_INTERVAL_MINUTES=3
+SCHEDULE_INTERVAL_MINUTES=5
+MAX_SENT_IDS=0
 ```
+
+`CLS_FUTU_NEWS_LIMIT`와 `STOCK_NEWS_LIMIT`는 주기마다 반드시 보내는 기사 수가 아니라 신규 기사 확인 범위의 최대값입니다. 이미 보낸 기사는 `data/sent_ids.json` 기준으로 건너뛰며, 신규 기사가 부족하면 적게 보내거나 보내지 않습니다. `MAX_SENT_IDS=0`은 중복 방지용 기사 ID를 계속 보관한다는 뜻입니다.
 
 봇 토큰은 [@BotFather](https://t.me/BotFather), 채팅방 ID는 [@userinfobot](https://t.me/userinfobot)에서 확인할 수 있습니다.
 
@@ -65,7 +68,7 @@ TRANSLATE_FALLBACK_TO_ORIGINAL=true
 python app\bot.py
 ```
 
-시작 즉시 1회 실행 후 3분마다 반복합니다.
+시작 즉시 1회 실행 후 5분마다 반복합니다.
 
 ## 관심종목 설정
 
@@ -111,6 +114,8 @@ china_chatbot/
 |--------|------|
 | python-telegram-bot | 텔레그램 봇 API |
 | akshare | 중국 금융 데이터 |
+| hanja | 영문명이 없는 중국어 종목명의 한국식 한자음 변환 |
+| opencc-python-reimplemented | 간체 종목명을 번체로 변환해 한자음 변환 품질 보강 |
 | apscheduler | 주기적 스케줄링 |
 | python-dotenv | `.env` 파일 로드 |
 | requests | Ollama HTTP API 호출 |

@@ -1,5 +1,7 @@
 python-telegram-bot>=21.10
 akshare
+hanja
+opencc-python-reimplemented
 apscheduler==3.10.4
 python-dotenv
 requests

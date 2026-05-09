@@ -3,6 +3,7 @@ import html
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,7 +24,7 @@ from telegram.ext import (
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from market_view import MarketViewAnalyzer, MarketViewError, MarketViewManager
 from stock_db import StockDatabase
-from translator import TranslationService
+from translator import TranslationResult, TranslationService
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -50,11 +51,11 @@ PROMPT_DIR        = Path(os.environ.get("TRANSLATE_PROMPT_DIR", "prompts"))
 if not PROMPT_DIR.is_absolute():
     PROMPT_DIR = BASE_DIR / PROMPT_DIR
 MARKET_VIEW_PROMPT_FILE = PROMPT_DIR / "market_view_ko.txt"
-MAX_SENT_IDS      = 1000
+MAX_SENT_IDS      = int(os.environ.get("MAX_SENT_IDS", "0"))
 TELEGRAM_MESSAGE_LIMIT = 4096
 CLS_FUTU_NEWS_LIMIT = int(os.environ.get("CLS_FUTU_NEWS_LIMIT", "10"))
 STOCK_NEWS_LIMIT = int(os.environ.get("STOCK_NEWS_LIMIT", "5"))
-SCHEDULE_INTERVAL_MINUTES = int(os.environ.get("SCHEDULE_INTERVAL_MINUTES", "3"))
+SCHEDULE_INTERVAL_MINUTES = int(os.environ.get("SCHEDULE_INTERVAL_MINUTES", "5"))
 TRANSLATE_CONCURRENCY = int(os.environ.get("TRANSLATE_CONCURRENCY", "2"))
 STOCK_DB_ENABLED = os.environ.get("STOCK_DB_ENABLED", "true").lower() == "true"
 VIEW_MAX_CHANGES = int(os.environ.get("VIEW_MAX_CHANGES", "5"))
@@ -66,6 +67,7 @@ VIEW_MAX_NEWS_ITEMS = int(os.environ.get("VIEW_MAX_NEWS_ITEMS", "20"))
 VIEW_GLOBAL_NEWS_LIMIT = int(os.environ.get("VIEW_GLOBAL_NEWS_LIMIT", "20"))
 VIEW_MAX_CANDIDATES = int(os.environ.get("VIEW_MAX_CANDIDATES", "60"))
 VIEW_KEYWORD_CANDIDATES_LIMIT = int(os.environ.get("VIEW_KEYWORD_CANDIDATES_LIMIT", "20"))
+VIEW_THEME_CANDIDATES_LIMIT = int(os.environ.get("VIEW_THEME_CANDIDATES_LIMIT", "20"))
 MARKET_VIEW_NUM_PREDICT = int(os.environ.get("MARKET_VIEW_NUM_PREDICT", "2048"))
 
 # 한국어/영어 키워드 → 중국어 종목명 부분문자열 매핑
@@ -107,7 +109,7 @@ DEFAULT_WATCHLIST: Dict[str, str] = {
 }
 
 HELP_TEXT = (
-    "📖 <b>사용 가능한 명령어</b>\n\n"
+    "<b>사용 가능한 명령어</b>\n\n"
     "/menu — 관심종목 관리 (삭제)\n"
     "/add 종목코드 — 관심종목 추가\n"
     "/list — 관심종목 목록 확인\n"
@@ -123,7 +125,7 @@ HELP_TEXT = (
 # ── 상태 관리 클래스 ──────────────────────────────────
 
 class SentNewsTracker:
-    """중복 전송 방지 (최대 MAX_SENT_IDS건 유지, 초과 시 오래된 것 제거)"""
+    """중복 전송 방지. max_size가 0 이하이면 보낸 기사 ID를 계속 보관한다."""
 
     def __init__(self, file_path: Path, max_size: int = MAX_SENT_IDS):
         self._file_path = file_path
@@ -155,7 +157,7 @@ class SentNewsTracker:
                 return
             self._ids.append(article_id)
             self._id_set.add(article_id)
-            if len(self._ids) > self._max_size:
+            if self._max_size > 0 and len(self._ids) > self._max_size:
                 oldest = self._ids.pop(0)
                 self._id_set.discard(oldest)
 
@@ -256,27 +258,54 @@ def _resolve_stock_name(code: str) -> str:
     return str(name)
 
 
+def _format_china_time_as_kst(
+    published_at: Any,
+    published_date: Any | None = None,
+) -> str:
+    raw_time = str(published_at or "").strip()
+    raw_date = str(published_date or "").strip()
+    raw = f"{raw_date} {raw_time}".strip() if raw_date else raw_time
+    if not raw:
+        return "KST"
+
+    try:
+        if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", raw):
+            fmt = "%H:%M:%S" if raw.count(":") == 2 else "%H:%M"
+            converted = datetime.strptime(raw, fmt) + timedelta(hours=1)
+            return f"{converted.strftime(fmt)} KST"
+
+        parsed = pd.to_datetime(raw, errors="coerce")
+        if pd.isna(parsed):
+            return f"{raw} KST"
+
+        converted = parsed.to_pydatetime() + timedelta(hours=1)
+        fmt = "%Y-%m-%d %H:%M:%S" if re.search(r":\d{2}:\d{2}", raw) else "%Y-%m-%d %H:%M"
+        return f"{converted.strftime(fmt)} KST"
+    except Exception:
+        return f"{raw} KST"
+
+
 def _build_news_message(
     header: str,
     title: str,
     content: str,
     footer: str = "",
-    related_stocks: list[tuple[str, str]] | None = None,
+    mentioned_stocks: list[tuple[str, str]] | None = None,
 ) -> str:
     truncation = "..."
     safe_title = html.escape(title)
     raw_content = content
 
-    if related_stocks:
-        items = ", ".join(f"{code}({html.escape(name)})" for code, name in related_stocks)
-        related_line = f"\n\n🔖 관련종목 : {items}"
+    if mentioned_stocks:
+        items = ", ".join(f"{code}({html.escape(name)})" for code, name in mentioned_stocks)
+        mentioned_line = f"\n\n관련종목: {items}"
     else:
-        related_line = ""
+        mentioned_line = ""
 
     while True:
         safe_content = html.escape(raw_content)
         title_part = f"<b>{safe_title}</b>\n\n" if safe_title else ""
-        text = f"{header}{title_part}{safe_content}{related_line}{footer}"
+        text = f"{header}{title_part}{safe_content}{mentioned_line}{footer}"
         if len(text) <= TELEGRAM_MESSAGE_LIMIT:
             return text
 
@@ -285,7 +314,7 @@ def _build_news_message(
         next_content = raw_content[:keep].rstrip() + truncation
         if next_content == raw_content:
             safe_content = ""
-            text = f"{header}{title_part}{related_line}{footer}"
+            text = f"{header}{title_part}{mentioned_line}{footer}"
             return text[: TELEGRAM_MESSAGE_LIMIT - len(truncation)] + truncation
         raw_content = next_content
 
@@ -296,7 +325,7 @@ async def _translate_article(
     source: str,
     title: str,
     content: str,
-) -> tuple[str, str, list[str]]:
+) -> TranslationResult:
     async with semaphore:
         return await asyncio.to_thread(
             translator.translate_article,
@@ -329,26 +358,26 @@ async def fetch_cls(
                 return None
             raw_title = str(row["标题"])
             raw_content = str(row["内容"])
-            title, content, related_codes = await _translate_article(
+            title, content, mentioned_stock_codes = await _translate_article(
                 translator,
                 translate_semaphore,
                 "cls",
                 raw_title,
                 raw_content,
             )
-            related_stocks = [
+            mentioned_stocks = [
                 (code, name)
-                for code in related_codes
+                for code in mentioned_stock_codes
                 if (name := stock_db.get_cn_name(code))
             ]
             text = _build_news_message(
                 header=(
-                    f"📰 <b>財联社 속보</b>\n"
-                    f"🕐 {row['发布日期']} {row['发布时间']}\n\n"
+                    f"<b>재련사(財联社) 속보</b>\n"
+                    f"시간: {_format_china_time_as_kst(row['发布时间'], row['发布日期'])}\n\n"
                 ),
                 title=title,
                 content=content,
-                related_stocks=related_stocks,
+                mentioned_stocks=mentioned_stocks,
             )
             return article_id, text, title
         except Exception as e:
@@ -398,32 +427,32 @@ async def fetch_futu(
                 return None
             raw_title = str(row["标题"]) if row["标题"] else ""
             raw_content = str(row["内容"])
-            title, content, related_codes = await _translate_article(
+            title, content, mentioned_stock_codes = await _translate_article(
                 translator,
                 translate_semaphore,
                 "futu",
                 raw_title,
                 raw_content,
             )
-            related_stocks = [
+            mentioned_stocks = [
                 (code, name)
-                for code in related_codes
+                for code in mentioned_stock_codes
                 if (name := stock_db.get_cn_name(code))
             ]
             link_url = str(row.get("链接") or "")
             link_part = (
-                f'\n🔗 <a href="{html.escape(link_url)}">{html.escape(link_url)}</a>'
+                f'\n링크: <a href="{html.escape(link_url)}">{html.escape(link_url)}</a>'
                 if link_url else ""
             )
             text = _build_news_message(
                 header=(
-                    f"🐂 <b>富途牛牛 속보</b>\n"
-                    f"🕐 {row['发布时间']}\n\n"
+                    f"<b>푸투니우니우(富途牛牛) 속보</b>\n"
+                    f"시간: {_format_china_time_as_kst(row['发布时间'])}\n\n"
                 ),
                 title=title,
                 content=content,
                 footer=link_part,
-                related_stocks=related_stocks,
+                mentioned_stocks=mentioned_stocks,
             )
             return article_id, text, content
         except Exception as e:
@@ -474,10 +503,10 @@ async def fetch_stock_news(
             await bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    "📌 <b>관심종목 뉴스 조회 시작</b>\n"
-                    "➕ 추가: /add 종목코드\n"
-                    "➖ 삭제: /menu 에서 버튼으로\n"
-                    "📋 목록: /list\n\n"
+                    "<b>관심종목 뉴스 조회 시작</b>\n"
+                    "추가: /add 종목코드\n"
+                    "삭제: /menu 에서 버튼으로\n"
+                    "목록: /list\n\n"
                     f"{stock_list}"
                 ),
                 parse_mode="HTML",
@@ -504,31 +533,25 @@ async def fetch_stock_news(
                         return None
                     raw_title = str(row["新闻标题"])
                     raw_content = str(row["新闻内容"])
-                    title, content, related_codes = await _translate_article(
+                    title, content, _ = await _translate_article(
                         translator,
                         translate_semaphore,
                         "stock",
                         raw_title,
                         raw_content,
                     )
-                    related_stocks = [
-                        (rc, rn)
-                        for rc in related_codes
-                        if (rn := stock_db.get_cn_name(rc))
-                    ]
                     source = html.escape(str(row["文章来源"]))
                     link_url = str(row["新闻链接"])
                     link = f'<a href="{html.escape(link_url)}">{html.escape(link_url)}</a>'
                     text = _build_news_message(
                         header=(
-                            f"🏢 <b>{html.escape(name)} ({code}) 뉴스</b>\n"
-                            f"🕐 {row['发布时间']}\n"
-                            f"📌 {source}\n\n"
+                            f"<b>{html.escape(name)} ({code}) 뉴스</b>\n"
+                            f"시간: {_format_china_time_as_kst(row['发布时间'])}\n"
+                            f"출처: {source}\n\n"
                         ),
                         title=title,
                         content=content,
-                        footer=f"\n\n🔗 {link}",
-                        related_stocks=related_stocks,
+                        footer=f"\n\n링크: {link}",
                     )
                     return article_id, text, title
                 except Exception as e:
@@ -627,7 +650,9 @@ def _make_news_item(
     content: str,
     published_at: str,
     url: str = "",
-) -> dict[str, str]:
+    mentioned_stocks: list[str] | None = None,
+    theme_candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "id": f"{source}:{published_at}:{title[:30]}",
         "source": source,
@@ -637,15 +662,21 @@ def _make_news_item(
         "content": content[:700],
         "published_at": published_at,
         "url": url,
+        "mentioned_stocks": mentioned_stocks or [],
+        "theme_candidates": theme_candidates or [],
     }
 
 
-async def collect_global_market_news_items() -> list[dict[str, str]]:
-    news_items: list[dict[str, str]] = []
+async def collect_global_market_news_items(
+    translator: TranslationService | None = None,
+    translate_semaphore: asyncio.Semaphore | None = None,
+) -> list[dict[str, Any]]:
+    news_items: list[dict[str, Any]] = []
 
     try:
         df_cls = await asyncio.to_thread(_fetch_cls_raw)
-        for _, row in df_cls.tail(VIEW_GLOBAL_NEWS_LIMIT).iterrows():
+        cls_limit = min(VIEW_GLOBAL_NEWS_LIMIT, max(1, VIEW_MAX_NEWS_ITEMS // 2))
+        for _, row in df_cls.tail(cls_limit).iterrows():
             published_date = _row_value(row, ["发布日期", "?묈툋?ζ쐿"], 0)
             published_time = _row_value(row, ["发布时间", "?묈툋?띌뿴"], 1)
             title = _row_value(row, ["标题", "?뉔쥦"], 2)
@@ -659,28 +690,60 @@ async def collect_global_market_news_items() -> list[dict[str, str]]:
                         f"{published_date} {published_time}".strip(),
                     )
                 )
-            if len(news_items) >= VIEW_MAX_NEWS_ITEMS:
-                return news_items
     except Exception as e:
         logger.error("[VIEW] CLS news collection failed: %s", e)
 
     try:
         df_futu = await asyncio.to_thread(_fetch_futu_raw)
-        for _, row in df_futu.head(VIEW_GLOBAL_NEWS_LIMIT).iterrows():
+        futu_limit = min(
+            VIEW_GLOBAL_NEWS_LIMIT,
+            max(1, VIEW_MAX_NEWS_ITEMS - len(news_items)),
+        )
+        for _, row in df_futu.head(futu_limit).iterrows():
             title = _row_value(row, ["标题", "?뉔쥦"], 0)
             content = _row_value(row, ["内容", "?끻?"], 1)
             published_at = _row_value(row, ["发布时间", "?묈툋?띌뿴"], 2)
             url = _row_value(row, ["链接", "?얏렏"], 3)
             if title or content:
+                mentioned_stocks: list[str] = []
+                theme_candidates: list[dict[str, Any]] = []
+                translated_title = title
+                translated_content = content
+                if translator is not None and translate_semaphore is not None:
+                    try:
+                        translated = await _translate_article(
+                            translator,
+                            translate_semaphore,
+                            "futu",
+                            title,
+                            content,
+                        )
+                        translated_title = translated.title
+                        translated_content = translated.content
+                        mentioned_stocks = translated.mentioned_stocks
+                        theme_candidates = translated.theme_candidates
+                    except Exception as e:
+                        logger.warning(
+                            "[VIEW] Futu translation failed, using raw news: %s",
+                            e,
+                        )
                 news_items.append(
-                    _make_news_item("Futu", title, content, published_at, url)
+                    _make_news_item(
+                        "Futu",
+                        translated_title,
+                        translated_content,
+                        published_at,
+                        url,
+                        mentioned_stocks=mentioned_stocks,
+                        theme_candidates=theme_candidates,
+                    )
                 )
             if len(news_items) >= VIEW_MAX_NEWS_ITEMS:
                 return news_items
     except Exception as e:
         logger.error("[VIEW] Futu news collection failed: %s", e)
 
-    return news_items
+    return news_items[:VIEW_MAX_NEWS_ITEMS]
 
 
 def _name_is_matchable(name: str) -> bool:
@@ -700,10 +763,95 @@ def _extract_view_cn_patterns(market_view: str) -> list[str]:
     return list(dict.fromkeys(patterns))  # 순서 유지 dedup
 
 
+def _news_evidence(item: dict[str, Any]) -> dict[str, str]:
+    return {
+        "title": str(item.get("title") or ""),
+        "source": str(item.get("source") or ""),
+        "published_at": str(item.get("published_at") or ""),
+        "url": str(item.get("url") or ""),
+    }
+
+
+def _resolve_stock_db_code(stock_db: StockDatabase, raw_code: Any) -> str | None:
+    code = str(raw_code or "").strip()
+    if not code:
+        return None
+
+    variants = [code]
+    if code.isdigit():
+        variants.extend([code.zfill(5), code.zfill(6)])
+
+    for variant in dict.fromkeys(variants):
+        if stock_db.is_valid_code(variant):
+            return variant
+    return None
+
+
+def _extract_theme_patterns(theme_candidate: dict[str, Any]) -> list[str]:
+    text = " ".join(
+        str(theme_candidate.get(field) or "")
+        for field in ("keyword", "theme", "reason")
+    )
+    text_lower = text.lower()
+    patterns: list[str] = []
+
+    for keyword, cn_list in _VIEW_KEYWORD_MAP.items():
+        if keyword in text_lower or any(cn in text for cn in cn_list):
+            patterns.extend(cn_list)
+
+    for token in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]+", text):
+        if len(token) >= 2 and re.search(r"[\u4e00-\u9fff]", token):
+            patterns.append(token)
+
+    return list(dict.fromkeys(patterns))
+
+
+def _theme_relation_fields(theme_candidate: dict[str, Any]) -> tuple[str, str]:
+    keyword = str(theme_candidate.get("keyword") or "").strip()
+    theme = str(theme_candidate.get("theme") or "").strip()
+    reason = str(theme_candidate.get("reason") or "").strip()
+    relation_keyword = keyword or theme
+    relation_reason = reason or theme or keyword
+    return relation_keyword, relation_reason
+
+
+def _add_theme_candidate(
+    candidates: dict[str, dict[str, Any]],
+    entry: dict[str, str],
+    watchlist: Dict[str, str],
+    evidence: dict[str, str],
+    relation_keyword: str,
+    relation_reason: str,
+) -> bool:
+    code = str(entry.get("code") or "")
+    if not code:
+        return False
+
+    if code in candidates:
+        candidate = candidates[code]
+        matched_news = candidate.setdefault("matched_news", [])
+        if not any(news.get("title") == evidence.get("title") for news in matched_news):
+            matched_news.append(evidence)
+        candidate.setdefault("relation_keyword", relation_keyword)
+        candidate.setdefault("relation_reason", relation_reason)
+        return False
+
+    candidates[code] = {
+        "code": code,
+        "name": str(entry.get("name") or ""),
+        "market": str(entry.get("market") or ""),
+        "in_watchlist": code in watchlist,
+        "matched_news": [evidence],
+        "relation_keyword": relation_keyword,
+        "relation_reason": relation_reason,
+    }
+    return True
+
+
 def build_view_candidate_universe(
     stock_db: StockDatabase,
     watchlist: Dict[str, str],
-    news_items: list[dict[str, str]],
+    news_items: list[dict[str, Any]],
     market_view: str = "",
 ) -> list[dict[str, Any]]:
     candidates: dict[str, dict[str, Any]] = {}
@@ -711,6 +859,12 @@ def build_view_candidate_universe(
         f"{item.get('title', '')}\n{item.get('content', '')}"
         for item in news_items
     ]
+    stock_entries = stock_db.get_candidate_universe()
+    entries_by_code = {
+        str(entry.get("code") or ""): entry
+        for entry in stock_entries
+        if str(entry.get("code") or "")
+    }
 
     # 1. 워치리스트 (항상 포함)
     for code, name in watchlist.items():
@@ -726,7 +880,7 @@ def build_view_candidate_universe(
     cn_patterns = _extract_view_cn_patterns(market_view) if market_view else []
     if cn_patterns:
         view_added = 0
-        for entry in stock_db.get_candidate_universe():
+        for entry in stock_entries:
             if view_added >= VIEW_KEYWORD_CANDIDATES_LIMIT:
                 break
             code = str(entry.get("code") or "")
@@ -744,8 +898,36 @@ def build_view_candidate_universe(
                 view_added += 1
         logger.info("[VIEW] 키워드 후보 %d개 추가 (패턴: %s)", view_added, cn_patterns[:5])
 
-    # 3. 뉴스 본문 종목명 매칭 (기존 로직)
-    for entry in stock_db.get_candidate_universe():
+    # 3. 번역 단계에서 직접 언급으로 식별된 종목코드
+    mentioned_added = 0
+    for item in news_items:
+        mentioned_stocks = item.get("mentioned_stocks", [])
+        if not isinstance(mentioned_stocks, list):
+            continue
+        evidence = _news_evidence(item)
+        for raw_code in mentioned_stocks:
+            resolved_code = _resolve_stock_db_code(stock_db, raw_code)
+            if not resolved_code or resolved_code in candidates:
+                continue
+            entry = entries_by_code.get(resolved_code)
+            if not entry:
+                continue
+            candidates[resolved_code] = {
+                "code": resolved_code,
+                "name": str(entry.get("name") or ""),
+                "market": str(entry.get("market") or ""),
+                "in_watchlist": resolved_code in watchlist,
+                "matched_news": [evidence],
+            }
+            mentioned_added += 1
+            if len(candidates) >= VIEW_MAX_CANDIDATES:
+                logger.info("[VIEW] 직접 언급 후보 %d개 추가", mentioned_added)
+                return list(candidates.values())[:VIEW_MAX_CANDIDATES]
+    if mentioned_added:
+        logger.info("[VIEW] 직접 언급 후보 %d개 추가", mentioned_added)
+
+    # 4. 뉴스 본문 종목명 매칭 (기존 로직)
+    for entry in stock_entries:
         code = str(entry.get("code") or "")
         name = str(entry.get("name") or "").strip()
         if not code or not name or not _name_is_matchable(name):
@@ -784,6 +966,76 @@ def build_view_candidate_universe(
         if len(candidates) >= VIEW_MAX_CANDIDATES:
             break
 
+    # 5. Futu theme_candidates 기반 후보
+    theme_added = 0
+    for item in news_items:
+        theme_candidates = item.get("theme_candidates", [])
+        if not isinstance(theme_candidates, list):
+            continue
+
+        evidence = _news_evidence(item)
+        for theme_candidate in theme_candidates:
+            if not isinstance(theme_candidate, dict):
+                continue
+            relation_keyword, relation_reason = _theme_relation_fields(theme_candidate)
+
+            codes = theme_candidate.get("codes", [])
+            if isinstance(codes, list):
+                for raw_code in codes:
+                    resolved_code = _resolve_stock_db_code(stock_db, raw_code)
+                    if not resolved_code:
+                        continue
+                    entry = entries_by_code.get(resolved_code)
+                    if not entry:
+                        continue
+                    if _add_theme_candidate(
+                        candidates,
+                        entry,
+                        watchlist,
+                        evidence,
+                        relation_keyword,
+                        relation_reason,
+                    ):
+                        theme_added += 1
+                    if (
+                        theme_added >= VIEW_THEME_CANDIDATES_LIMIT
+                        or len(candidates) >= VIEW_MAX_CANDIDATES
+                    ):
+                        logger.info("[VIEW] 테마 후보 %d개 추가", theme_added)
+                        return list(candidates.values())[:VIEW_MAX_CANDIDATES]
+
+            patterns = _extract_theme_patterns(theme_candidate)
+            if not patterns:
+                continue
+            for entry in stock_entries:
+                code = str(entry.get("code") or "")
+                name = str(entry.get("name") or "").strip()
+                if not code or not name or code in candidates:
+                    continue
+                if any(pattern in name for pattern in patterns):
+                    if _add_theme_candidate(
+                        candidates,
+                        entry,
+                        watchlist,
+                        evidence,
+                        relation_keyword,
+                        relation_reason,
+                    ):
+                        theme_added += 1
+                if (
+                    theme_added >= VIEW_THEME_CANDIDATES_LIMIT
+                    or len(candidates) >= VIEW_MAX_CANDIDATES
+                ):
+                    logger.info(
+                        "[VIEW] 테마 후보 %d개 추가 (패턴: %s)",
+                        theme_added,
+                        patterns[:5],
+                    )
+                    return list(candidates.values())[:VIEW_MAX_CANDIDATES]
+
+    if theme_added:
+        logger.info("[VIEW] 테마 후보 %d개 추가", theme_added)
+
     return list(candidates.values())[:VIEW_MAX_CANDIDATES]
 
 
@@ -821,13 +1073,13 @@ async def fetch_all(app: Application) -> None:
 def build_list_keyboard(watchlist: Dict[str, str]) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(
-            text=f"🗑 {name} ({code})",
+            text=f"삭제: {name} ({code})",
             callback_data=f"remove:{code}",
         )]
         for code, name in watchlist.items()
     ]
-    buttons.append([InlineKeyboardButton("➕ 종목 추가 방법", callback_data="add_help")])
-    buttons.append([InlineKeyboardButton("❌ 닫기", callback_data="close")])
+    buttons.append([InlineKeyboardButton("종목 추가 방법", callback_data="add_help")])
+    buttons.append([InlineKeyboardButton("닫기", callback_data="close")])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -900,7 +1152,7 @@ def _validate_view_actions(
             continue
 
         if action == "add":
-            if confidence < 0.5:
+            if not evidence or confidence < 0.5:
                 continue
             if code not in allowed_add_codes:
                 continue
@@ -1017,11 +1269,11 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     watchlist = await wm.get_all()
     if not watchlist:
         await update.message.reply_text(
-            "📭 관심종목이 없습니다.\n/add 종목코드 로 추가하세요."
+            "관심종목이 없습니다.\n/add 종목코드 로 추가하세요."
         )
         return
     await update.message.reply_text(
-        "📋 <b>관심종목 관리</b>\n종목 버튼을 누르면 삭제됩니다.",
+        "<b>관심종목 관리</b>\n종목 버튼을 누르면 삭제됩니다.",
         parse_mode="HTML",
         reply_markup=build_list_keyboard(watchlist),
     )
@@ -1052,21 +1304,21 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cn_name:
         name = await asyncio.to_thread(translator.translate_stock_name, cn_name)
         await wm.add(code, name)
-        await update.message.reply_text(f"✅ 추가됨: {name} ({code})\n/menu 로 목록 확인")
+        await update.message.reply_text(f"추가됨: {name} ({code})\n/menu 로 목록 확인")
         logger.info("[WATCHLIST] 추가 (DB): %s %s", code, name)
         return
 
-    await update.message.reply_text(f"🔍 {code} 종목명 조회 중...")
+    await update.message.reply_text(f"{code} 종목명 조회 중...")
     try:
         cn_name = await asyncio.to_thread(_resolve_stock_name, code)
         name = await asyncio.to_thread(translator.translate_stock_name, cn_name)
         await wm.add(code, name)
-        await update.message.reply_text(f"✅ 추가됨: {name} ({code})\n/menu 로 목록 확인")
+        await update.message.reply_text(f"추가됨: {name} ({code})\n/menu 로 목록 확인")
         logger.info("[WATCHLIST] 추가 (API): %s %s", code, name)
     except Exception as e:
         logger.error("[WATCHLIST] 종목명 조회 실패: %s %s", code, e)
         await update.message.reply_text(
-            f"❌ {code} 종목명 자동 조회 실패\n"
+            f"{code} 종목명 자동 조회 실패\n"
             "종목코드를 확인한 뒤 다시 시도하세요."
         )
 
@@ -1075,11 +1327,11 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     wm: WatchlistManager = context.bot_data["watchlist_manager"]
     watchlist = await wm.get_all()
     if not watchlist:
-        await update.message.reply_text("📭 관심종목이 없습니다.\n/add 종목코드 로 추가하세요.")
+        await update.message.reply_text("관심종목이 없습니다.\n/add 종목코드 로 추가하세요.")
         return
     stock_list = "\n".join(f"  • {name} ({code})" for code, name in watchlist.items())
     await update.message.reply_text(
-        f"📋 <b>현재 관심종목</b>\n\n{stock_list}",
+        f"<b>현재 관심종목</b>\n\n{stock_list}",
         parse_mode="HTML",
         reply_markup=build_list_keyboard(watchlist),
     )
@@ -1180,10 +1432,12 @@ async def _handle_view_run(
     stock_db: StockDatabase = context.bot_data["stock_db"]
     analyzer: MarketViewAnalyzer = context.bot_data["market_view_analyzer"]
     mvm: MarketViewManager = context.bot_data["market_view_manager"]
+    translator: TranslationService = context.bot_data["translator"]
+    translate_semaphore: asyncio.Semaphore = context.bot_data["translate_semaphore"]
 
     watchlist = await wm.get_all()
     status_message = await update.message.reply_text("전체 시장 뉴스 기준으로 시장 뷰 분석 중...")
-    news_items = await collect_global_market_news_items()
+    news_items = await collect_global_market_news_items(translator, translate_semaphore)
     if not news_items:
         await status_message.edit_text("최근 전체 시장 뉴스가 없어 분석을 실행하지 않았습니다.")
         return
@@ -1312,7 +1566,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif data == "add_help":
         await query.message.reply_text(
-            "➕ 추가할 종목을 입력하세요.\n\n"
+            "추가할 종목을 입력하세요.\n\n"
             "형식: /add 종목코드\n"
             "예시: /add 600519"
         )
@@ -1323,11 +1577,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         logger.info("[WATCHLIST] 삭제: %s %s", code, name)
         watchlist = await wm.get_all()
         if not watchlist:
-            await query.message.edit_text("📭 관심종목이 없습니다.\n/add 종목코드 로 추가하세요.")
+            await query.message.edit_text("관심종목이 없습니다.\n/add 종목코드 로 추가하세요.")
             return
         await query.message.edit_text(
-            f"🗑 <b>{html.escape(name)} ({code}) 삭제됨</b>\n\n"
-            "📋 <b>관심종목 관리</b>\n종목 버튼을 누르면 삭제됩니다.",
+            f"<b>{html.escape(name)} ({code}) 삭제됨</b>\n\n"
+            "<b>관심종목 관리</b>\n종목 버튼을 누르면 삭제됩니다.",
             parse_mode="HTML",
             reply_markup=build_list_keyboard(watchlist),
         )
@@ -1401,7 +1655,7 @@ def main() -> None:
     scheduler.start()
 
     logger.info(
-        "봇 시작됨. %s분마다 財联社 + 富途牛牛 + 관심종목 뉴스 전송.",
+        "봇 시작됨. %s분마다 재련사(財联社) + 푸투니우니우(富途牛牛) + 관심종목 뉴스 전송.",
         SCHEDULE_INTERVAL_MINUTES,
     )
     logger.info("명령어: /start /help /menu /add /list /view")

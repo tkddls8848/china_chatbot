@@ -1,8 +1,9 @@
 import json
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, Iterator
 
 import requests
 
@@ -11,6 +12,19 @@ logger = logging.getLogger(__name__)
 
 class TranslationError(RuntimeError):
     """Raised when translation is required but unavailable."""
+
+
+@dataclass(frozen=True)
+class TranslationResult:
+    title: str
+    content: str
+    mentioned_stocks: list[str]
+    theme_candidates: list[dict[str, Any]]
+
+    def __iter__(self) -> Iterator[Any]:
+        yield self.title
+        yield self.content
+        yield self.mentioned_stocks
 
 
 class TranslationService:
@@ -59,9 +73,9 @@ class TranslationService:
 
     def translate_article(
         self, source: str, title: str, content: str
-    ) -> tuple[str, str, list[str]]:
+    ) -> TranslationResult:
         if not self._enabled:
-            return title, content, []
+            return TranslationResult(title, content, [], [])
 
         prompt = self._prompts.get(source)
         if prompt is None:
@@ -90,14 +104,14 @@ class TranslationService:
         except Exception as e:
             if self._fallback_to_original:
                 logger.warning("[TRANSLATE] failed, fallback to original: %s", e)
-                return title, content, []
+                return TranslationResult(title, content, [], [])
             raise TranslationError(str(e)) from e
 
     def _request_translation(self, prompt: str, title: str, content: str) -> str:
         system_prompt = (
             f"{prompt}\n\n"
             "JSON output hard rules:\n"
-            "- Return exactly one JSON object with title, content, related.\n"
+            "- Return exactly one JSON object with title, content, mentioned_stocks, and any source-specific fields requested above.\n"
             "- Do not include unescaped double quotes inside string values.\n"
             "- If the translated text contains a quote, use single quotes instead of double quotes.\n"
             "- Keep title and content as single-line strings.\n"
@@ -139,7 +153,7 @@ class TranslationService:
             raise ValueError("empty Ollama response content")
         return translated
 
-    def _parse_translation(self, translated: str) -> tuple[str, str, list[str]]:
+    def _parse_translation(self, translated: str) -> TranslationResult:
         payload = self._extract_json_object(translated)
         try:
             data = json.loads(payload)
@@ -147,17 +161,55 @@ class TranslationService:
             data = self._parse_known_translation_shape(payload)
         title = data.get("title")
         content = data.get("content")
-        related = data.get("related", [])
+        if "mentioned_stocks" not in data:
+            raise ValueError("translation JSON missing mentioned_stocks")
+        mentioned_stocks = data.get("mentioned_stocks")
+        theme_candidates = data.get("theme_candidates", [])
 
         if not isinstance(title, str) or not title.strip():
             raise ValueError("translation JSON missing title")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("translation JSON missing content")
-        if not isinstance(related, list):
-            related = []
+        if not isinstance(mentioned_stocks, list):
+            raise ValueError("translation JSON mentioned_stocks must be a list")
 
-        related_codes = [c for c in related if isinstance(c, str) and c.strip()]
-        return title.strip(), content.strip(), related_codes
+        mentioned_stock_codes = [
+            c for c in mentioned_stocks if isinstance(c, str) and c.strip()
+        ]
+        return TranslationResult(
+            title.strip(),
+            content.strip(),
+            mentioned_stock_codes,
+            self._normalize_theme_candidates(theme_candidates),
+        )
+
+    def _normalize_theme_candidates(self, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            codes = item.get("codes", [])
+            if not isinstance(codes, list):
+                codes = []
+            normalized.append(
+                {
+                    "keyword": str(item.get("keyword") or "").strip(),
+                    "theme": str(item.get("theme") or "").strip(),
+                    "reason": str(item.get("reason") or "").strip(),
+                    "codes": [
+                        str(code).strip()
+                        for code in codes
+                        if isinstance(code, (str, int)) and str(code).strip()
+                    ],
+                }
+            )
+        return [
+            item for item in normalized
+            if item["keyword"] or item["theme"] or item["reason"] or item["codes"]
+        ]
 
     def _extract_json_object(self, text: str) -> str:
         stripped = text.strip()
@@ -172,21 +224,26 @@ class TranslationService:
 
     def _parse_known_translation_shape(self, text: str) -> dict:
         title = self._extract_field_before(text, "title", "content")
-        content = self._extract_field_before(text, "content", "related")
-        related = []
+        content = self._extract_field_before(text, "content", "mentioned_stocks")
+        mentioned_stocks = []
 
-        related_match = re.search(r'"related"\s*:\s*(\[[\s\S]*?\])', text)
-        if related_match:
+        mentioned_match = re.search(r'"mentioned_stocks"\s*:\s*(\[[\s\S]*?\])', text)
+        if mentioned_match:
             try:
-                parsed_related = json.loads(related_match.group(1))
-                if isinstance(parsed_related, list):
-                    related = parsed_related
+                parsed_mentioned = json.loads(mentioned_match.group(1))
+                if isinstance(parsed_mentioned, list):
+                    mentioned_stocks = parsed_mentioned
             except json.JSONDecodeError:
-                related = re.findall(r'"([^"]+)"', related_match.group(1))
+                mentioned_stocks = re.findall(r'"([^"]+)"', mentioned_match.group(1))
 
         if not title or not content:
             raise ValueError("translation JSON missing title/content")
-        return {"title": title, "content": content, "related": related}
+        return {
+            "title": title,
+            "content": content,
+            "mentioned_stocks": mentioned_stocks,
+            "theme_candidates": [],
+        }
 
     def _extract_field_before(self, text: str, field: str, next_field: str) -> str:
         pattern = (
