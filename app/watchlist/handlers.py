@@ -1,32 +1,30 @@
-import asyncio
 import html
 import logging
+import re
 
-import akshare as ak
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from stock_db import StockDatabase
-from translator import TranslationService
 from watchlist.keyboards import build_list_keyboard
 from watchlist.manager import WatchlistManager
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_stock_name(code: str) -> str:
-    if len(code) <= 5:
-        df = ak.stock_individual_basic_info_hk_xq(symbol=code)
-        name = df[df["item"] == "comcnname"]["value"].values[0]
-    elif code.startswith(("00", "30")):
-        df = ak.stock_individual_basic_info_xq(symbol=f"SZ{code}")
-        name = df[df["item"] == "org_short_name_cn"]["value"].values[0]
-    elif code.startswith(("60", "68")):
-        df = ak.stock_individual_basic_info_xq(symbol=f"SH{code}")
-        name = df[df["item"] == "org_short_name_cn"]["value"].values[0]
-    else:
-        raise ValueError(f"알 수 없는 종목코드 형식: {code}")
-    return str(name)
+def _normalize_stock_code(value: str) -> str | None:
+    code = value.strip()
+    if not re.fullmatch(r"\d{1,6}", code):
+        return None
+    return code.zfill(5) if len(code) <= 5 else code.zfill(6)
+
+
+def _unsupported_code_message(code: str) -> str:
+    if len(code) == 6 and code.startswith(("300", "301")):
+        return "ChiNext(300/301) 종목은 Stock Connect에서 기관 전문투자자 대상이라 제외했습니다."
+    if len(code) == 6 and code.startswith(("688", "689")):
+        return "STAR Market(688/689) 종목은 Stock Connect에서 기관 전문투자자 대상이라 제외했습니다."
+    return "외국인 개인 거래 가능 목록에 없는 종목입니다."
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -50,11 +48,14 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) < 1:
         await update.message.reply_text(
             "사용법: /add 종목코드\n"
-            "예: /add 300750"
+            "예: /add 600519"
         )
         return
 
-    code = context.args[0].strip()
+    code = _normalize_stock_code(context.args[0])
+    if code is None:
+        await update.message.reply_text("종목코드는 숫자 1~6자리로 입력하세요.")
+        return
 
     if len(context.args) >= 2:
         await update.message.reply_text(
@@ -62,29 +63,16 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    translator: TranslationService = context.bot_data["translator"]
-
-    cn_name = stock_db.get_cn_name(code)
-    if cn_name:
-        name = await asyncio.to_thread(translator.translate_stock_name, cn_name)
-        await wm.add(code, name)
-        await update.message.reply_text(f"추가됨: {name} ({code})\n/menu 로 목록 확인")
-        logger.info("[WATCHLIST] 추가 (DB): %s %s", code, name)
+    name = stock_db.get_display_name(code)
+    if not name:
+        await update.message.reply_text(
+            f"{code} 추가 불가\n{_unsupported_code_message(code)}"
+        )
         return
 
-    await update.message.reply_text(f"{code} 종목명 조회 중...")
-    try:
-        cn_name = await asyncio.to_thread(_resolve_stock_name, code)
-        name = await asyncio.to_thread(translator.translate_stock_name, cn_name)
-        await wm.add(code, name)
-        await update.message.reply_text(f"추가됨: {name} ({code})\n/menu 로 목록 확인")
-        logger.info("[WATCHLIST] 추가 (API): %s %s", code, name)
-    except Exception as e:
-        logger.error("[WATCHLIST] 종목명 조회 실패: %s %s", code, e)
-        await update.message.reply_text(
-            f"{code} 종목명 자동 조회 실패\n"
-            "종목코드를 확인한 뒤 다시 시도하세요."
-        )
+    await wm.add(code, name)
+    await update.message.reply_text(f"추가됨: {name} ({code})\n/menu 로 목록 확인")
+    logger.info("[WATCHLIST] 추가 (DB): %s %s", code, name)
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

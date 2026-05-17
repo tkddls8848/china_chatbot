@@ -47,6 +47,21 @@ def _name_is_matchable(name: str) -> bool:
     return len(name) >= 4 and name.isascii()
 
 
+def _entry_display_name(entry: dict[str, str]) -> str:
+    return str(entry.get("display_name") or entry.get("ko_name") or "").strip()
+
+
+def _entry_search_text(entry: dict[str, str]) -> str:
+    return " ".join(
+        value
+        for value in (
+            str(entry.get("cn_name") or "").strip(),
+            _entry_display_name(entry),
+        )
+        if value
+    )
+
+
 def _extract_research_cn_patterns(market_view: str) -> list[str]:
     research_lower = market_view.lower()
     patterns: list[str] = []
@@ -125,7 +140,7 @@ def _add_theme_candidate(
 
     candidates[code] = {
         "code": code,
-        "name": str(entry.get("name") or ""),
+        "name": _entry_display_name(entry),
         "market": str(entry.get("market") or ""),
         "in_watchlist": code in watchlist,
         "matched_news": [evidence],
@@ -140,6 +155,7 @@ def build_research_candidate_universe(
     watchlist: Dict[str, str],
     news_items: list[dict[str, Any]],
     market_view: str = "",
+    max_candidates: int = 30,
 ) -> list[dict[str, Any]]:
     candidates: dict[str, dict[str, Any]] = {}
     haystacks = [
@@ -167,10 +183,11 @@ def build_research_candidate_universe(
         research_added = 0
         for entry in stock_entries:
             code = str(entry.get("code") or "")
-            name = str(entry.get("name") or "").strip()
+            name = _entry_display_name(entry)
+            search_text = _entry_search_text(entry)
             if not code or not name or code in candidates:
                 continue
-            if any(pat in name for pat in cn_patterns):
+            if any(pat in search_text for pat in cn_patterns):
                 candidates[code] = {
                     "code": code,
                     "name": name,
@@ -194,7 +211,7 @@ def build_research_candidate_universe(
             entry = entries_by_code.get(resolved_code, {})
             candidates[resolved_code] = {
                 "code": resolved_code,
-                "name": str(entry.get("name") or ""),
+                "name": _entry_display_name(entry),
                 "market": str(entry.get("market") or ""),
                 "in_watchlist": resolved_code in watchlist,
                 "matched_news": [evidence],
@@ -205,13 +222,16 @@ def build_research_candidate_universe(
 
     for entry in stock_entries:
         code = str(entry.get("code") or "")
-        name = str(entry.get("name") or "").strip()
+        name = _entry_display_name(entry)
+        search_text = _entry_search_text(entry)
         if not code or not name or not _name_is_matchable(name):
             continue
 
         matched_news = []
         for item, haystack in zip(news_items, haystacks):
-            if name in haystack:
+            if name in haystack or (
+                search_text and any(part in haystack for part in search_text.split())
+            ):
                 matched_news.append(
                     {
                         "title": item.get("title", ""),
@@ -260,7 +280,7 @@ def build_research_candidate_universe(
                         continue
                     entry = entries_by_code.get(
                         resolved_code,
-                        {"code": resolved_code, "name": "", "market": ""},
+                        {"code": resolved_code, "display_name": "", "market": ""},
                     )
                     if _add_theme_candidate(
                         candidates,
@@ -277,10 +297,11 @@ def build_research_candidate_universe(
                 continue
             for entry in stock_entries:
                 code = str(entry.get("code") or "")
-                name = str(entry.get("name") or "").strip()
+                name = _entry_display_name(entry)
+                search_text = _entry_search_text(entry)
                 if not code or not name or code in candidates:
                     continue
-                if any(pattern in name for pattern in patterns):
+                if any(pattern in search_text for pattern in patterns):
                     if _add_theme_candidate(
                         candidates,
                         entry,
@@ -294,4 +315,6 @@ def build_research_candidate_universe(
     if theme_added:
         logger.info("[RESEARCH] 테마 후보 %d개 추가", theme_added)
 
-    return list(candidates.values())
+    if max_candidates <= 0:
+        return list(candidates.values())
+    return list(candidates.values())[:max_candidates]

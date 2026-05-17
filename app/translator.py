@@ -24,12 +24,6 @@ class TranslationResult:
 class TranslationService:
     """Translate Chinese financial news to Korean with Ollama."""
 
-    _STOCK_NAME_PROMPT = (
-        "Translate a Chinese listed-company name into the most commonly used "
-        "English name if one exists; otherwise use a concise Korean-style name. "
-        'Return only JSON: {"name": "translated name"}'
-    )
-
     _PROMPT_FILES = {
         "cls": "cls_ko.txt",
         "futu": "futu_ko.txt",
@@ -155,34 +149,3 @@ class TranslationService:
         if start == -1 or end == -1 or end <= start:
             return stripped
         return stripped[start : end + 1]
-
-    def translate_stock_name(self, cn_name: str) -> str:
-        if not self._enabled or not cn_name.strip():
-            return cn_name
-        try:
-            response = requests.post(
-                f"{self._base_url}/api/chat",
-                json={
-                    "model": self._model,
-                    "messages": [
-                        {"role": "system", "content": self._STOCK_NAME_PROMPT},
-                        {"role": "user", "content": cn_name},
-                    ],
-                    "stream": False,
-                    "think": False,
-                    "format": "json",
-                    "options": {
-                        "temperature": 0.1,
-                        "num_predict": 32,
-                        "num_gpu": self._num_gpu,
-                    },
-                },
-                timeout=self._timeout,
-            )
-            response.raise_for_status()
-            content = (response.json().get("message") or {}).get("content", "")
-            name = json.loads(content).get("name", "").strip()
-            return name if name else cn_name
-        except Exception as e:
-            logger.warning("[TRANSLATE] stock name translation failed for %s: %s", cn_name, e)
-            return cn_name

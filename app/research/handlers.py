@@ -66,7 +66,7 @@ def _collect_research_actions(
                 continue
             name = (
                 str(item.get("name") or "").strip()
-                or stock_db.get_cn_name(code)
+                or stock_db.get_display_name(code)
                 or code
             )
             add_items.append(

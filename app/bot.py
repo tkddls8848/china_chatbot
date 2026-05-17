@@ -10,7 +10,7 @@ from typing import Any, Dict
 import pandas as pd
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from telegram import Bot, Update
+from telegram import Bot, BotCommand, MenuButtonCommands, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -43,8 +43,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(BASE_DIR / ".env")
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHAT_ID   = os.environ["CHAT_ID"]
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,34 +59,40 @@ logger = logging.getLogger(__name__)
 SENT_IDS_FILE     = BASE_DIR / "data" / "sent_ids.json"
 WATCHLIST_FILE    = BASE_DIR / "data" / "watchlist.json"
 STOCK_DB_FILE     = BASE_DIR / "data" / "stock_db.json"
-MARKET_VIEW_FILE  = BASE_DIR / "data" / "market_view.json"
-PROMPT_DIR        = Path(os.environ.get("TRANSLATE_PROMPT_DIR", "prompts"))
+RESEARCH_STATE_FILE = BASE_DIR / "data" / "market_research.json"
+PROMPT_DIR        = Path(os.environ.get("TRANSLATION_PROMPT_DIR", "prompts"))
 if not PROMPT_DIR.is_absolute():
     PROMPT_DIR = BASE_DIR / PROMPT_DIR
-MARKET_VIEW_PROMPT_FILE = PROMPT_DIR / "market_view_ko.txt"
-MAX_SENT_IDS      = int(os.environ.get("MAX_SENT_IDS", "0"))
+RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
+SENT_NEWS_MAX_IDS = int(os.environ.get("SENT_NEWS_MAX_IDS", "0"))
 TELEGRAM_MESSAGE_LIMIT = 4096
-CLS_FUTU_NEWS_LIMIT = int(os.environ.get("CLS_FUTU_NEWS_LIMIT", "10"))
-STOCK_NEWS_LIMIT = int(os.environ.get("STOCK_NEWS_LIMIT", "5"))
-SCHEDULE_INTERVAL_MINUTES = int(os.environ.get("SCHEDULE_INTERVAL_MINUTES", "5"))
-TRANSLATE_CONCURRENCY = int(os.environ.get("TRANSLATE_CONCURRENCY", "2"))
+NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))
+NEWS_STOCK_LIMIT_PER_SYMBOL = int(os.environ.get("NEWS_STOCK_LIMIT_PER_SYMBOL", "3"))
+SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5"))
+TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "2"))
 STOCK_DB_ENABLED = os.environ.get("STOCK_DB_ENABLED", "true").lower() == "true"
-RESEARCH_NEWS_LIMIT_PER_STOCK = int(
-    os.environ.get("RESEARCH_NEWS_LIMIT_PER_STOCK", "2")
+RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL = int(
+    os.environ.get("RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL", "3")
 )
-RESEARCH_MAX_NEWS_ITEMS = int(
-    os.environ.get("RESEARCH_MAX_NEWS_ITEMS", "20")
+RESEARCH_NEWS_MAX_ITEMS = int(
+    os.environ.get("RESEARCH_NEWS_MAX_ITEMS", "3")
 )
-RESEARCH_GLOBAL_NEWS_LIMIT = int(
-    os.environ.get("RESEARCH_GLOBAL_NEWS_LIMIT", "20")
+RESEARCH_NEWS_GLOBAL_LIMIT = int(
+    os.environ.get("RESEARCH_NEWS_GLOBAL_LIMIT", "3")
 )
-MARKET_VIEW_NUM_PREDICT = int(os.environ.get("MARKET_VIEW_NUM_PREDICT", "2048"))
+RESEARCH_ANALYSIS_NUM_PREDICT = int(
+    os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
+)
 HELP_TEXT = (
     "<b>사용 가능한 명령어</b>\n\n"
+    "/start — 봇 소개와 사용 가능한 경로 보기\n"
     "/menu — 관심종목 관리 (삭제)\n"
     "/add 종목코드 — 관심종목 추가\n"
     "/list — 관심종목 목록 확인\n"
     "/research show — 저장된 리서치 주제 보기\n"
+    "/research set 리서치주제 — 리서치 주제 저장\n"
+    "/research run — 최근 뉴스 기준 리서치 실행\n"
+    "/research clear — 리서치 주제 삭제\n"
     "/help — 도움말\n\n"
     "종목코드 형식:\n"
     "  • A주 상해: 6자리 (예: 600519)\n"
@@ -209,7 +215,7 @@ async def fetch_cls(
             mentioned_stocks = [
                 (code, name)
                 for code in translated.mentioned_stocks
-                if (name := stock_db.get_cn_name(code))
+                if (name := stock_db.get_display_name(code))
             ]
             text = _build_news_message(
                 header=(
@@ -227,7 +233,7 @@ async def fetch_cls(
             return None
 
     prepared_rows = await asyncio.gather(
-        *(prepare_row(row) for _, row in df.tail(CLS_FUTU_NEWS_LIMIT).iterrows())
+        *(prepare_row(row) for _, row in df.tail(NEWS_GLOBAL_LIMIT).iterrows())
     )
 
     for prepared in prepared_rows:
@@ -278,7 +284,7 @@ async def fetch_futu(
             mentioned_stocks = [
                 (code, name)
                 for code in translated.mentioned_stocks
-                if (name := stock_db.get_cn_name(code))
+                if (name := stock_db.get_display_name(code))
             ]
             link_url = str(row.get("链接") or "")
             link_part = (
@@ -304,7 +310,7 @@ async def fetch_futu(
             return None
 
     prepared_rows = []
-    for _, row in df.head(CLS_FUTU_NEWS_LIMIT).iloc[::-1].iterrows():
+    for _, row in df.head(NEWS_GLOBAL_LIMIT).iloc[::-1].iterrows():
         try:
             prepared_rows.append(await prepare_row(row))
         except Exception:
@@ -361,17 +367,29 @@ async def fetch_stock_news(
             )
         except Exception as e:
             logger.error("첫 실행 안내 전송 실패: %s", e)
-        bot_data["stock_news_first_run"] = False
+    bot_data["stock_news_first_run"] = False
+
+    async def send_no_recent_news(name: str) -> None:
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"{html.escape(name)}은 최근 7일간 뉴스가 없습니다.",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error("[STOCK] %s 최근 뉴스 없음 안내 전송 실패: %s", name, e)
 
     for code, name in watchlist.items():
         try:
             df = await asyncio.to_thread(_fetch_stock_news_raw, code)
             if df.empty:
+                await send_no_recent_news(name)
                 continue
 
-            cutoff = datetime.now() - timedelta(days=14)
+            cutoff = datetime.now() - timedelta(days=7)
             df = df[pd.to_datetime(df["发布时间"], errors="coerce") >= cutoff]
             if df.empty:
+                await send_no_recent_news(name)
                 continue
 
             async def prepare_row(row):
@@ -408,7 +426,7 @@ async def fetch_stock_news(
                     return None
 
             prepared_rows = await asyncio.gather(
-                *(prepare_row(row) for _, row in df.head(STOCK_NEWS_LIMIT).iterrows())
+                *(prepare_row(row) for _, row in df.head(NEWS_STOCK_LIMIT_PER_SYMBOL).iterrows())
             )
 
             for prepared in prepared_rows:
@@ -443,10 +461,10 @@ def _row_value(row, candidates: list[str], fallback_index: int | None = None) ->
 
 async def collect_watchlist_news_items(
     watchlist: Dict[str, str],
-    limit_per_stock: int = RESEARCH_NEWS_LIMIT_PER_STOCK,
+    limit_per_stock: int = RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL,
 ) -> list[dict[str, str]]:
     news_items: list[dict[str, str]] = []
-    cutoff = datetime.now() - timedelta(days=14)
+    cutoff = datetime.now() - timedelta(days=7)
 
     for code, name in watchlist.items():
         try:
@@ -484,7 +502,7 @@ async def collect_watchlist_news_items(
                         "url": url,
                     }
                 )
-                if len(news_items) >= RESEARCH_MAX_NEWS_ITEMS:
+                if len(news_items) >= RESEARCH_NEWS_MAX_ITEMS:
                     return news_items
         except Exception as e:
             logger.error("[RESEARCH] %s news collection failed: %s", name, e)
@@ -506,7 +524,7 @@ def _make_news_item(
         "source": source,
         "ticker": "",
         "name": "",
-        "title": title,
+        "title": title[:240],
         "content": content[:700],
         "published_at": published_at,
         "url": url,
@@ -523,7 +541,7 @@ async def collect_global_market_news_items(
 
     try:
         df_cls = await asyncio.to_thread(_fetch_cls_raw)
-        cls_limit = min(RESEARCH_GLOBAL_NEWS_LIMIT, max(1, RESEARCH_MAX_NEWS_ITEMS // 2))
+        cls_limit = min(RESEARCH_NEWS_GLOBAL_LIMIT, max(1, RESEARCH_NEWS_MAX_ITEMS // 2))
         for _, row in df_cls.tail(cls_limit).iterrows():
             published_date = _row_value(row, ["发布日期", "?묈툋?ζ쐿"], 0)
             published_time = _row_value(row, ["发布时间", "?묈툋?띌뿴"], 1)
@@ -544,8 +562,8 @@ async def collect_global_market_news_items(
     try:
         df_futu = await asyncio.to_thread(_fetch_futu_raw)
         futu_limit = min(
-            RESEARCH_GLOBAL_NEWS_LIMIT,
-            max(1, RESEARCH_MAX_NEWS_ITEMS - len(news_items)),
+            RESEARCH_NEWS_GLOBAL_LIMIT,
+            max(1, RESEARCH_NEWS_MAX_ITEMS - len(news_items)),
         )
         for _, row in df_futu.head(futu_limit).iterrows():
             title = _row_value(row, ["标题", "?뉔쥦"], 0)
@@ -586,12 +604,12 @@ async def collect_global_market_news_items(
                         theme_candidates=theme_candidates,
                     )
                 )
-            if len(news_items) >= RESEARCH_MAX_NEWS_ITEMS:
+            if len(news_items) >= RESEARCH_NEWS_MAX_ITEMS:
                 return news_items
     except Exception as e:
         logger.error("[RESEARCH] Futu news collection failed: %s", e)
 
-    return news_items[:RESEARCH_MAX_NEWS_ITEMS]
+    return news_items[:RESEARCH_NEWS_MAX_ITEMS]
 
 
 async def _refresh_stock_db(stock_db: StockDatabase) -> None:
@@ -608,15 +626,15 @@ async def fetch_all(app: Application) -> None:
     translator: TranslationService = app.bot_data["translator"]
     translate_semaphore: asyncio.Semaphore = app.bot_data["translate_semaphore"]
     stock_db: StockDatabase = app.bot_data["stock_db"]
-    await fetch_cls(app.bot, tracker, translator, translate_semaphore, CHAT_ID, stock_db)
-    await fetch_futu(app.bot, tracker, translator, translate_semaphore, CHAT_ID, stock_db)
+    await fetch_cls(app.bot, tracker, translator, translate_semaphore, TELEGRAM_CHAT_ID, stock_db)
+    await fetch_futu(app.bot, tracker, translator, translate_semaphore, TELEGRAM_CHAT_ID, stock_db)
     await fetch_stock_news(
         app.bot,
         tracker,
         translator,
         translate_semaphore,
         wm,
-        CHAT_ID,
+        TELEGRAM_CHAT_ID,
         app.bot_data,
         stock_db,
     )
@@ -645,40 +663,67 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
 
+async def configure_telegram_menu(app: Application) -> None:
+    commands = [
+        BotCommand("start", "봇 소개와 사용 가능한 경로 보기"),
+        BotCommand("menu", "관심종목 삭제/관리 버튼 열기"),
+        BotCommand("add", "관심종목 추가: /add 600519"),
+        BotCommand("list", "현재 관심종목 목록 보기"),
+        BotCommand("research", "리서치 주제 확인/설정/실행"),
+        BotCommand("help", "명령어 경로와 설명 보기"),
+    ]
+    await app.bot.set_my_commands(commands)
+    await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    logger.info("Telegram Menu 버튼 명령어 등록 완료: %s", [cmd.command for cmd in commands])
+
+
 # ── 진입점 ────────────────────────────────────────────
 
 def main() -> None:
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(configure_telegram_menu)
+        .build()
+    )
 
     stock_db = StockDatabase(cache_file=STOCK_DB_FILE, enabled=STOCK_DB_ENABLED)
     stock_db.load_or_build()
 
-    app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE, MAX_SENT_IDS)
+    app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE, SENT_NEWS_MAX_IDS)
     app.bot_data["watchlist_manager"]    = WatchlistManager(WATCHLIST_FILE)
-    app.bot_data["market_view_manager"]  = MarketViewManager(MARKET_VIEW_FILE)
+    app.bot_data["market_view_manager"]  = MarketViewManager(RESEARCH_STATE_FILE)
     app.bot_data["research_pending"]     = {}
     app.bot_data["stock_news_first_run"] = True
     app.bot_data["stock_db"]             = stock_db
     ollama_num_gpu = int(os.environ.get("OLLAMA_NUM_GPU", "0"))
     app.bot_data["translator"]           = TranslationService(
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-        model=os.environ.get("TRANSLATE_MODEL", "gemma4"),
-        enabled=os.environ.get("TRANSLATE_ENABLED", "true").lower() == "true",
-        timeout=int(os.environ.get("TRANSLATE_TIMEOUT", "60")),
+        model=os.environ.get("TRANSLATION_MODEL", "gemma4"),
+        enabled=os.environ.get("TRANSLATION_ENABLED", "true").lower() == "true",
+        timeout=int(os.environ.get("TRANSLATION_TIMEOUT", "60")),
         prompt_dir=PROMPT_DIR,
         num_gpu=ollama_num_gpu,
-        num_predict=int(os.environ.get("TRANSLATE_NUM_PREDICT", "768")),
+        num_predict=int(os.environ.get("TRANSLATION_NUM_PREDICT", "768")),
     )
     app.bot_data["market_view_analyzer"] = MarketViewAnalyzer(
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-        model=os.environ.get("MARKET_VIEW_MODEL", os.environ.get("TRANSLATE_MODEL", "gemma4")),
-        enabled=os.environ.get("MARKET_VIEW_ENABLED", "true").lower() == "true",
-        timeout=int(os.environ.get("MARKET_VIEW_TIMEOUT", os.environ.get("TRANSLATE_TIMEOUT", "180"))),
-        num_predict=MARKET_VIEW_NUM_PREDICT,
-        prompt_file=MARKET_VIEW_PROMPT_FILE,
+        model=os.environ.get(
+            "RESEARCH_ANALYSIS_MODEL",
+            os.environ.get("TRANSLATION_MODEL", "gemma4"),
+        ),
+        enabled=os.environ.get("RESEARCH_ANALYSIS_ENABLED", "true").lower() == "true",
+        timeout=int(
+            os.environ.get(
+                "RESEARCH_ANALYSIS_TIMEOUT",
+                os.environ.get("TRANSLATION_TIMEOUT", "180"),
+            )
+        ),
+        num_predict=RESEARCH_ANALYSIS_NUM_PREDICT,
+        prompt_file=RESEARCH_ANALYSIS_PROMPT_FILE,
         num_gpu=ollama_num_gpu,
     )
-    app.bot_data["translate_semaphore"]  = asyncio.Semaphore(TRANSLATE_CONCURRENCY)
+    app.bot_data["translate_semaphore"]  = asyncio.Semaphore(TRANSLATION_CONCURRENCY)
     app.bot_data["research_news_collector"] = collect_global_market_news_items
 
     app.add_handler(CommandHandler("start", cmd_start))
@@ -693,7 +738,7 @@ def main() -> None:
     scheduler.add_job(
         fetch_all,
         trigger="interval",
-        minutes=SCHEDULE_INTERVAL_MINUTES,
+        minutes=SCHEDULER_INTERVAL_MINUTES,
         args=[app],
         next_run_time=datetime.now(),
         max_instances=1,
@@ -711,7 +756,7 @@ def main() -> None:
 
     logger.info(
         "봇 시작됨. %s분마다 재련사(財联社) + 푸투니우니우(富途牛牛) + 관심종목 뉴스 전송.",
-        SCHEDULE_INTERVAL_MINUTES,
+        SCHEDULER_INTERVAL_MINUTES,
     )
     logger.info("명령어: /start /help /menu /add /list /research")
     app.run_polling()

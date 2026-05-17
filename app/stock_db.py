@@ -1,11 +1,14 @@
+import csv
+import io
 import json
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import akshare as ak
-import requests.exceptions
+import pandas as pd
+import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
@@ -21,6 +24,14 @@ except ImportError:
     OpenCC = None
 
 _OPENCC_S2T = None
+_CACHE_SCHEMA_VERSION = 5
+_HKEX_NORTHBOUND_BUY_SELL_XLS_URLS = (
+    "https://www.hkex.com.hk/-/media/HKEX-Market/Mutual-Market/"
+    "Stock-Connect/Eligible-Stocks/View-All-Eligible-Securities_xls/SSE_Securities.xls",
+    "https://www.hkex.com.hk/-/media/HKEX-Market/Mutual-Market/"
+    "Stock-Connect/Eligible-Stocks/View-All-Eligible-Securities_xls/SZSE_Securities.xls",
+)
+_INDIVIDUAL_RESTRICTED_A_PREFIXES = ("300", "301", "688", "689")
 
 
 def _retry_on_network(func):
@@ -44,6 +55,13 @@ def _fetch_hk_spot():
     return ak.stock_hk_spot()
 
 
+@_retry_on_network
+def _fetch_hkex_file(url: str) -> bytes:
+    response = requests.get(url, timeout=20)
+    response.raise_for_status()
+    return response.content
+
+
 def _classify_market(code: str) -> str:
     if len(code) <= 5:
         return "HK"
@@ -54,6 +72,77 @@ def _classify_market(code: str) -> str:
     if code.startswith("6"):
         return "SH"
     return "SZ"
+
+
+def _is_professional_only_a_share(code: str) -> bool:
+    return code.startswith(_INDIVIDUAL_RESTRICTED_A_PREFIXES)
+
+
+def _is_foreign_individual_a_share_fallback(code: str) -> bool:
+    if not re.fullmatch(r"\d{6}", code):
+        return False
+    if _is_professional_only_a_share(code):
+        return False
+    return code.startswith(("0", "6"))
+
+
+def _is_foreign_individual_hk_security(code: str) -> bool:
+    if not re.fullmatch(r"\d{5}", code):
+        return False
+    # HKD ordinary equity counters are kept. 8xxxx RMB counters are duplicate
+    # counters that many retail brokers do not expose as regular HK equities.
+    return not code.startswith("8")
+
+
+def _normalize_a_share_code_candidate(value: Any) -> str | None:
+    text = str(value).strip()
+    if re.fullmatch(r"\d{1,6}", text):
+        code = text.zfill(6)
+        return code if code.startswith(("0", "3", "6")) else None
+    return None
+
+
+def _extract_a_share_codes_from_csv(text: str) -> set[str]:
+    codes: set[str] = set()
+    for row in csv.reader(io.StringIO(text)):
+        for cell in row:
+            for match in re.findall(r"(?<!\d)[036]\d{5}(?!\d)", str(cell)):
+                codes.add(match)
+            if code := _normalize_a_share_code_candidate(cell):
+                codes.add(code)
+    return codes
+
+
+def _extract_a_share_codes_from_excel(content: bytes) -> set[str]:
+    df = pd.read_excel(io.BytesIO(content), header=None, dtype=str)
+    codes: set[str] = set()
+    for value in df.to_numpy().ravel():
+        if pd.isna(value):
+            continue
+        for match in re.findall(r"(?<!\d)[036]\d{5}(?!\d)", str(value)):
+            codes.add(match)
+        if code := _normalize_a_share_code_candidate(value):
+            codes.add(code)
+    return codes
+
+
+def _extract_a_share_codes_from_hkex_file(content: bytes) -> set[str]:
+    try:
+        return _extract_a_share_codes_from_excel(content)
+    except Exception:
+        text = content.decode("utf-8-sig", errors="ignore")
+        return _extract_a_share_codes_from_csv(text)
+
+
+def _fetch_northbound_individual_a_codes() -> set[str]:
+    codes: set[str] = set()
+    for url in _HKEX_NORTHBOUND_BUY_SELL_XLS_URLS:
+        codes.update(_extract_a_share_codes_from_hkex_file(_fetch_hkex_file(url)))
+    return {
+        code
+        for code in codes
+        if not _is_professional_only_a_share(code)
+    }
 
 
 def _clean_stock_name(value: Any) -> str:
@@ -67,62 +156,10 @@ def _clean_stock_name(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
-def _pick_column(columns: list[str], candidates: list[str]) -> str | None:
-    normalized = {str(col).strip().lower(): col for col in columns}
-    for candidate in candidates:
-        col = normalized.get(candidate.lower())
-        if col is not None:
-            return col
-    return None
-
-
-def _pick_english_name_column(columns: list[str], name_col: str) -> str | None:
-    candidates = [
-        "英文名称",
-        "英文名",
-        "英文简称",
-        "英文",
-        "英语名称",
-        "english_name",
-        "english name",
-        "eng_name",
-        "eng name",
-        "en_name",
-        "en name",
-        "name_en",
-        "name en",
-    ]
-    picked = _pick_column(columns, candidates)
-    if picked and picked != name_col:
-        return picked
-
-    for col in columns:
-        col_text = str(col).strip().lower()
-        if col == name_col:
-            continue
-        if ("英文" in col_text or "english" in col_text or col_text.endswith("_en")):
-            return col
-    return None
-
-
-def _format_display_name(cn_name: str, en_name: str = "") -> str:
-    cn_name = _clean_stock_name(cn_name)
-    en_name = _clean_stock_name(en_name)
-    if not cn_name:
-        return en_name
-    if not en_name:
-        return cn_name
-    if cn_name.lower() == en_name.lower():
-        return cn_name
-    if not re.search(r"[A-Za-z]", en_name):
-        return cn_name
-    return f"{cn_name}({en_name})"
-
-
 def _to_traditional_chinese(text: str) -> str:
     global _OPENCC_S2T
     if OpenCC is None:
-        return text
+        raise RuntimeError("opencc-python-reimplemented is required to build ko_name")
     try:
         if _OPENCC_S2T is None:
             _OPENCC_S2T = OpenCC("s2t")
@@ -133,32 +170,32 @@ def _to_traditional_chinese(text: str) -> str:
 
 
 def _to_korean_hanja_reading(cn_name: str) -> str:
-    if hanja is None:
+    cn_name = _clean_stock_name(cn_name)
+    if not cn_name:
         return ""
+    if hanja is None:
+        raise RuntimeError("hanja is required to build ko_name")
     text = _to_traditional_chinese(cn_name)
     try:
         converted = hanja.translate(text, "substitution")
     except Exception as e:
         logger.debug("[StockDB] Hanja conversion failed: %s", e)
-        return ""
+        return cn_name
 
     converted = _clean_stock_name(converted)
-    if not converted or converted == cn_name or converted == text:
-        return ""
-    return converted
+    return converted or cn_name
 
 
-def _stock_entry(cn_name: str, market: str, en_name: str = "") -> dict[str, str]:
+def _stock_entry(cn_name: str, market: str) -> dict[str, str]:
     cn_name = _clean_stock_name(cn_name)
-    en_name = _clean_stock_name(en_name)
-    ko_name = "" if en_name else _to_korean_hanja_reading(cn_name)
-    display_alias = en_name or ko_name
+    ko_name = _to_korean_hanja_reading(cn_name)
     return {
-        "name": _format_display_name(cn_name, display_alias),
+        "display_name": ko_name or cn_name,
         "cn_name": cn_name,
-        "en_name": en_name,
         "ko_name": ko_name,
         "market": market,
+        "eligibility": "foreign_individual",
+        "schema_version": str(_CACHE_SCHEMA_VERSION),
     }
 
 
@@ -173,6 +210,15 @@ class StockDatabase:
         old_db = self._load_existing_cache()
         a_loaded = False
         hk_loaded = False
+        northbound_codes: set[str] | None = None
+
+        try:
+            northbound_codes = _fetch_northbound_individual_a_codes()
+            if not northbound_codes:
+                raise RuntimeError("HKEX Northbound eligible code list is empty")
+            logger.info("[StockDB] HKEX 개인투자자 가능 A주 %d종목 로드", len(northbound_codes))
+        except Exception as e:
+            logger.warning("[StockDB] HKEX 가능 A주 목록 로드 실패, 코드 규칙 fallback 사용: %s", e)
 
         try:
             df_a = _fetch_a_code_name()
@@ -181,17 +227,33 @@ class StockDatabase:
                 code_col, name_col = "code", "name"
             else:
                 code_col, name_col = "股票代码", "股票名称"
-            en_name_col = _pick_english_name_column(cols, name_col)
             for _, row in df_a.iterrows():
                 code = str(row[code_col]).zfill(6)
+                if northbound_codes is not None:
+                    if code not in northbound_codes:
+                        continue
+                elif not _is_foreign_individual_a_share_fallback(code):
+                    continue
                 cn_name = row[name_col]
-                en_name = row[en_name_col] if en_name_col else ""
-                db[code] = _stock_entry(cn_name, _classify_market(code), en_name)
+                db[code] = _stock_entry(cn_name, _classify_market(code))
             a_loaded = True
             logger.info("[StockDB] A주 %d종목 로드", len(db))
         except Exception as e:
             logger.warning("[StockDB] A주 빌드 실패: %s", e)
-            self._preserve_markets(db, old_db, {"SH", "SZ", "STAR", "CHI"})
+            if northbound_codes is not None:
+                self._preserve_markets(
+                    db,
+                    old_db,
+                    {"SH", "SZ", "STAR", "CHI"},
+                    code_filter=lambda code: code in northbound_codes,
+                )
+            else:
+                self._preserve_markets(
+                    db,
+                    old_db,
+                    {"SH", "SZ", "STAR", "CHI"},
+                    code_filter=_is_foreign_individual_a_share_fallback,
+                )
 
         hk_before = len(db)
         try:
@@ -205,22 +267,27 @@ class StockDatabase:
                 hk_code_col, hk_name_col = "代码", "名称"
             else:
                 hk_code_col, hk_name_col = cols[1], cols[2]
-            hk_en_name_col = _pick_english_name_column(cols, hk_name_col)
             for _, row in df_hk.iterrows():
                 code = str(row[hk_code_col]).zfill(5)
+                if not _is_foreign_individual_hk_security(code):
+                    continue
                 cn_name = row[hk_name_col]
-                en_name = row[hk_en_name_col] if hk_en_name_col else ""
-                db[code] = _stock_entry(cn_name, "HK", en_name)
+                db[code] = _stock_entry(cn_name, "HK")
             hk_loaded = True
             logger.info("[StockDB] 홍콩 %d종목 로드", len(db) - hk_before)
         except Exception as e:
             logger.warning("[StockDB] 홍콩 빌드 실패: %s", e)
-            self._preserve_markets(db, old_db, {"HK"})
+            self._preserve_markets(
+                db,
+                old_db,
+                {"HK"},
+                code_filter=_is_foreign_individual_hk_security,
+            )
 
-        if not a_loaded and not hk_loaded:
+        if not a_loaded and not hk_loaded and not db:
             if old_db:
-                self._db = old_db
-                logger.warning("[StockDB] 전체 빌드 실패, 기존 캐시 유지: %d종목", len(old_db))
+                self._db = self._filter_existing_cache(old_db)
+                logger.warning("[StockDB] 전체 빌드 실패, 필터된 기존 캐시 유지: %d종목", len(self._db))
                 return
             raise RuntimeError("A주와 홍콩 주식 DB 빌드가 모두 실패했습니다")
 
@@ -244,9 +311,13 @@ class StockDatabase:
             return True
         return all(
             isinstance(entry, dict)
+            and "display_name" in entry
             and "cn_name" in entry
-            and "en_name" in entry
             and "ko_name" in entry
+            and bool(entry.get("ko_name"))
+            and entry.get("display_name") == entry.get("ko_name")
+            and entry.get("eligibility") == "foreign_individual"
+            and entry.get("schema_version") == str(_CACHE_SCHEMA_VERSION)
             for entry in db.values()
         )
 
@@ -255,10 +326,37 @@ class StockDatabase:
         db: dict[str, dict],
         old_db: dict[str, dict],
         markets: set[str],
+        code_filter: Callable[[str], bool] | None = None,
     ) -> None:
         for code, entry in old_db.items():
-            if entry.get("market") in markets and code not in db:
-                db[code] = entry
+            if entry.get("market") not in markets or code in db:
+                continue
+            if code_filter is not None and not code_filter(code):
+                continue
+            cn_name = str(
+                entry.get("cn_name")
+                or entry.get("display_name")
+                or entry.get("name")
+                or ""
+            )
+            db[code] = _stock_entry(cn_name, str(entry.get("market") or ""))
+
+    @classmethod
+    def _filter_existing_cache(cls, old_db: dict[str, dict]) -> dict[str, dict]:
+        db: dict[str, dict] = {}
+        cls._preserve_markets(
+            db,
+            old_db,
+            {"SH", "SZ", "STAR", "CHI"},
+            code_filter=_is_foreign_individual_a_share_fallback,
+        )
+        cls._preserve_markets(
+            db,
+            old_db,
+            {"HK"},
+            code_filter=_is_foreign_individual_hk_security,
+        )
+        return db
 
     def load(self) -> None:
         self._db = json.loads(self._cache_file.read_text(encoding="utf-8"))
@@ -273,7 +371,7 @@ class StockDatabase:
                 self.load()
                 if self._has_name_metadata(self._db):
                     return
-                logger.info("[StockDB] 구버전 캐시 감지, 영문명 병기 지원 DB로 재빌드")
+                logger.info("[StockDB] 구버전 캐시 감지, 한국 한자음 표시 DB로 재빌드")
             except Exception as e:
                 logger.warning("[StockDB] 캐시 로드 실패, 재빌드: %s", e)
         try:
@@ -283,7 +381,11 @@ class StockDatabase:
 
     def get_cn_name(self, code: str) -> str | None:
         entry = self._db.get(code)
-        return entry["name"] if entry else None
+        return entry["cn_name"] if entry else None
+
+    def get_display_name(self, code: str) -> str | None:
+        entry = self._db.get(code)
+        return entry["display_name"] if entry else None
 
     def is_valid_code(self, code: str) -> bool:
         return code in self._db
@@ -295,9 +397,8 @@ class StockDatabase:
         items = [
             {
                 "code": code,
-                "name": str(entry.get("name") or ""),
-                "cn_name": str(entry.get("cn_name") or entry.get("name") or ""),
-                "en_name": str(entry.get("en_name") or ""),
+                "display_name": str(entry.get("display_name") or ""),
+                "cn_name": str(entry.get("cn_name") or entry.get("display_name") or ""),
                 "ko_name": str(entry.get("ko_name") or ""),
                 "market": str(entry.get("market") or ""),
             }
