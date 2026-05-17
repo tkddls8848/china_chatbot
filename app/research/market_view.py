@@ -199,10 +199,28 @@ class MarketViewAnalyzer:
 
     def _extract_json_object(self, text: str) -> str:
         stripped = text.strip()
-        if stripped.startswith("{") and stripped.endswith("}"):
-            return stripped
         start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start == -1 or end == -1 or end <= start:
+        if start == -1:
             return stripped
-        return stripped[start : end + 1]
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i, ch in enumerate(stripped[start:], start):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return stripped[start : i + 1]
+        return stripped[start:]
