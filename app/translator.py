@@ -1,9 +1,8 @@
 import json
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator
+from typing import Any, Dict
 
 import requests
 
@@ -21,21 +20,14 @@ class TranslationResult:
     mentioned_stocks: list[str]
     theme_candidates: list[dict[str, Any]]
 
-    def __iter__(self) -> Iterator[Any]:
-        yield self.title
-        yield self.content
-        yield self.mentioned_stocks
-
 
 class TranslationService:
     """Translate Chinese financial news to Korean with Ollama."""
 
     _STOCK_NAME_PROMPT = (
-        "중국 상장 기업의 중국어 종목명을 한국어 또는 영문으로 변환한다.\n"
-        "규칙:\n"
-        "- 국제적으로 통용되는 영문 약칭이 있으면 우선 사용한다 (예: CATL, BYD, Alibaba).\n"
-        "- 영문 약칭이 없으면 한국어 음역으로 표기한다.\n"
-        "- JSON만 출력: {\"name\": \"변환된 이름\"}"
+        "Translate a Chinese listed-company name into the most commonly used "
+        "English name if one exists; otherwise use a concise Korean-style name. "
+        'Return only JSON: {"name": "translated name"}'
     )
 
     _PROMPT_FILES = {
@@ -51,7 +43,6 @@ class TranslationService:
         enabled: bool,
         timeout: int,
         prompt_dir: Path,
-        fallback_to_original: bool = False,
         num_gpu: int = 0,
         num_predict: int = 512,
     ):
@@ -59,7 +50,6 @@ class TranslationService:
         self._model = model
         self._enabled = enabled
         self._timeout = timeout
-        self._fallback_to_original = fallback_to_original
         self._num_gpu = num_gpu
         self._num_predict = num_predict
         self._prompts = self._load_prompts(prompt_dir)
@@ -83,28 +73,8 @@ class TranslationService:
 
         try:
             translated = self._request_translation(prompt, title, content)
-            try:
-                return self._parse_translation(translated)
-            except Exception as first_error:
-                logger.info(
-                    "[TRANSLATE] invalid JSON, retrying once: source=%s title=%s error=%s",
-                    source,
-                    title[:80],
-                    first_error,
-                )
-                retry_prompt = (
-                    f"{prompt}\n\n"
-                    "이전 응답은 JSON 파싱에 실패했습니다. "
-                    "반드시 유효한 JSON 객체 하나만 출력하세요. "
-                    "문자열 안의 줄바꿈은 공백으로 바꾸고, 모든 필드 사이에 쉼표를 넣으세요. "
-                    "title/content 문자열 안에 큰따옴표가 필요하면 작은따옴표로 바꾸거나 JSON 규칙에 맞게 이스케이프하세요."
-                )
-                translated = self._request_translation(retry_prompt, title, content)
-                return self._parse_translation(translated)
+            return self._parse_translation(translated)
         except Exception as e:
-            if self._fallback_to_original:
-                logger.warning("[TRANSLATE] failed, fallback to original: %s", e)
-                return TranslationResult(title, content, [], [])
             raise TranslationError(str(e)) from e
 
     def _request_translation(self, prompt: str, title: str, content: str) -> str:
@@ -123,10 +93,7 @@ class TranslationService:
                 "model": self._model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": f"제목:\n{title}\n\n본문:\n{content}",
-                    },
+                    {"role": "user", "content": f"title:\n{title}\n\ncontent:\n{content}"},
                 ],
                 "stream": False,
                 "think": False,
@@ -154,15 +121,9 @@ class TranslationService:
         return translated
 
     def _parse_translation(self, translated: str) -> TranslationResult:
-        payload = self._extract_json_object(translated)
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            data = self._parse_known_translation_shape(payload)
+        data = json.loads(self._extract_json_object(translated))
         title = data.get("title")
         content = data.get("content")
-        if "mentioned_stocks" not in data:
-            raise ValueError("translation JSON missing mentioned_stocks")
         mentioned_stocks = data.get("mentioned_stocks")
         theme_candidates = data.get("theme_candidates", [])
 
@@ -172,44 +133,17 @@ class TranslationService:
             raise ValueError("translation JSON missing content")
         if not isinstance(mentioned_stocks, list):
             raise ValueError("translation JSON mentioned_stocks must be a list")
+        if not isinstance(theme_candidates, list):
+            raise ValueError("translation JSON theme_candidates must be a list")
+        if any(not isinstance(item, dict) for item in theme_candidates):
+            raise ValueError("translation JSON theme_candidates must contain objects")
 
-        mentioned_stock_codes = [
-            c for c in mentioned_stocks if isinstance(c, str) and c.strip()
-        ]
         return TranslationResult(
             title.strip(),
             content.strip(),
-            mentioned_stock_codes,
-            self._normalize_theme_candidates(theme_candidates),
+            [str(code).strip() for code in mentioned_stocks if str(code).strip()],
+            theme_candidates,
         )
-
-    def _normalize_theme_candidates(self, value: Any) -> list[dict[str, Any]]:
-        if not isinstance(value, list):
-            return []
-
-        normalized: list[dict[str, Any]] = []
-        for item in value:
-            if not isinstance(item, dict):
-                continue
-            codes = item.get("codes", [])
-            if not isinstance(codes, list):
-                codes = []
-            normalized.append(
-                {
-                    "keyword": str(item.get("keyword") or "").strip(),
-                    "theme": str(item.get("theme") or "").strip(),
-                    "reason": str(item.get("reason") or "").strip(),
-                    "codes": [
-                        str(code).strip()
-                        for code in codes
-                        if isinstance(code, (str, int)) and str(code).strip()
-                    ],
-                }
-            )
-        return [
-            item for item in normalized
-            if item["keyword"] or item["theme"] or item["reason"] or item["codes"]
-        ]
 
     def _extract_json_object(self, text: str) -> str:
         stripped = text.strip()
@@ -222,49 +156,7 @@ class TranslationService:
             return stripped
         return stripped[start : end + 1]
 
-    def _parse_known_translation_shape(self, text: str) -> dict:
-        title = self._extract_field_before(text, "title", "content")
-        content = self._extract_field_before(text, "content", "mentioned_stocks")
-        mentioned_stocks = []
-
-        mentioned_match = re.search(r'"mentioned_stocks"\s*:\s*(\[[\s\S]*?\])', text)
-        if mentioned_match:
-            try:
-                parsed_mentioned = json.loads(mentioned_match.group(1))
-                if isinstance(parsed_mentioned, list):
-                    mentioned_stocks = parsed_mentioned
-            except json.JSONDecodeError:
-                mentioned_stocks = re.findall(r'"([^"]+)"', mentioned_match.group(1))
-
-        if not title or not content:
-            raise ValueError("translation JSON missing title/content")
-        return {
-            "title": title,
-            "content": content,
-            "mentioned_stocks": mentioned_stocks,
-            "theme_candidates": [],
-        }
-
-    def _extract_field_before(self, text: str, field: str, next_field: str) -> str:
-        pattern = (
-            rf'"{re.escape(field)}"\s*:\s*"'
-            rf'([\s\S]*?)'
-            rf'"\s*,\s*"{re.escape(next_field)}"\s*:'
-        )
-        match = re.search(pattern, text)
-        if not match:
-            return ""
-        return self._clean_jsonish_string(match.group(1))
-
-    def _clean_jsonish_string(self, value: str) -> str:
-        value = value.replace("\r", " ").replace("\n", " ")
-        try:
-            return json.loads(f'"{value}"').strip()
-        except json.JSONDecodeError:
-            return value.replace('\\"', '"').strip()
-
     def translate_stock_name(self, cn_name: str) -> str:
-        """중국어 종목명을 한국어/영문으로 번역한다. 실패 시 원래 이름 반환."""
         if not self._enabled or not cn_name.strip():
             return cn_name
         try:

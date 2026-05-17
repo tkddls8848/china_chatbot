@@ -31,7 +31,6 @@ OLLAMA_BASE_URL=http://localhost:11434
 TRANSLATE_MODEL=gemma4:e4b
 TRANSLATE_TIMEOUT=60
 TRANSLATE_PROMPT_DIR=prompts
-TRANSLATE_FALLBACK_TO_ORIGINAL=false
 TRANSLATE_CONCURRENCY=1
 CLS_FUTU_NEWS_LIMIT=10
 STOCK_NEWS_LIMIT=5
@@ -52,13 +51,7 @@ ollama pull gemma4
 ollama serve
 ```
 
-`TRANSLATE_ENABLED=false`로 설정하면 번역하지 않고 중국어 원문을 전송합니다. `TRANSLATE_ENABLED=true`이고 `TRANSLATE_FALLBACK_TO_ORIGINAL=false`이면 Ollama 호출, JSON 파싱, 타임아웃 실패 시 원문을 전송하지 않고 다음 주기에 재시도합니다.
-
-원문 fallback을 허용하려면 아래처럼 설정합니다.
-
-```env
-TRANSLATE_FALLBACK_TO_ORIGINAL=true
-```
+`TRANSLATE_ENABLED=false`로 설정하면 번역하지 않고 중국어 원문을 전송합니다. `TRANSLATE_ENABLED=true`이면 Ollama 호출, JSON 파싱, 타임아웃 실패 시 원문을 전송하지 않고 다음 주기에 재시도합니다.
 
 프롬프트는 `prompts/` 아래 텍스트 파일로 관리합니다. 프롬프트를 수정한 뒤에는 봇을 재시작해야 합니다.
 
