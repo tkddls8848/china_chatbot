@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -144,7 +145,7 @@ class MarketViewAnalyzer:
             data = json.loads(payload)
         except json.JSONDecodeError as e:
             logger.error("[ANALYZE] JSON parse failed: %s | raw=%r", e, raw[:300])
-            raise MarketViewError(f"invalid JSON response: {e}") from e
+            return self._fallback_partial_analysis(raw, e)
 
         if not isinstance(data, dict):
             raise MarketViewError("analysis JSON must be an object")
@@ -164,7 +165,7 @@ class MarketViewAnalyzer:
         for item in actions:
             if not isinstance(item, dict):
                 raise MarketViewError("analysis JSON actions must contain objects")
-            ticker = item.get("ticker") or item.get("code")
+            ticker = item.get("ticker")
             action = item.get("action")
             if not isinstance(ticker, str) or not isinstance(action, str):
                 raise MarketViewError("analysis action requires ticker and action")
@@ -196,6 +197,45 @@ class MarketViewAnalyzer:
             "actions": normalized_actions,
             "risks": [str(r).strip() for r in risks if str(r).strip()],
         }
+
+    def _fallback_partial_analysis(
+        self,
+        raw: str,
+        error: json.JSONDecodeError,
+    ) -> dict[str, Any]:
+        summary = self._extract_string_field(raw, "summary")
+        if not summary:
+            raise MarketViewError(f"invalid JSON response: {error}") from error
+        return {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "summary": summary.strip(),
+            "actions": [],
+            "risks": [
+                "LLM 응답 JSON이 중간에 잘려 요약만 복구했습니다. "
+                "RESEARCH_ANALYSIS_NUM_PREDICT 값을 2048 이상으로 높이면 후보 액션까지 받을 가능성이 커집니다."
+            ],
+        }
+
+    @staticmethod
+    def _extract_string_field(raw: str, field: str) -> str:
+        pattern = rf'"{re.escape(field)}"\s*:\s*"'
+        match = re.search(pattern, raw)
+        if not match:
+            return ""
+        chars: list[str] = []
+        escaped = False
+        for ch in raw[match.end() :]:
+            if escaped:
+                chars.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == '"':
+                break
+            chars.append(ch)
+        return "".join(chars)
 
     def _extract_json_object(self, text: str) -> str:
         stripped = text.strip()

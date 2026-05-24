@@ -315,6 +315,4 @@ def build_research_candidate_universe(
     if theme_added:
         logger.info("[RESEARCH] 테마 후보 %d개 추가", theme_added)
 
-    if max_candidates <= 0:
-        return list(candidates.values())
     return list(candidates.values())[:max_candidates]

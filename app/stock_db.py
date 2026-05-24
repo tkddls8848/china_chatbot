@@ -24,7 +24,6 @@ except ImportError:
     OpenCC = None
 
 _OPENCC_S2T = None
-_CACHE_SCHEMA_VERSION = 5
 _HKEX_NORTHBOUND_BUY_SELL_XLS_URLS = (
     "https://www.hkex.com.hk/-/media/HKEX-Market/Mutual-Market/"
     "Stock-Connect/Eligible-Stocks/View-All-Eligible-Securities_xls/SSE_Securities.xls",
@@ -194,8 +193,6 @@ def _stock_entry(cn_name: str, market: str) -> dict[str, str]:
         "cn_name": cn_name,
         "ko_name": ko_name,
         "market": market,
-        "eligibility": "foreign_individual",
-        "schema_version": str(_CACHE_SCHEMA_VERSION),
     }
 
 
@@ -285,10 +282,6 @@ class StockDatabase:
             )
 
         if not a_loaded and not hk_loaded and not db:
-            if old_db:
-                self._db = self._filter_existing_cache(old_db)
-                logger.warning("[StockDB] 전체 빌드 실패, 필터된 기존 캐시 유지: %d종목", len(self._db))
-                return
             raise RuntimeError("A주와 홍콩 주식 DB 빌드가 모두 실패했습니다")
 
         self._cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -304,22 +297,6 @@ class StockDatabase:
         except Exception as e:
             logger.warning("[StockDB] 기존 캐시 읽기 실패: %s", e)
             return {}
-
-    @staticmethod
-    def _has_name_metadata(db: dict[str, dict]) -> bool:
-        if not db:
-            return True
-        return all(
-            isinstance(entry, dict)
-            and "display_name" in entry
-            and "cn_name" in entry
-            and "ko_name" in entry
-            and bool(entry.get("ko_name"))
-            and entry.get("display_name") == entry.get("ko_name")
-            and entry.get("eligibility") == "foreign_individual"
-            and entry.get("schema_version") == str(_CACHE_SCHEMA_VERSION)
-            for entry in db.values()
-        )
 
     @staticmethod
     def _preserve_markets(
@@ -341,23 +318,6 @@ class StockDatabase:
             )
             db[code] = _stock_entry(cn_name, str(entry.get("market") or ""))
 
-    @classmethod
-    def _filter_existing_cache(cls, old_db: dict[str, dict]) -> dict[str, dict]:
-        db: dict[str, dict] = {}
-        cls._preserve_markets(
-            db,
-            old_db,
-            {"SH", "SZ", "STAR", "CHI"},
-            code_filter=_is_foreign_individual_a_share_fallback,
-        )
-        cls._preserve_markets(
-            db,
-            old_db,
-            {"HK"},
-            code_filter=_is_foreign_individual_hk_security,
-        )
-        return db
-
     def load(self) -> None:
         self._db = json.loads(self._cache_file.read_text(encoding="utf-8"))
         logger.info("[StockDB] 캐시 로드: %d종목", len(self._db))
@@ -369,9 +329,7 @@ class StockDatabase:
         if self._cache_file.exists():
             try:
                 self.load()
-                if self._has_name_metadata(self._db):
-                    return
-                logger.info("[StockDB] 구버전 캐시 감지, 한국 한자음 표시 DB로 재빌드")
+                return
             except Exception as e:
                 logger.warning("[StockDB] 캐시 로드 실패, 재빌드: %s", e)
         try:

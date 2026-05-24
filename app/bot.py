@@ -22,6 +22,7 @@ from news import (
     fetch_futu_raw as _fetch_futu_raw,
     fetch_stock_news_raw as _fetch_stock_news_raw,
 )
+from momentum import MomentumService, MomentumSettings, cmd_momentum
 from research import (
     MarketViewAnalyzer,
     MarketViewManager,
@@ -55,6 +56,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+_SINGLE_INSTANCE_LOCK = None
 
 SENT_IDS_FILE     = BASE_DIR / "data" / "sent_ids.json"
 WATCHLIST_FILE    = BASE_DIR / "data" / "watchlist.json"
@@ -93,12 +95,38 @@ HELP_TEXT = (
     "/research set 리서치주제 — 리서치 주제 저장\n"
     "/research run — 최근 뉴스 기준 리서치 실행\n"
     "/research clear — 리서치 주제 삭제\n"
+    "/momentum top — 최근 저장된 업종 모멘텀 보기\n"
+    "/momentum refresh — 수동으로 업종 모멘텀 분석 실행\n"
     "/help — 도움말\n\n"
     "종목코드 형식:\n"
     "  • A주 상해: 6자리 (예: 600519)\n"
     "  • A주 심천: 6자리 (예: 300750)\n"
     "  • 홍콩: 5자리 (예: 09988)"
 )
+
+
+def _acquire_single_instance_lock(lock_file: Path):
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_file.open("a+b")
+    handle.seek(0)
+    if not handle.read(1):
+        handle.write(b"0")
+        handle.flush()
+    handle.seek(0)
+
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
 
 
 def _format_china_time_as_kst(
@@ -543,10 +571,10 @@ async def collect_global_market_news_items(
         df_cls = await asyncio.to_thread(_fetch_cls_raw)
         cls_limit = min(RESEARCH_NEWS_GLOBAL_LIMIT, max(1, RESEARCH_NEWS_MAX_ITEMS // 2))
         for _, row in df_cls.tail(cls_limit).iterrows():
-            published_date = _row_value(row, ["发布日期", "?묈툋?ζ쐿"], 0)
-            published_time = _row_value(row, ["发布时间", "?묈툋?띌뿴"], 1)
-            title = _row_value(row, ["标题", "?뉔쥦"], 2)
-            content = _row_value(row, ["内容", "?끻?"], 3)
+            published_date = _row_value(row, ["发布日期"], 0)
+            published_time = _row_value(row, ["发布时间"], 1)
+            title = _row_value(row, ["标题"], 2)
+            content = _row_value(row, ["内容"], 3)
             if title or content:
                 news_items.append(
                     _make_news_item(
@@ -566,10 +594,10 @@ async def collect_global_market_news_items(
             max(1, RESEARCH_NEWS_MAX_ITEMS - len(news_items)),
         )
         for _, row in df_futu.head(futu_limit).iterrows():
-            title = _row_value(row, ["标题", "?뉔쥦"], 0)
-            content = _row_value(row, ["内容", "?끻?"], 1)
-            published_at = _row_value(row, ["发布时间", "?묈툋?띌뿴"], 2)
-            url = _row_value(row, ["链接", "?얏렏"], 3)
+            title = _row_value(row, ["标题"], 0)
+            content = _row_value(row, ["内容"], 1)
+            published_at = _row_value(row, ["发布时间"], 2)
+            url = _row_value(row, ["链接"], 3)
             if title or content:
                 mentioned_stocks: list[str] = []
                 theme_candidates: list[dict[str, Any]] = []
@@ -670,6 +698,7 @@ async def configure_telegram_menu(app: Application) -> None:
         BotCommand("add", "관심종목 추가: /add 600519"),
         BotCommand("list", "현재 관심종목 목록 보기"),
         BotCommand("research", "리서치 주제 확인/설정/실행"),
+        BotCommand("momentum", "중국 업종 모멘텀 조회/수동 분석"),
         BotCommand("help", "명령어 경로와 설명 보기"),
     ]
     await app.bot.set_my_commands(commands)
@@ -680,6 +709,12 @@ async def configure_telegram_menu(app: Application) -> None:
 # ── 진입점 ────────────────────────────────────────────
 
 def main() -> None:
+    global _SINGLE_INSTANCE_LOCK
+    _SINGLE_INSTANCE_LOCK = _acquire_single_instance_lock(BASE_DIR / "data" / "bot.lock")
+    if _SINGLE_INSTANCE_LOCK is None:
+        logger.error("이미 실행 중인 봇 인스턴스가 있어 시작하지 않습니다.")
+        return
+
     app = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
@@ -689,6 +724,7 @@ def main() -> None:
 
     stock_db = StockDatabase(cache_file=STOCK_DB_FILE, enabled=STOCK_DB_ENABLED)
     stock_db.load_or_build()
+    momentum_settings = MomentumSettings.from_env(BASE_DIR)
 
     app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE, SENT_NEWS_MAX_IDS)
     app.bot_data["watchlist_manager"]    = WatchlistManager(WATCHLIST_FILE)
@@ -696,6 +732,7 @@ def main() -> None:
     app.bot_data["research_pending"]     = {}
     app.bot_data["stock_news_first_run"] = True
     app.bot_data["stock_db"]             = stock_db
+    app.bot_data["momentum_service"]     = MomentumService(momentum_settings, stock_db)
     ollama_num_gpu = int(os.environ.get("OLLAMA_NUM_GPU", "0"))
     app.bot_data["translator"]           = TranslationService(
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
@@ -732,6 +769,7 @@ def main() -> None:
     app.add_handler(CommandHandler("add",   cmd_add))
     app.add_handler(CommandHandler("list",  cmd_list))
     app.add_handler(CommandHandler("research", cmd_research))
+    app.add_handler(CommandHandler("momentum", cmd_momentum))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     scheduler = AsyncIOScheduler()
@@ -758,7 +796,7 @@ def main() -> None:
         "봇 시작됨. %s분마다 재련사(財联社) + 푸투니우니우(富途牛牛) + 관심종목 뉴스 전송.",
         SCHEDULER_INTERVAL_MINUTES,
     )
-    logger.info("명령어: /start /help /menu /add /list /research")
+    logger.info("명령어: /start /help /menu /add /list /research /momentum")
     app.run_polling()
 
 
