@@ -1,3 +1,4 @@
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ def load_sector_definitions(store: MomentumStore) -> list[SectorDefinition]:
             code for raw_code in item.get("codes", []) if (code := _normalize_code(raw_code))
         )
         keywords = tuple(str(x).strip() for x in item.get("keywords", []) if str(x).strip())
-        if sector_id and sector_name and codes:
+        if sector_id and sector_name:
             sectors.append(SectorDefinition(sector_id, sector_name, codes, keywords))
     return sectors
 
@@ -33,14 +34,60 @@ def load_sector_definitions(store: MomentumStore) -> list[SectorDefinition]:
 def build_universe(
     stock_db: StockDatabase,
     sectors: list[SectorDefinition],
+    top_n: int = 20,
 ) -> list[StockUniverseEntry]:
+    all_stocks = stock_db.get_candidate_universe()
+    has_sector_data = any(str(s.get("sector") or "").strip() for s in all_stocks)
+
+    if has_sector_data:
+        by_sector: dict[str, list[dict]] = defaultdict(list)
+        for s in all_stocks:
+            sid = str(s.get("sector") or "").strip()
+            if sid and sid != "etc":
+                by_sector[sid].append(s)
+
+        universe: list[StockUniverseEntry] = []
+        seen: set[tuple[str, str]] = set()
+        for sector in sectors:
+            candidates = sorted(
+                by_sector.get(sector.sector_id, []),
+                key=lambda x: float(x.get("market_cap_cny") or 0),
+                reverse=True,
+            )[:top_n]
+            for stock in candidates:
+                code = str(stock.get("code") or "").strip()
+                if not code:
+                    continue
+                key = (sector.sector_id, code)
+                if key in seen:
+                    continue
+                seen.add(key)
+                name = (
+                    str(stock.get("display_name") or "").strip()
+                    or str(stock.get("cn_name") or "").strip()
+                    or code
+                )
+                market = str(stock.get("market") or "")
+                universe.append(
+                    StockUniverseEntry(
+                        code=code,
+                        name=name,
+                        market=market,
+                        sector_id=sector.sector_id,
+                        sector_name=sector.sector_name,
+                        market_cap_cny=float(stock.get("market_cap_cny") or 0.0),
+                    )
+                )
+        return universe
+
+    # fallback: use hardcoded codes from sector_map.json
     by_code = {
         str(item.get("code") or ""): item
-        for item in stock_db.get_candidate_universe()
+        for item in all_stocks
         if str(item.get("code") or "")
     }
-    universe: list[StockUniverseEntry] = []
-    seen: set[tuple[str, str]] = set()
+    universe = []
+    seen = set()
     for sector in sectors:
         for code in sector.codes:
             key = (sector.sector_id, code)
@@ -61,6 +108,7 @@ def build_universe(
                     market=market,
                     sector_id=sector.sector_id,
                     sector_name=sector.sector_name,
+                    market_cap_cny=float(stock.get("market_cap_cny") or 0.0),
                 )
             )
     return universe

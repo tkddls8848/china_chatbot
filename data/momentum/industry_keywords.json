@@ -1,14 +1,124 @@
 {
-  "semiconductor": ["半导体", "芯片", "集成电路", "国产替代"],
-  "battery_ev": ["新能源汽车", "电池", "储能", "锂"],
-  "robotics": ["机器人", "自动化", "高端制造"],
-  "ai_compute": ["人工智能", "算力", "大模型", "数据中心"],
-  "solar": ["光伏", "太阳能", "新能源"],
-  "wind_power": ["风电", "风能", "新能源"],
-  "defense": ["军工", "航空", "航天"],
-  "rare_earth": ["稀土", "关键矿产", "有色"],
-  "state_owned_reform": ["国企改革", "央企", "中特估"],
-  "consumer_stimulus": ["消费", "以旧换新", "零售"],
-  "biomed": ["医药", "医疗", "生物", "创新药"],
-  "low_altitude": ["低空经济", "无人机", "通航"]
+  "Technology": [
+    "Semiconductors",
+    "Semiconductor Equipment & Materials",
+    "Electronic Components",
+    "Electronics & Computer Distribution",
+    "Computer Hardware",
+    "Consumer Electronics",
+    "Software—Application",
+    "Software—Infrastructure",
+    "Information Technology Services",
+    "Communication Equipment",
+    "Scientific & Technical Instruments"
+  ],
+  "Consumer Cyclical": [
+    "Auto Manufacturers",
+    "Auto Parts",
+    "Auto & Truck Dealerships",
+    "Specialty Retail",
+    "Apparel Manufacturing",
+    "Apparel Retail",
+    "Department Stores",
+    "Home Improvement Retail",
+    "Luxury Goods",
+    "Restaurants",
+    "Leisure",
+    "Residential Construction",
+    "Furnishings, Fixtures & Appliances",
+    "Home Appliances"
+  ],
+  "Industrials": [
+    "Aerospace & Defense",
+    "Specialty Industrial Machinery",
+    "Industrial Machinery",
+    "Electrical Equipment & Parts",
+    "Railroads",
+    "Trucking",
+    "Integrated Freight & Logistics",
+    "Engineering & Construction",
+    "Industrial Distribution",
+    "Tools & Accessories",
+    "Conglomerates",
+    "Airports & Air Services"
+  ],
+  "Consumer Defensive": [
+    "Beverages—Brewers",
+    "Beverages—Non-Alcoholic",
+    "Beverages—Wineries & Distilleries",
+    "Packaged Foods",
+    "Household & Personal Products",
+    "Food Distribution",
+    "Discount Stores",
+    "Grocery Stores",
+    "Farm Products",
+    "Education & Training Services"
+  ],
+  "Healthcare": [
+    "Drug Manufacturers—General",
+    "Drug Manufacturers—Specialty & Generic",
+    "Biotechnology",
+    "Medical Devices",
+    "Medical Instruments & Supplies",
+    "Diagnostics & Research",
+    "Health Information Services",
+    "Medical Care Facilities",
+    "Medical Distribution"
+  ],
+  "Basic Materials": [
+    "Specialty Chemicals",
+    "Agricultural Inputs",
+    "Other Industrial Metals & Mining",
+    "Copper",
+    "Aluminum",
+    "Steel",
+    "Gold",
+    "Other Precious Metals & Mining",
+    "Coking Coal",
+    "Uranium",
+    "Chemicals"
+  ],
+  "Financial Services": [
+    "Banks—Diversified",
+    "Banks—Regional",
+    "Insurance—Life",
+    "Insurance—Property & Casualty",
+    "Insurance—Diversified",
+    "Asset Management",
+    "Capital Markets",
+    "Credit Services",
+    "Financial Data & Stock Exchanges"
+  ],
+  "Real Estate": [
+    "Real Estate—Development",
+    "Real Estate—Diversified",
+    "Real Estate Services",
+    "Real Estate—General"
+  ],
+  "Energy": [
+    "Oil & Gas Integrated",
+    "Oil & Gas E&P",
+    "Oil & Gas Refining & Marketing",
+    "Oil & Gas Equipment & Services",
+    "Coal & Consumable Fuels",
+    "Oil & Gas Midstream"
+  ],
+  "Communication Services": [
+    "Internet Content & Information",
+    "Telecom Services",
+    "Entertainment",
+    "Electronic Gaming & Multimedia",
+    "Publishing",
+    "Broadcasting",
+    "Advertising Agencies"
+  ],
+  "Utilities": [
+    "Utilities—Regulated Electric",
+    "Utilities—Regulated Gas",
+    "Utilities—Renewable",
+    "Renewable Utilities",
+    "Solar",
+    "Utilities—Diversified",
+    "Utilities—Independent Power Producers"
+  ]
 }

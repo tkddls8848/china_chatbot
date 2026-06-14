@@ -6,7 +6,7 @@ from typing import Any
 class SectorDefinition:
     sector_id: str
     sector_name: str
-    codes: tuple[str, ...]
+    codes: tuple[str, ...] = ()
     keywords: tuple[str, ...] = ()
 
 
@@ -17,6 +17,7 @@ class StockUniverseEntry:
     market: str
     sector_id: str
     sector_name: str
+    market_cap_cny: float = 0.0
 
 
 def as_float(value: Any, default: float = 0.0) -> float:

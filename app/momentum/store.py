@@ -53,6 +53,7 @@ class MomentumStore:
                 "last_refreshed_at": None,
                 "last_requested_at": None,
                 "last_result": None,
+                "alert_history": [],
             },
         )
 

@@ -23,6 +23,7 @@ from news import (
     fetch_stock_news_raw as _fetch_stock_news_raw,
 )
 from momentum import MomentumService, MomentumSettings, cmd_momentum
+from momentum.formatter import format_top
 from research import (
     MarketViewAnalyzer,
     MarketViewManager,
@@ -67,6 +68,7 @@ if not PROMPT_DIR.is_absolute():
     PROMPT_DIR = BASE_DIR / PROMPT_DIR
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
 SENT_NEWS_MAX_IDS = int(os.environ.get("SENT_NEWS_MAX_IDS", "0"))
+SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
 TELEGRAM_MESSAGE_LIMIT = 4096
 NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))
 NEWS_STOCK_LIMIT_PER_SYMBOL = int(os.environ.get("NEWS_STOCK_LIMIT_PER_SYMBOL", "3"))
@@ -85,6 +87,9 @@ RESEARCH_NEWS_GLOBAL_LIMIT = int(
 RESEARCH_ANALYSIS_NUM_PREDICT = int(
     os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
 )
+MOMENTUM_DAILY_ALERT_ENABLED = os.environ.get("MOMENTUM_DAILY_ALERT_ENABLED", "false").lower() == "true"
+MOMENTUM_DAILY_ALERT_HOUR = int(os.environ.get("MOMENTUM_DAILY_ALERT_HOUR", "18"))
+MOMENTUM_DAILY_ALERT_MINUTE = int(os.environ.get("MOMENTUM_DAILY_ALERT_MINUTE", "30"))
 HELP_TEXT = (
     "<b>사용 가능한 명령어</b>\n\n"
     "/start — 봇 소개와 사용 가능한 경로 보기\n"
@@ -97,6 +102,8 @@ HELP_TEXT = (
     "/research clear — 리서치 주제 삭제\n"
     "/momentum top — 최근 저장된 업종 모멘텀 보기\n"
     "/momentum refresh — 수동으로 업종 모멘텀 분석 실행\n"
+    "/stockdb build — 종목 코드·이름 목록 갱신\n"
+    "/stockdb enrich — EODHD로 시총·업종·섹터 보강\n"
     "/help — 도움말\n\n"
     "종목코드 형식:\n"
     "  • A주 상해: 6자리 (예: 600519)\n"
@@ -388,7 +395,9 @@ async def fetch_stock_news(
                     "추가: /add 종목코드\n"
                     "삭제: /menu 에서 버튼으로\n"
                     "목록: /list\n"
-                    "리서치: /research show\n\n"
+                    "리서치: /research show | set | run | clear\n"
+                    "모멘텀: /momentum top | refresh\n"
+                    "도움말: /help\n\n"
                     f"{stock_list}"
                 ),
                 parse_mode="HTML",
@@ -648,6 +657,35 @@ async def _refresh_stock_db(stock_db: StockDatabase) -> None:
         logger.warning("[StockDB] 일별 갱신 실패: %s", e)
 
 
+async def _refresh_momentum_and_notify(app: Application) -> None:
+    service: MomentumService = app.bot_data["momentum_service"]
+    try:
+        result = await asyncio.to_thread(service.refresh, False)
+        active_alerts = [
+            alert for alert in result.get("alerts", [])
+            if not alert.get("suppressed")
+        ]
+        if not active_alerts:
+            logger.info("[Momentum] 일일 갱신 완료, 신규 알림 없음")
+            return
+        await app.bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text=format_top(result, service.settings.top_limit),
+            parse_mode="HTML",
+        )
+        logger.info("[Momentum] 일일 알림 전송 완료: %d개", len(active_alerts))
+    except Exception as e:
+        logger.exception("[Momentum] 일일 알림 실패")
+        try:
+            await app.bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID,
+                text=f"모멘텀 일일 알림 실패: {html.escape(str(e))}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.exception("[Momentum] 실패 알림 전송도 실패")
+
+
 async def fetch_all(app: Application) -> None:
     tracker: SentNewsTracker = app.bot_data["sent_tracker"]
     wm: WatchlistManager     = app.bot_data["watchlist_manager"]
@@ -670,6 +708,48 @@ async def fetch_all(app: Application) -> None:
 
 
 # ── 명령어 핸들러 ─────────────────────────────────────
+
+async def cmd_stockdb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+    stock_db: StockDatabase = context.bot_data["stock_db"]
+    args = context.args or []
+    command = args[0].lower() if args else ""
+
+    if command == "build":
+        status = await message.reply_text("종목 DB 빌드 중...")
+        try:
+            await asyncio.to_thread(stock_db.build)
+            total = len(stock_db.get_all())
+            await status.edit_text(f"종목 DB 빌드 완료: {total:,}종목")
+        except Exception as e:
+            logger.exception("[StockDB] build failed")
+            await status.edit_text(f"빌드 실패: {e}")
+        return
+
+    if command == "enrich":
+        status = await message.reply_text("EODHD 시총·업종 보강 중... (수 분 소요)")
+        try:
+            await asyncio.to_thread(stock_db.enrich)
+            enriched = sum(
+                1 for v in stock_db.get_all().values()
+                if float(v.get("market_cap_cny") or 0) > 0
+            )
+            total = len(stock_db.get_all())
+            await status.edit_text(f"보강 완료: {enriched:,}/{total:,}종목 시총 확보")
+        except Exception as e:
+            logger.exception("[StockDB] enrich failed")
+            await status.edit_text(f"보강 실패: {e}")
+        return
+
+    await message.reply_text(
+        "<b>stockdb 명령어</b>\n\n"
+        "/stockdb build — 종목 코드·이름 목록 갱신\n"
+        "/stockdb enrich — EODHD로 시총·업종·섹터 보강",
+        parse_mode="HTML",
+    )
+
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
@@ -699,6 +779,7 @@ async def configure_telegram_menu(app: Application) -> None:
         BotCommand("list", "현재 관심종목 목록 보기"),
         BotCommand("research", "리서치 주제 확인/설정/실행"),
         BotCommand("momentum", "중국 업종 모멘텀 조회/수동 분석"),
+        BotCommand("stockdb", "종목 DB 빌드/EODHD 보강"),
         BotCommand("help", "명령어 경로와 설명 보기"),
     ]
     await app.bot.set_my_commands(commands)
@@ -726,7 +807,7 @@ def main() -> None:
     stock_db.load_or_build()
     momentum_settings = MomentumSettings.from_env(BASE_DIR)
 
-    app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE, SENT_NEWS_MAX_IDS)
+    app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE, SENT_NEWS_MAX_IDS, SENT_NEWS_RETENTION_DAYS)
     app.bot_data["watchlist_manager"]    = WatchlistManager(WATCHLIST_FILE)
     app.bot_data["market_view_manager"]  = MarketViewManager(RESEARCH_STATE_FILE)
     app.bot_data["research_pending"]     = {}
@@ -763,13 +844,14 @@ def main() -> None:
     app.bot_data["translate_semaphore"]  = asyncio.Semaphore(TRANSLATION_CONCURRENCY)
     app.bot_data["research_news_collector"] = collect_global_market_news_items
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help",  cmd_help))
-    app.add_handler(CommandHandler("menu",  cmd_menu))
-    app.add_handler(CommandHandler("add",   cmd_add))
-    app.add_handler(CommandHandler("list",  cmd_list))
+    app.add_handler(CommandHandler("start",   cmd_start))
+    app.add_handler(CommandHandler("help",    cmd_help))
+    app.add_handler(CommandHandler("menu",    cmd_menu))
+    app.add_handler(CommandHandler("add",     cmd_add))
+    app.add_handler(CommandHandler("list",    cmd_list))
     app.add_handler(CommandHandler("research", cmd_research))
     app.add_handler(CommandHandler("momentum", cmd_momentum))
+    app.add_handler(CommandHandler("stockdb", cmd_stockdb))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     scheduler = AsyncIOScheduler()
@@ -790,6 +872,17 @@ def main() -> None:
         args=[stock_db],
         id="refresh_stock_db",
     )
+    if MOMENTUM_DAILY_ALERT_ENABLED:
+        scheduler.add_job(
+            _refresh_momentum_and_notify,
+            trigger="cron",
+            hour=MOMENTUM_DAILY_ALERT_HOUR,
+            minute=MOMENTUM_DAILY_ALERT_MINUTE,
+            args=[app],
+            id="refresh_momentum_daily",
+            max_instances=1,
+            coalesce=True,
+        )
     scheduler.start()
 
     logger.info(

@@ -2,7 +2,10 @@ import csv
 import io
 import json
 import logging
+import os
 import re
+import time
+from http.client import RemoteDisconnected
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,15 +34,19 @@ _HKEX_NORTHBOUND_BUY_SELL_XLS_URLS = (
     "Stock-Connect/Eligible-Stocks/View-All-Eligible-Securities_xls/SZSE_Securities.xls",
 )
 _INDIVIDUAL_RESTRICTED_A_PREFIXES = ("300", "301", "688", "689")
+NETWORK_ERRORS = (
+    requests.exceptions.RequestException,
+    ConnectionError,
+    TimeoutError,
+    RemoteDisconnected,
+)
 
 
 def _retry_on_network(func):
     return retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type(
-            (requests.exceptions.RequestException, ConnectionError, TimeoutError)
-        ),
+        retry=retry_if_exception_type(NETWORK_ERRORS),
         reraise=True,
     )(func)
 
@@ -60,6 +67,124 @@ def _fetch_hkex_file(url: str) -> bytes:
     response.raise_for_status()
     return response.content
 
+
+# ── EODHD 관련 함수 ───────────────────────────────────────────────────────────
+
+_EODHD_BASE = "https://eodhd.com/api"
+
+_MARKET_TO_EODHD_EXCHANGE: dict[str, str] = {
+    "SH": "SHG",
+    "STAR": "SHG",
+    "SZ": "SHE",
+    "CHI": "SHE",
+    "HK": "HK",
+}
+
+
+def _eodhd_exchange(market: str) -> str:
+    return _MARKET_TO_EODHD_EXCHANGE.get(market, "")
+
+
+def _eodhd_code(code: str, market: str) -> str:
+    """앱 내부 코드 → EODHD 심볼 코드 (거래소 접미사 제외)."""
+    if market == "HK":
+        return f"{int(code):04d}"
+    return code
+
+
+@_retry_on_network
+def _fetch_eodhd_fundamentals(symbol: str, exchange: str, token: str) -> dict:
+    resp = requests.get(
+        f"{_EODHD_BASE}/fundamentals/{symbol}.{exchange}",
+        params={"api_token": token, "fmt": "json"},
+        timeout=20,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _parse_eodhd_entry(item: dict) -> tuple[str, str, float, str]:
+    """(sector, industry, market_cap, currency) 추출. market_cap은 로컬 통화 기준."""
+    general = item.get("General") or item
+    sector = str(general.get("Sector") or "").strip()
+    industry = str(general.get("Industry") or "").strip()
+    currency = str(general.get("CurrencyCode") or general.get("Currency") or "").upper()
+
+    market_cap = 0.0
+    for src in (general, item.get("Highlights") or {}, item):
+        for key in ("MarketCapitalization", "marketCapitalization", "market_cap"):
+            raw = src.get(key)
+            if raw:
+                try:
+                    v = float(raw)
+                    if v > 0:
+                        market_cap = v
+                        break
+                except (TypeError, ValueError):
+                    pass
+        if market_cap > 0:
+            break
+
+    return sector, industry, market_cap, currency
+
+
+def _fetch_hkd_cny_rate() -> float:
+    try:
+        df = ak.currency_latest(symbol="HKDCNY")
+        rate = float(df.iloc[0, -1])
+        if 0.5 < rate < 2.0:
+            return rate
+    except Exception as e:
+        logger.debug("[StockDB] HKD/CNY 환율 조회 실패, 0.92 사용: %s", e)
+    return 0.92
+
+
+def _classify_industries_via_llm(
+    items: list[str],
+    sector_defs: dict,
+    base_url: str,
+    model: str,
+    timeout: int = 120,
+) -> dict[str, str]:
+    if not items or not sector_defs:
+        return {}
+    system_prompt = (
+        "你是股票行业分类专家。根据提供的主题板块定义，将items列表中每个行业名称"
+        "映射到最合适的sector_id（如semiconductor、battery_ev等）。"
+        "如果不属于任何板块，映射为\"etc\"。"
+        "仅返回JSON对象，格式：{\"行业名\": \"sector_id\", ...}"
+    )
+    payload = {"items": items, "sectors": sector_defs}
+    try:
+        resp = requests.post(
+            f"{base_url.rstrip('/')}/api/chat",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    {"role": "assistant", "content": "{"},
+                ],
+                "stream": False,
+                "think": False,
+                "format": "json",
+                "options": {"temperature": 0.1, "num_predict": 4096},
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        content = (resp.json().get("message") or {}).get("content", "")
+        if not content.lstrip().startswith("{"):
+            content = "{" + content
+        result = json.loads(content)
+        if isinstance(result, dict):
+            return {str(k): str(v) for k, v in result.items()}
+    except Exception as e:
+        logger.warning("[StockDB] LLM 섹터 분류 실패: %s", e)
+    return {}
+
+
+# ── 기존 유틸리티 함수 ────────────────────────────────────────────────────
 
 def _classify_market(code: str) -> str:
     if len(code) <= 5:
@@ -88,8 +213,6 @@ def _is_foreign_individual_a_share_fallback(code: str) -> bool:
 def _is_foreign_individual_hk_security(code: str) -> bool:
     if not re.fullmatch(r"\d{5}", code):
         return False
-    # HKD ordinary equity counters are kept. 8xxxx RMB counters are duplicate
-    # counters that many retail brokers do not expose as regular HK equities.
     return not code.startswith("8")
 
 
@@ -203,6 +326,7 @@ class StockDatabase:
         self._db: dict[str, dict] = {}
 
     def build(self) -> None:
+        """종목 코드·이름 목록만 갱신한다. 시총·업종 보강은 enrich()를 별도로 실행."""
         db: dict[str, dict] = {}
         old_db = self._load_existing_cache()
         a_loaded = False
@@ -232,31 +356,31 @@ class StockDatabase:
                 elif not _is_foreign_individual_a_share_fallback(code):
                     continue
                 cn_name = row[name_col]
-                db[code] = _stock_entry(cn_name, _classify_market(code))
+                entry = _stock_entry(cn_name, _classify_market(code))
+                # 기존 enrichment 데이터 보존
+                old = old_db.get(code, {})
+                for field in ("market_cap_cny", "sector", "industry", "schema_version"):
+                    if old.get(field):
+                        entry[field] = old[field]
+                db[code] = entry
             a_loaded = True
             logger.info("[StockDB] A주 %d종목 로드", len(db))
         except Exception as e:
             logger.warning("[StockDB] A주 빌드 실패: %s", e)
             if northbound_codes is not None:
                 self._preserve_markets(
-                    db,
-                    old_db,
-                    {"SH", "SZ", "STAR", "CHI"},
+                    db, old_db, {"SH", "SZ", "STAR", "CHI"},
                     code_filter=lambda code: code in northbound_codes,
                 )
             else:
                 self._preserve_markets(
-                    db,
-                    old_db,
-                    {"SH", "SZ", "STAR", "CHI"},
+                    db, old_db, {"SH", "SZ", "STAR", "CHI"},
                     code_filter=_is_foreign_individual_a_share_fallback,
                 )
 
         hk_before = len(db)
         try:
             df_hk = _fetch_hk_spot()
-            # stock_hk_spot(): 代码(col1), 中文名称(col2)
-            # stock_hk_spot_em(): 代码(col0), 名称(col1) — 혹시 fallback 시 대응
             cols = list(df_hk.columns)
             if "代码" in cols and "中文名称" in cols:
                 hk_code_col, hk_name_col = "代码", "中文名称"
@@ -269,15 +393,18 @@ class StockDatabase:
                 if not _is_foreign_individual_hk_security(code):
                     continue
                 cn_name = row[hk_name_col]
-                db[code] = _stock_entry(cn_name, "HK")
+                entry = _stock_entry(cn_name, "HK")
+                old = old_db.get(code, {})
+                for field in ("market_cap_cny", "sector", "industry", "schema_version"):
+                    if old.get(field):
+                        entry[field] = old[field]
+                db[code] = entry
             hk_loaded = True
             logger.info("[StockDB] 홍콩 %d종목 로드", len(db) - hk_before)
         except Exception as e:
             logger.warning("[StockDB] 홍콩 빌드 실패: %s", e)
             self._preserve_markets(
-                db,
-                old_db,
-                {"HK"},
+                db, old_db, {"HK"},
                 code_filter=_is_foreign_individual_hk_security,
             )
 
@@ -288,6 +415,125 @@ class StockDatabase:
         self._cache_file.write_text(json.dumps(db, ensure_ascii=False), encoding="utf-8")
         self._db = db
         logger.info("[StockDB] DB 빌드 완료: 총 %d종목", len(db))
+
+    def enrich(self) -> None:
+        """EODHD API로 시가총액·업종·섹터를 보강하고 캐시에 저장한다.
+        EODHD_API_TOKEN 환경변수 필요. 봇 시작 시 자동 실행하지 않는다.
+        """
+        if not self._db:
+            logger.warning("[StockDB] DB가 비어있음, enrich 전에 load 또는 build 필요")
+            return
+
+        token = os.environ.get("EODHD_API_TOKEN", "").strip()
+        if not token:
+            logger.warning("[StockDB] EODHD_API_TOKEN 미설정, enrich 생략")
+            return
+
+        ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        ollama_model = os.environ.get(
+            "RESEARCH_ANALYSIS_MODEL",
+            os.environ.get("TRANSLATION_MODEL", "gemma4"),
+        )
+
+        sector_defs_path = self._cache_file.parent / "momentum" / "industry_keywords.json"
+        try:
+            sector_defs: dict = json.loads(sector_defs_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("[StockDB] 섹터 정의 로드 실패: %s", e)
+            sector_defs = {}
+
+        # 미보강 종목만 선별 (sector 또는 market_cap_cny 없는 것)
+        limit = int(os.environ.get("EODHD_ENRICH_LIMIT", "200"))
+        call_delay = float(os.environ.get("EODHD_ENRICH_DELAY", "0.5"))
+
+        targets = [
+            (code, entry)
+            for code, entry in self._db.items()
+            if not entry.get("sector") or not float(entry.get("market_cap_cny") or 0) > 0
+        ][:limit]
+
+        hkd_cny = _fetch_hkd_cny_rate()
+        total_unenriched = sum(
+            1 for e in self._db.values()
+            if not e.get("sector") or not float(e.get("market_cap_cny") or 0) > 0
+        )
+        print(f"[StockDB] EODHD 보강 시작: {len(targets)}종목 조회 (전체 미보강 {total_unenriched}종목)")
+
+        # 개별 fundamentals 호출
+        fetch_results: dict[str, dict] = {}
+        failures = 0
+        for i, (code, entry) in enumerate(targets):
+            market = entry.get("market", "")
+            exchange = _eodhd_exchange(market)
+            if not exchange:
+                print(f"  [{i+1:>3}/{len(targets)}] {code} SKIP (exchange 없음)")
+                continue
+            symbol = _eodhd_code(code, market)
+            try:
+                data = _fetch_eodhd_fundamentals(symbol, exchange, token)
+                sector, industry, market_cap, currency = _parse_eodhd_entry(data)
+                fetch_results[code] = {
+                    "sector": sector, "industry": industry,
+                    "market_cap": market_cap, "currency": currency,
+                }
+                failures = 0
+                cap_str = f"{market_cap/1e8:.0f}억" if market_cap > 0 else "시총없음"
+                print(f"  [{i+1:>3}/{len(targets)}] {symbol}.{exchange} OK  {sector or '섹터없음'} / {industry or '업종없음'} / {cap_str}")
+            except Exception as e:
+                failures += 1
+                print(f"  [{i+1:>3}/{len(targets)}] {symbol}.{exchange} FAIL({failures}) {type(e).__name__}: {e}")
+                if failures >= 5:
+                    print(f"  연속 5회 실패, 조회 중단")
+                    break
+            if i < len(targets) - 1:
+                time.sleep(call_delay)
+
+        print(f"[StockDB] EODHD 조회 완료: {len(fetch_results)}/{len(targets)}종목 성공")
+
+        # Sector 공란인 Industry → LLM 폴백
+        industries_needing_llm: set[str] = {
+            info["industry"]
+            for info in fetch_results.values()
+            if not info.get("sector") and info.get("industry")
+        }
+        industry_sector_fallback: dict[str, str] = {}
+        if sector_defs and industries_needing_llm:
+            print(f"[StockDB] LLM 폴백 분류 시작: Sector 공란 {len(industries_needing_llm)}개 업종")
+            industry_sector_fallback = _classify_industries_via_llm(
+                list(industries_needing_llm), sector_defs, ollama_base_url, ollama_model, timeout=180
+            )
+            print(f"[StockDB] LLM 폴백 분류 완료: {len(industry_sector_fallback)}개")
+
+        # DB 주입
+        enriched = 0
+        for code, info in fetch_results.items():
+            entry = self._db.get(code)
+            if entry is None:
+                continue
+            market = entry.get("market", "")
+            sector = str(info.get("sector") or "").strip()
+            industry = str(info.get("industry") or "")
+            raw_cap = float(info.get("market_cap") or 0)
+            currency = str(info.get("currency") or "").upper()
+
+            if raw_cap > 0:
+                market_cap_cny = raw_cap * hkd_cny if (market == "HK" and currency in ("", "HKD")) else raw_cap
+                enriched += 1
+            else:
+                market_cap_cny = float(entry.get("market_cap_cny") or 0)
+
+            entry["market_cap_cny"] = market_cap_cny
+            entry["industry"] = industry
+            entry["sector"] = sector or industry_sector_fallback.get(industry) or entry.get("sector") or ""
+            entry["schema_version"] = "6"
+
+        self._cache_file.write_text(json.dumps(self._db, ensure_ascii=False), encoding="utf-8")
+
+        remaining = sum(
+            1 for e in self._db.values()
+            if not e.get("sector") or not float(e.get("market_cap_cny") or 0) > 0
+        )
+        print(f"[StockDB] 보강 완료: {enriched}종목 시총 갱신, 잔여 미보강 {remaining}종목")
 
     def _load_existing_cache(self) -> dict[str, dict]:
         if not self._cache_file.exists():
@@ -351,7 +597,7 @@ class StockDatabase:
     def get_all(self) -> dict[str, dict]:
         return self._db.copy()
 
-    def get_candidate_universe(self, limit: int | None = None) -> list[dict[str, str]]:
+    def get_candidate_universe(self, limit: int | None = None) -> list[dict]:
         items = [
             {
                 "code": code,
@@ -359,6 +605,8 @@ class StockDatabase:
                 "cn_name": str(entry.get("cn_name") or entry.get("display_name") or ""),
                 "ko_name": str(entry.get("ko_name") or ""),
                 "market": str(entry.get("market") or ""),
+                "market_cap_cny": float(entry.get("market_cap_cny") or 0.0),
+                "sector": str(entry.get("sector") or ""),
             }
             for code, entry in self._db.items()
         ]
