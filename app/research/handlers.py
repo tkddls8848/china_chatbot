@@ -9,9 +9,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from research.candidates import build_research_candidate_universe
-from research.market_view import MarketViewError, MarketViewManager
-from stock_db import StockDatabase
-from translator import TranslationService
+from llm.market_view import MarketViewError, MarketViewManager
+from stocks import StockDatabase
+from llm.translator import TranslationService
 
 logger = logging.getLogger(__name__)
 

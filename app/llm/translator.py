@@ -48,6 +48,10 @@ class TranslationService:
         self._num_predict = num_predict
         self._prompts = self._load_prompts(prompt_dir)
 
+    def set_num_gpu(self, num_gpu: int) -> None:
+        """런타임에 Ollama num_gpu를 변경한다(-1=자동, 0=CPU, N=레이어). 다음 요청부터 반영."""
+        self._num_gpu = max(-1, num_gpu)
+
     def _load_prompts(self, prompt_dir: Path) -> Dict[str, str]:
         prompts: Dict[str, str] = {}
         for source, filename in self._PROMPT_FILES.items():

@@ -12,8 +12,6 @@ __pycache__/
 data/*.json
 !data/.gitkeep
 data/bot.lock
-data/momentum/momentum_state.json
-data/momentum/price_cache.json
 
 *.log
 *.tmp

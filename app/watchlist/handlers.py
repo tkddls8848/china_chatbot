@@ -5,7 +5,7 @@ import re
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from stock_db import StockDatabase
+from stocks import StockDatabase
 from watchlist.keyboards import build_list_keyboard
 from watchlist.manager import WatchlistManager
 

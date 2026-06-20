@@ -1,115 +1,50 @@
-﻿import asyncio
-import html
+"""봇 진입점: 서비스 구성, 핸들러 등록, 스케줄러 구동."""
+
+import asyncio
 import logging
 import os
-import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
 
-import pandas as pd
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from dotenv import load_dotenv
-from telegram import Bot, BotCommand, MenuButtonCommands, Update
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+
+from handlers import (
+    callback_handler,
+    cmd_help,
+    cmd_start,
+    cmd_stockdb,
+    cmd_system,
+    configure_telegram_menu,
 )
-from news import (
-    fetch_cls_raw as _fetch_cls_raw,
-    fetch_futu_raw as _fetch_futu_raw,
-    fetch_stock_news_raw as _fetch_stock_news_raw,
+from core.config import (
+    BASE_DIR,
+    PROMPT_DIR,
+    RESEARCH_ANALYSIS_NUM_PREDICT,
+    RESEARCH_ANALYSIS_PROMPT_FILE,
+    RESEARCH_STATE_FILE,
+    RUNTIME_CONFIG_FILE,
+    SCHEDULER_INTERVAL_MINUTES,
+    SENT_IDS_FILE,
+    SENT_NEWS_MAX_IDS,
+    SENT_NEWS_RETENTION_DAYS,
+    STOCK_DB_ENABLED,
+    STOCK_DB_FILE,
+    TELEGRAM_BOT_TOKEN,
+    TRANSLATION_CONCURRENCY,
+    WATCHLIST_FILE,
 )
-from momentum import MomentumService, MomentumSettings, cmd_momentum
-from momentum.formatter import format_top
-from research import (
-    MarketViewAnalyzer,
-    MarketViewManager,
-    cmd_research,
-    handle_research_callback,
-)
+from news.pipeline import fetch_all, refresh_stock_db
+from llm import MarketViewAnalyzer, MarketViewManager
+from research import cmd_research, collect_global_market_news_items
 from state import SentNewsTracker
-from stock_db import StockDatabase
-from translator import TranslationResult, TranslationService
-from watchlist import (
-    WatchlistManager,
-    cmd_add,
-    cmd_list,
-    cmd_menu,
-    handle_watchlist_callback,
-)
+from stocks import StockDatabase
+from core.system_control import SystemControlManager
+from llm import TranslationService
+from watchlist import WatchlistManager, cmd_add, cmd_list, cmd_menu
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-load_dotenv(BASE_DIR / ".env")
-
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("telegram").setLevel(logging.WARNING)
-logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 _SINGLE_INSTANCE_LOCK = None
-
-SENT_IDS_FILE     = BASE_DIR / "data" / "sent_ids.json"
-WATCHLIST_FILE    = BASE_DIR / "data" / "watchlist.json"
-STOCK_DB_FILE     = BASE_DIR / "data" / "stock_db.json"
-RESEARCH_STATE_FILE = BASE_DIR / "data" / "market_research.json"
-PROMPT_DIR        = Path(os.environ.get("TRANSLATION_PROMPT_DIR", "prompts"))
-if not PROMPT_DIR.is_absolute():
-    PROMPT_DIR = BASE_DIR / PROMPT_DIR
-RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
-SENT_NEWS_MAX_IDS = int(os.environ.get("SENT_NEWS_MAX_IDS", "0"))
-SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
-TELEGRAM_MESSAGE_LIMIT = 4096
-NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))
-NEWS_STOCK_LIMIT_PER_SYMBOL = int(os.environ.get("NEWS_STOCK_LIMIT_PER_SYMBOL", "3"))
-SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5"))
-TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "2"))
-STOCK_DB_ENABLED = os.environ.get("STOCK_DB_ENABLED", "true").lower() == "true"
-RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL = int(
-    os.environ.get("RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL", "3")
-)
-RESEARCH_NEWS_MAX_ITEMS = int(
-    os.environ.get("RESEARCH_NEWS_MAX_ITEMS", "3")
-)
-RESEARCH_NEWS_GLOBAL_LIMIT = int(
-    os.environ.get("RESEARCH_NEWS_GLOBAL_LIMIT", "3")
-)
-RESEARCH_ANALYSIS_NUM_PREDICT = int(
-    os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
-)
-MOMENTUM_DAILY_ALERT_ENABLED = os.environ.get("MOMENTUM_DAILY_ALERT_ENABLED", "false").lower() == "true"
-MOMENTUM_DAILY_ALERT_HOUR = int(os.environ.get("MOMENTUM_DAILY_ALERT_HOUR", "18"))
-MOMENTUM_DAILY_ALERT_MINUTE = int(os.environ.get("MOMENTUM_DAILY_ALERT_MINUTE", "30"))
-HELP_TEXT = (
-    "<b>사용 가능한 명령어</b>\n\n"
-    "/start — 봇 소개와 사용 가능한 경로 보기\n"
-    "/menu — 관심종목 관리 (삭제)\n"
-    "/add 종목코드 — 관심종목 추가\n"
-    "/list — 관심종목 목록 확인\n"
-    "/research show — 저장된 리서치 주제 보기\n"
-    "/research set 리서치주제 — 리서치 주제 저장\n"
-    "/research run — 최근 뉴스 기준 리서치 실행\n"
-    "/research clear — 리서치 주제 삭제\n"
-    "/momentum top — 최근 저장된 업종 모멘텀 보기\n"
-    "/momentum refresh — 수동으로 업종 모멘텀 분석 실행\n"
-    "/stockdb build — 종목 코드·이름 목록 갱신\n"
-    "/stockdb enrich — EODHD로 시총·업종·섹터 보강\n"
-    "/help — 도움말\n\n"
-    "종목코드 형식:\n"
-    "  • A주 상해: 6자리 (예: 600519)\n"
-    "  • A주 심천: 6자리 (예: 300750)\n"
-    "  • 홍콩: 5자리 (예: 09988)"
-)
 
 
 def _acquire_single_instance_lock(lock_file: Path):
@@ -136,657 +71,6 @@ def _acquire_single_instance_lock(lock_file: Path):
     return handle
 
 
-def _format_china_time_as_kst(
-    published_at: Any,
-    published_date: Any | None = None,
-) -> str:
-    raw_time = str(published_at or "").strip()
-    raw_date = str(published_date or "").strip()
-    raw = f"{raw_date} {raw_time}".strip() if raw_date else raw_time
-    if not raw:
-        return "KST"
-
-    try:
-        if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", raw):
-            fmt = "%H:%M:%S" if raw.count(":") == 2 else "%H:%M"
-            converted = datetime.strptime(raw, fmt) + timedelta(hours=1)
-            return f"{converted.strftime(fmt)} KST"
-
-        parsed = pd.to_datetime(raw, errors="coerce")
-        if pd.isna(parsed):
-            return f"{raw} KST"
-
-        converted = parsed.to_pydatetime() + timedelta(hours=1)
-        fmt = "%Y-%m-%d %H:%M:%S" if re.search(r":\d{2}:\d{2}", raw) else "%Y-%m-%d %H:%M"
-        return f"{converted.strftime(fmt)} KST"
-    except Exception:
-        return f"{raw} KST"
-
-
-def _build_news_message(
-    header: str,
-    title: str,
-    content: str,
-    footer: str = "",
-    mentioned_stocks: list[tuple[str, str]] | None = None,
-) -> str:
-    truncation = "..."
-    safe_title = html.escape(title)
-    raw_content = content
-
-    if mentioned_stocks:
-        items = ", ".join(f"{code}({html.escape(name)})" for code, name in mentioned_stocks)
-        mentioned_line = f"\n\n관련종목: {items}"
-    else:
-        mentioned_line = ""
-
-    while True:
-        safe_content = html.escape(raw_content)
-        title_part = f"<b>{safe_title}</b>\n\n" if safe_title else ""
-        text = f"{header}{title_part}{safe_content}{mentioned_line}{footer}"
-        if len(text) <= TELEGRAM_MESSAGE_LIMIT:
-            return text
-
-        overflow = len(text) - TELEGRAM_MESSAGE_LIMIT
-        keep = max(0, len(raw_content) - overflow - len(truncation) - 20)
-        next_content = raw_content[:keep].rstrip() + truncation
-        if next_content == raw_content:
-            safe_content = ""
-            text = f"{header}{title_part}{mentioned_line}{footer}"
-            return text[: TELEGRAM_MESSAGE_LIMIT - len(truncation)] + truncation
-        raw_content = next_content
-
-
-async def _translate_article(
-    translator: TranslationService,
-    semaphore: asyncio.Semaphore,
-    source: str,
-    title: str,
-    content: str,
-) -> TranslationResult:
-    async with semaphore:
-        return await asyncio.to_thread(
-            translator.translate_article,
-            source,
-            title,
-            content,
-        )
-
-
-def _is_timeout_error(error: Exception) -> bool:
-    return "timed out" in str(error).lower() or "timeout" in str(error).lower()
-
-
-# ── 뉴스 수집 함수 ────────────────────────────────────
-
-async def fetch_cls(
-    bot: Bot,
-    tracker: SentNewsTracker,
-    translator: TranslationService,
-    translate_semaphore: asyncio.Semaphore,
-    chat_id: str,
-    stock_db: StockDatabase,
-) -> None:
-    try:
-        df = await asyncio.to_thread(_fetch_cls_raw)
-    except Exception as e:
-        logger.error("[CLS] API 호출 실패: %s", e)
-        return
-
-    async def prepare_row(row):
-        article_id = str(row["发布日期"]) + " " + str(row["发布时间"]) + str(row["标题"])
-        try:
-            if not await tracker.reserve(article_id):
-                return None
-            raw_title = str(row["标题"])
-            raw_content = str(row["内容"])
-            translated = await _translate_article(
-                translator,
-                translate_semaphore,
-                "cls",
-                raw_title,
-                raw_content,
-            )
-            mentioned_stocks = [
-                (code, name)
-                for code in translated.mentioned_stocks
-                if (name := stock_db.get_display_name(code))
-            ]
-            text = _build_news_message(
-                header=(
-                    f"<b>재련사(財联社) 속보</b>\n"
-                    f"시간: {_format_china_time_as_kst(row['发布时间'], row['发布日期'])}\n\n"
-                ),
-                title=translated.title,
-                content=translated.content,
-                mentioned_stocks=mentioned_stocks,
-            )
-            return article_id, text, translated.title
-        except Exception as e:
-            await tracker.release(article_id)
-            logger.error("[CLS] 번역 실패: %s", e)
-            return None
-
-    prepared_rows = await asyncio.gather(
-        *(prepare_row(row) for _, row in df.tail(NEWS_GLOBAL_LIMIT).iterrows())
-    )
-
-    for prepared in prepared_rows:
-        if prepared is None:
-            continue
-        article_id, text, title = prepared
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML",
-            )
-            await tracker.confirm(article_id)
-            logger.info("[CLS] 전송 완료: %s", title[:30])
-        except Exception as e:
-            await tracker.release(article_id)
-            logger.error("[CLS] 전송 실패: %s", e)
-
-
-async def fetch_futu(
-    bot: Bot,
-    tracker: SentNewsTracker,
-    translator: TranslationService,
-    translate_semaphore: asyncio.Semaphore,
-    chat_id: str,
-    stock_db: StockDatabase,
-) -> None:
-    try:
-        df = await asyncio.to_thread(_fetch_futu_raw)
-    except Exception as e:
-        logger.error("[FUTU] API 호출 실패: %s", e)
-        return
-
-    async def prepare_row(row):
-        article_id = str(row["发布时间"]) + str(row["内容"])[:20]
-        try:
-            if not await tracker.reserve(article_id):
-                return None
-            raw_title = str(row["标题"]) if row["标题"] else ""
-            raw_content = str(row["内容"])
-            translated = await _translate_article(
-                translator,
-                translate_semaphore,
-                "futu",
-                raw_title,
-                raw_content,
-            )
-            mentioned_stocks = [
-                (code, name)
-                for code in translated.mentioned_stocks
-                if (name := stock_db.get_display_name(code))
-            ]
-            link_url = str(row.get("链接") or "")
-            link_part = (
-                f'\n링크: <a href="{html.escape(link_url)}">{html.escape(link_url)}</a>'
-                if link_url else ""
-            )
-            text = _build_news_message(
-                header=(
-                    f"<b>푸투니우니우(富途牛牛) 속보</b>\n"
-                    f"시간: {_format_china_time_as_kst(row['发布时间'])}\n\n"
-                ),
-                title=translated.title,
-                content=translated.content,
-                footer=link_part,
-                mentioned_stocks=mentioned_stocks,
-            )
-            return article_id, text, translated.content
-        except Exception as e:
-            await tracker.release(article_id)
-            logger.error("[FUTU] 번역 실패: %s", e)
-            if _is_timeout_error(e):
-                raise
-            return None
-
-    prepared_rows = []
-    for _, row in df.head(NEWS_GLOBAL_LIMIT).iloc[::-1].iterrows():
-        try:
-            prepared_rows.append(await prepare_row(row))
-        except Exception:
-            logger.error("[FUTU] 타임아웃으로 이번 주기 남은 Futu 번역을 중단합니다.")
-            break
-
-    for prepared in prepared_rows:
-        if prepared is None:
-            continue
-        article_id, text, content = prepared
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML",
-            )
-            await tracker.confirm(article_id)
-            logger.info("[FUTU] 전송 완료: %s", content[:30])
-        except Exception as e:
-            await tracker.release(article_id)
-            logger.error("[FUTU] 전송 실패: %s", e)
-
-
-async def fetch_stock_news(
-    bot: Bot,
-    tracker: SentNewsTracker,
-    translator: TranslationService,
-    translate_semaphore: asyncio.Semaphore,
-    wm: WatchlistManager,
-    chat_id: str,
-    bot_data: dict,
-    stock_db: StockDatabase,
-) -> None:
-    watchlist = await wm.get_all()
-    if not watchlist:
-        return
-
-    if bot_data.get("stock_news_first_run", True):
-        stock_list = "\n".join(
-            f"  • {name} ({code})" for code, name in watchlist.items()
-        )
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "<b>관심종목 뉴스 조회 시작</b>\n"
-                    "추가: /add 종목코드\n"
-                    "삭제: /menu 에서 버튼으로\n"
-                    "목록: /list\n"
-                    "리서치: /research show | set | run | clear\n"
-                    "모멘텀: /momentum top | refresh\n"
-                    "도움말: /help\n\n"
-                    f"{stock_list}"
-                ),
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.error("첫 실행 안내 전송 실패: %s", e)
-    bot_data["stock_news_first_run"] = False
-
-    async def send_no_recent_news(name: str) -> None:
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"{html.escape(name)}은 최근 7일간 뉴스가 없습니다.",
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.error("[STOCK] %s 최근 뉴스 없음 안내 전송 실패: %s", name, e)
-
-    for code, name in watchlist.items():
-        try:
-            df = await asyncio.to_thread(_fetch_stock_news_raw, code)
-            if df.empty:
-                await send_no_recent_news(name)
-                continue
-
-            cutoff = datetime.now() - timedelta(days=7)
-            df = df[pd.to_datetime(df["发布时间"], errors="coerce") >= cutoff]
-            if df.empty:
-                await send_no_recent_news(name)
-                continue
-
-            async def prepare_row(row):
-                article_id = str(row["发布时间"]) + str(row["新闻标题"])[:20]
-                try:
-                    if not await tracker.reserve(article_id):
-                        return None
-                    raw_title = str(row["新闻标题"])
-                    raw_content = str(row["新闻内容"])
-                    translated = await _translate_article(
-                        translator,
-                        translate_semaphore,
-                        "stock",
-                        raw_title,
-                        raw_content,
-                    )
-                    source = html.escape(str(row["文章来源"]))
-                    link_url = str(row["新闻链接"])
-                    link = f'<a href="{html.escape(link_url)}">{html.escape(link_url)}</a>'
-                    text = _build_news_message(
-                        header=(
-                            f"<b>{html.escape(name)} ({code}) 뉴스</b>\n"
-                            f"시간: {_format_china_time_as_kst(row['发布时间'])}\n"
-                            f"출처: {source}\n\n"
-                        ),
-                        title=translated.title,
-                        content=translated.content,
-                        footer=f"\n\n링크: {link}",
-                    )
-                    return article_id, text, translated.title
-                except Exception as e:
-                    await tracker.release(article_id)
-                    logger.error("[STOCK] %s 번역 실패: %s", name, e)
-                    return None
-
-            prepared_rows = await asyncio.gather(
-                *(prepare_row(row) for _, row in df.head(NEWS_STOCK_LIMIT_PER_SYMBOL).iterrows())
-            )
-
-            for prepared in prepared_rows:
-                if prepared is None:
-                    continue
-                article_id, text, title = prepared
-                try:
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=text,
-                        parse_mode="HTML",
-                    )
-                    await tracker.confirm(article_id)
-                    logger.info("[STOCK] 전송 완료: %s %s", name, title[:20])
-                except Exception as e:
-                    await tracker.release(article_id)
-                    logger.error("[STOCK] %s 전송 실패: %s", name, e)
-        except Exception as e:
-            logger.error("[STOCK] %s 오류: %s", name, e)
-
-
-def _row_value(row, candidates: list[str], fallback_index: int | None = None) -> str:
-    for key in candidates:
-        if key in row.index:
-            value = row[key]
-            return "" if pd.isna(value) else str(value)
-    if fallback_index is not None and fallback_index < len(row.index):
-        value = row.iloc[fallback_index]
-        return "" if pd.isna(value) else str(value)
-    return ""
-
-
-async def collect_watchlist_news_items(
-    watchlist: Dict[str, str],
-    limit_per_stock: int = RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL,
-) -> list[dict[str, str]]:
-    news_items: list[dict[str, str]] = []
-    cutoff = datetime.now() - timedelta(days=7)
-
-    for code, name in watchlist.items():
-        try:
-            df = await asyncio.to_thread(_fetch_stock_news_raw, code)
-            if df.empty:
-                continue
-
-            published_raw = (
-                df["发布时间"]
-                if "发布时间" in df.columns
-                else df.iloc[:, 3]
-            )
-            published_series = pd.to_datetime(published_raw, errors="coerce")
-            df = df[published_series >= cutoff]
-            if df.empty:
-                continue
-
-            for _, row in df.head(limit_per_stock).iterrows():
-                published_at = _row_value(row, ["发布时间"], 3)
-                title = _row_value(row, ["新闻标题"], 1)
-                content = _row_value(row, ["新闻内容"], 2)
-                source = _row_value(row, ["文章来源"], 4) or "Stock"
-                url = _row_value(row, ["新闻链接"], 5)
-                if not title and not content:
-                    continue
-                news_items.append(
-                    {
-                        "id": f"stock:{code}:{published_at}:{title[:20]}",
-                        "source": source,
-                        "ticker": code,
-                        "name": name,
-                        "title": title,
-                        "content": content[:700],
-                        "published_at": published_at,
-                        "url": url,
-                    }
-                )
-                if len(news_items) >= RESEARCH_NEWS_MAX_ITEMS:
-                    return news_items
-        except Exception as e:
-            logger.error("[RESEARCH] %s news collection failed: %s", name, e)
-
-    return news_items
-
-
-def _make_news_item(
-    source: str,
-    title: str,
-    content: str,
-    published_at: str,
-    url: str = "",
-    mentioned_stocks: list[str] | None = None,
-    theme_candidates: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    return {
-        "id": f"{source}:{published_at}:{title[:30]}",
-        "source": source,
-        "ticker": "",
-        "name": "",
-        "title": title[:240],
-        "content": content[:700],
-        "published_at": published_at,
-        "url": url,
-        "mentioned_stocks": mentioned_stocks or [],
-        "theme_candidates": theme_candidates or [],
-    }
-
-
-async def collect_global_market_news_items(
-    translator: TranslationService | None = None,
-    translate_semaphore: asyncio.Semaphore | None = None,
-) -> list[dict[str, Any]]:
-    news_items: list[dict[str, Any]] = []
-
-    try:
-        df_cls = await asyncio.to_thread(_fetch_cls_raw)
-        cls_limit = min(RESEARCH_NEWS_GLOBAL_LIMIT, max(1, RESEARCH_NEWS_MAX_ITEMS // 2))
-        for _, row in df_cls.tail(cls_limit).iterrows():
-            published_date = _row_value(row, ["发布日期"], 0)
-            published_time = _row_value(row, ["发布时间"], 1)
-            title = _row_value(row, ["标题"], 2)
-            content = _row_value(row, ["内容"], 3)
-            if title or content:
-                news_items.append(
-                    _make_news_item(
-                        "CLS",
-                        title,
-                        content,
-                        f"{published_date} {published_time}".strip(),
-                    )
-                )
-    except Exception as e:
-        logger.error("[RESEARCH] CLS news collection failed: %s", e)
-
-    try:
-        df_futu = await asyncio.to_thread(_fetch_futu_raw)
-        futu_limit = min(
-            RESEARCH_NEWS_GLOBAL_LIMIT,
-            max(1, RESEARCH_NEWS_MAX_ITEMS - len(news_items)),
-        )
-        for _, row in df_futu.head(futu_limit).iterrows():
-            title = _row_value(row, ["标题"], 0)
-            content = _row_value(row, ["内容"], 1)
-            published_at = _row_value(row, ["发布时间"], 2)
-            url = _row_value(row, ["链接"], 3)
-            if title or content:
-                mentioned_stocks: list[str] = []
-                theme_candidates: list[dict[str, Any]] = []
-                translated_title = title
-                translated_content = content
-                if translator is not None and translate_semaphore is not None:
-                    try:
-                        translated = await _translate_article(
-                            translator,
-                            translate_semaphore,
-                            "futu",
-                            title,
-                            content,
-                        )
-                        translated_title = translated.title
-                        translated_content = translated.content
-                        mentioned_stocks = translated.mentioned_stocks
-                        theme_candidates = translated.theme_candidates
-                    except Exception as e:
-                        logger.error("[RESEARCH] Futu translation failed: %s", e)
-                        if _is_timeout_error(e):
-                            break
-                        continue
-                news_items.append(
-                    _make_news_item(
-                        "Futu",
-                        translated_title,
-                        translated_content,
-                        published_at,
-                        url,
-                        mentioned_stocks=mentioned_stocks,
-                        theme_candidates=theme_candidates,
-                    )
-                )
-            if len(news_items) >= RESEARCH_NEWS_MAX_ITEMS:
-                return news_items
-    except Exception as e:
-        logger.error("[RESEARCH] Futu news collection failed: %s", e)
-
-    return news_items[:RESEARCH_NEWS_MAX_ITEMS]
-
-
-async def _refresh_stock_db(stock_db: StockDatabase) -> None:
-    try:
-        await asyncio.to_thread(stock_db.build)
-        logger.info("[StockDB] 일별 갱신 완료")
-    except Exception as e:
-        logger.warning("[StockDB] 일별 갱신 실패: %s", e)
-
-
-async def _refresh_momentum_and_notify(app: Application) -> None:
-    service: MomentumService = app.bot_data["momentum_service"]
-    try:
-        result = await asyncio.to_thread(service.refresh, False)
-        active_alerts = [
-            alert for alert in result.get("alerts", [])
-            if not alert.get("suppressed")
-        ]
-        if not active_alerts:
-            logger.info("[Momentum] 일일 갱신 완료, 신규 알림 없음")
-            return
-        await app.bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=format_top(result, service.settings.top_limit),
-            parse_mode="HTML",
-        )
-        logger.info("[Momentum] 일일 알림 전송 완료: %d개", len(active_alerts))
-    except Exception as e:
-        logger.exception("[Momentum] 일일 알림 실패")
-        try:
-            await app.bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID,
-                text=f"모멘텀 일일 알림 실패: {html.escape(str(e))}",
-                parse_mode="HTML",
-            )
-        except Exception:
-            logger.exception("[Momentum] 실패 알림 전송도 실패")
-
-
-async def fetch_all(app: Application) -> None:
-    tracker: SentNewsTracker = app.bot_data["sent_tracker"]
-    wm: WatchlistManager     = app.bot_data["watchlist_manager"]
-    translator: TranslationService = app.bot_data["translator"]
-    translate_semaphore: asyncio.Semaphore = app.bot_data["translate_semaphore"]
-    stock_db: StockDatabase = app.bot_data["stock_db"]
-    await fetch_cls(app.bot, tracker, translator, translate_semaphore, TELEGRAM_CHAT_ID, stock_db)
-    await fetch_futu(app.bot, tracker, translator, translate_semaphore, TELEGRAM_CHAT_ID, stock_db)
-    await fetch_stock_news(
-        app.bot,
-        tracker,
-        translator,
-        translate_semaphore,
-        wm,
-        TELEGRAM_CHAT_ID,
-        app.bot_data,
-        stock_db,
-    )
-    await tracker.persist()
-
-
-# ── 명령어 핸들러 ─────────────────────────────────────
-
-async def cmd_stockdb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    if message is None:
-        return
-    stock_db: StockDatabase = context.bot_data["stock_db"]
-    args = context.args or []
-    command = args[0].lower() if args else ""
-
-    if command == "build":
-        status = await message.reply_text("종목 DB 빌드 중...")
-        try:
-            await asyncio.to_thread(stock_db.build)
-            total = len(stock_db.get_all())
-            await status.edit_text(f"종목 DB 빌드 완료: {total:,}종목")
-        except Exception as e:
-            logger.exception("[StockDB] build failed")
-            await status.edit_text(f"빌드 실패: {e}")
-        return
-
-    if command == "enrich":
-        status = await message.reply_text("EODHD 시총·업종 보강 중... (수 분 소요)")
-        try:
-            await asyncio.to_thread(stock_db.enrich)
-            enriched = sum(
-                1 for v in stock_db.get_all().values()
-                if float(v.get("market_cap_cny") or 0) > 0
-            )
-            total = len(stock_db.get_all())
-            await status.edit_text(f"보강 완료: {enriched:,}/{total:,}종목 시총 확보")
-        except Exception as e:
-            logger.exception("[StockDB] enrich failed")
-            await status.edit_text(f"보강 실패: {e}")
-        return
-
-    await message.reply_text(
-        "<b>stockdb 명령어</b>\n\n"
-        "/stockdb build — 종목 코드·이름 목록 갱신\n"
-        "/stockdb enrich — EODHD로 시총·업종·섹터 보강",
-        parse_mode="HTML",
-    )
-
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
-
-
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if await handle_research_callback(query, context, data):
-        return
-
-    if await handle_watchlist_callback(query, context, data):
-        return
-
-
-async def configure_telegram_menu(app: Application) -> None:
-    commands = [
-        BotCommand("start", "봇 소개와 사용 가능한 경로 보기"),
-        BotCommand("menu", "관심종목 삭제/관리 버튼 열기"),
-        BotCommand("add", "관심종목 추가: /add 600519"),
-        BotCommand("list", "현재 관심종목 목록 보기"),
-        BotCommand("research", "리서치 주제 확인/설정/실행"),
-        BotCommand("momentum", "중국 업종 모멘텀 조회/수동 분석"),
-        BotCommand("stockdb", "종목 DB 빌드/EODHD 보강"),
-        BotCommand("help", "명령어 경로와 설명 보기"),
-    ]
-    await app.bot.set_my_commands(commands)
-    await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-    logger.info("Telegram Menu 버튼 명령어 등록 완료: %s", [cmd.command for cmd in commands])
-
-
 # ── 진입점 ────────────────────────────────────────────
 
 def main() -> None:
@@ -805,15 +89,15 @@ def main() -> None:
 
     stock_db = StockDatabase(cache_file=STOCK_DB_FILE, enabled=STOCK_DB_ENABLED)
     stock_db.load_or_build()
-    momentum_settings = MomentumSettings.from_env(BASE_DIR)
 
     app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE, SENT_NEWS_MAX_IDS, SENT_NEWS_RETENTION_DAYS)
     app.bot_data["watchlist_manager"]    = WatchlistManager(WATCHLIST_FILE)
     app.bot_data["market_view_manager"]  = MarketViewManager(RESEARCH_STATE_FILE)
     app.bot_data["research_pending"]     = {}
     app.bot_data["stock_news_first_run"] = True
+    app.bot_data["stock_news_cursor"]    = 0
+    app.bot_data["global_news_cursor"]   = 0
     app.bot_data["stock_db"]             = stock_db
-    app.bot_data["momentum_service"]     = MomentumService(momentum_settings, stock_db)
     ollama_num_gpu = int(os.environ.get("OLLAMA_NUM_GPU", "0"))
     app.bot_data["translator"]           = TranslationService(
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
@@ -844,14 +128,31 @@ def main() -> None:
     app.bot_data["translate_semaphore"]  = asyncio.Semaphore(TRANSLATION_CONCURRENCY)
     app.bot_data["research_news_collector"] = collect_global_market_news_items
 
+    # 런타임 시스템 제어(텔레그램에서 GPU 사용 토글). 영속화된 값이 있으면
+    # env 기본값 대신 그 값을 두 LLM 서비스에 적용한다.
+    ollama_gpu_on_value = int(os.environ.get("OLLAMA_GPU_ON_VALUE", "-1"))
+    system_control = SystemControlManager(
+        RUNTIME_CONFIG_FILE,
+        default_num_gpu=ollama_num_gpu,
+        gpu_on_value=ollama_gpu_on_value,
+    )
+    system_control.register_consumer(app.bot_data["translator"].set_num_gpu)
+    system_control.register_consumer(app.bot_data["market_view_analyzer"].set_num_gpu)
+    app.bot_data["system_control"] = system_control
+    logger.info(
+        "[System] GPU 가속 초기 상태: %s (num_gpu=%d)",
+        "켜짐" if system_control.gpu_enabled else "꺼짐(CPU)",
+        system_control.num_gpu,
+    )
+
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("help",    cmd_help))
     app.add_handler(CommandHandler("menu",    cmd_menu))
     app.add_handler(CommandHandler("add",     cmd_add))
     app.add_handler(CommandHandler("list",    cmd_list))
     app.add_handler(CommandHandler("research", cmd_research))
-    app.add_handler(CommandHandler("momentum", cmd_momentum))
     app.add_handler(CommandHandler("stockdb", cmd_stockdb))
+    app.add_handler(CommandHandler("system",  cmd_system))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     scheduler = AsyncIOScheduler()
@@ -865,31 +166,20 @@ def main() -> None:
         coalesce=True,
     )
     scheduler.add_job(
-        _refresh_stock_db,
+        refresh_stock_db,
         trigger="cron",
         hour=8,
         minute=30,
         args=[stock_db],
         id="refresh_stock_db",
     )
-    if MOMENTUM_DAILY_ALERT_ENABLED:
-        scheduler.add_job(
-            _refresh_momentum_and_notify,
-            trigger="cron",
-            hour=MOMENTUM_DAILY_ALERT_HOUR,
-            minute=MOMENTUM_DAILY_ALERT_MINUTE,
-            args=[app],
-            id="refresh_momentum_daily",
-            max_instances=1,
-            coalesce=True,
-        )
     scheduler.start()
 
     logger.info(
         "봇 시작됨. %s분마다 재련사(財联社) + 푸투니우니우(富途牛牛) + 관심종목 뉴스 전송.",
         SCHEDULER_INTERVAL_MINUTES,
     )
-    logger.info("명령어: /start /help /menu /add /list /research /momentum")
+    logger.info("명령어: /start /help /menu /add /list /research /stockdb /system")
     app.run_polling()
 
 

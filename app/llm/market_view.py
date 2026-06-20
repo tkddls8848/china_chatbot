@@ -88,6 +88,10 @@ class MarketViewAnalyzer:
         self._num_gpu = num_gpu
         self._prompt = prompt_file.read_text(encoding="utf-8")
 
+    def set_num_gpu(self, num_gpu: int) -> None:
+        """런타임에 Ollama num_gpu를 변경한다(-1=자동, 0=CPU, N=레이어). 다음 요청부터 반영."""
+        self._num_gpu = max(-1, num_gpu)
+
     def analyze(
         self,
         market_view: str,
