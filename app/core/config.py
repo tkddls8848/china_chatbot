@@ -20,6 +20,10 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 
 load_dotenv(BASE_DIR / ".env")
 
+
+def _env_bool(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 
@@ -46,6 +50,10 @@ SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
 TELEGRAM_MESSAGE_LIMIT = 4096
 NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))
 NEWS_STOCK_LIMIT_PER_SYMBOL = int(os.environ.get("NEWS_STOCK_LIMIT_PER_SYMBOL", "3"))
+NEWS_ENABLE_CLS = _env_bool("NEWS_ENABLE_CLS", "false")
+NEWS_SOURCE_FETCH_TIMEOUT_SECONDS = float(
+    os.environ.get("NEWS_SOURCE_FETCH_TIMEOUT_SECONDS", "45")
+)
 # 한 주기에 처리할 관심종목 수. 0 이하면 전체를 한 번에 처리(기존 동작).
 # 전체 종목을 매 주기 일괄 요청/번역하지 않고 여러 주기에 나눠 회전 처리해 부하를 분산한다.
 STOCK_NEWS_BATCH_SIZE = int(os.environ.get("STOCK_NEWS_BATCH_SIZE", "3"))

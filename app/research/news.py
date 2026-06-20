@@ -11,6 +11,8 @@ from typing import Any, Dict
 import pandas as pd
 
 from core.config import (
+    NEWS_ENABLE_CLS,
+    NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
     RESEARCH_NEWS_GLOBAL_LIMIT,
     RESEARCH_NEWS_MAX_ITEMS,
     RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL,
@@ -24,6 +26,13 @@ from news.utils import is_timeout_error, translate_article
 from llm.translator import TranslationService
 
 logger = logging.getLogger(__name__)
+
+
+async def _fetch_source(func, *args):
+    return await asyncio.wait_for(
+        asyncio.to_thread(func, *args),
+        timeout=NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
+    )
 
 
 def _row_value(row, candidates: list[str], fallback_index: int | None = None) -> str:
@@ -46,7 +55,7 @@ async def collect_watchlist_news_items(
 
     for code, name in watchlist.items():
         try:
-            df = await asyncio.to_thread(_fetch_stock_news_raw, code)
+            df = await _fetch_source(_fetch_stock_news_raw, code)
             if df.empty:
                 continue
 
@@ -117,28 +126,36 @@ async def collect_global_market_news_items(
 ) -> list[dict[str, Any]]:
     news_items: list[dict[str, Any]] = []
 
-    try:
-        df_cls = await asyncio.to_thread(_fetch_cls_raw)
-        cls_limit = min(RESEARCH_NEWS_GLOBAL_LIMIT, max(1, RESEARCH_NEWS_MAX_ITEMS // 2))
-        for _, row in df_cls.tail(cls_limit).iterrows():
-            published_date = _row_value(row, ["发布日期"], 0)
-            published_time = _row_value(row, ["发布时间"], 1)
-            title = _row_value(row, ["标题"], 2)
-            content = _row_value(row, ["内容"], 3)
-            if title or content:
-                news_items.append(
-                    _make_news_item(
-                        "CLS",
-                        title,
-                        content,
-                        f"{published_date} {published_time}".strip(),
+    if NEWS_ENABLE_CLS:
+        try:
+            df_cls = await _fetch_source(_fetch_cls_raw)
+            cls_limit = min(RESEARCH_NEWS_GLOBAL_LIMIT, max(1, RESEARCH_NEWS_MAX_ITEMS // 2))
+            for _, row in df_cls.tail(cls_limit).iterrows():
+                published_date = _row_value(row, ["发布日期"], 0)
+                published_time = _row_value(row, ["发布时间"], 1)
+                title = _row_value(row, ["标题"], 2)
+                content = _row_value(row, ["内容"], 3)
+                if title or content:
+                    news_items.append(
+                        _make_news_item(
+                            "CLS",
+                            title,
+                            content,
+                            f"{published_date} {published_time}".strip(),
+                        )
                     )
-                )
-    except Exception as e:
-        logger.error("[RESEARCH] CLS news collection failed: %s", e)
+        except TimeoutError:
+            logger.error(
+                "[RESEARCH] CLS news collection timed out: %.1f seconds",
+                NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            logger.error("[RESEARCH] CLS news collection failed: %s", e)
+    else:
+        logger.info("[RESEARCH] NEWS_ENABLE_CLS=false; skipping CLS news collection")
 
     try:
-        df_futu = await asyncio.to_thread(_fetch_futu_raw)
+        df_futu = await _fetch_source(_fetch_futu_raw)
         futu_limit = min(
             RESEARCH_NEWS_GLOBAL_LIMIT,
             max(1, RESEARCH_NEWS_MAX_ITEMS - len(news_items)),

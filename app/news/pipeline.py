@@ -11,7 +11,9 @@ from telegram.ext import Application
 
 from core.config import (
     GLOBAL_NEWS_BATCH_SIZE,
+    NEWS_ENABLE_CLS,
     NEWS_GLOBAL_LIMIT,
+    NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
     NEWS_STOCK_LIMIT_PER_SYMBOL,
     STOCK_NEWS_BATCH_SIZE,
     STOCK_NEWS_FETCH_DELAY_SECONDS,
@@ -39,6 +41,12 @@ logger = logging.getLogger(__name__)
 
 # ── 뉴스 수집 함수 ────────────────────────────────────
 
+async def _fetch_source(func, *args):
+    return await asyncio.wait_for(
+        asyncio.to_thread(func, *args),
+        timeout=NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
+    )
+
 async def fetch_cls(
     bot: Bot,
     tracker: SentNewsTracker,
@@ -48,7 +56,10 @@ async def fetch_cls(
     stock_db: StockDatabase,
 ) -> None:
     try:
-        df = await asyncio.to_thread(_fetch_cls_raw)
+        df = await _fetch_source(_fetch_cls_raw)
+    except TimeoutError:
+        logger.error("[CLS] API 호출 시간 초과: %.1f초", NEWS_SOURCE_FETCH_TIMEOUT_SECONDS)
+        return
     except Exception as e:
         logger.error("[CLS] API 호출 실패: %s", e)
         return
@@ -117,7 +128,10 @@ async def fetch_futu(
     stock_db: StockDatabase,
 ) -> None:
     try:
-        df = await asyncio.to_thread(_fetch_futu_raw)
+        df = await _fetch_source(_fetch_futu_raw)
+    except TimeoutError:
+        logger.error("[FUTU] API 호출 시간 초과: %.1f초", NEWS_SOURCE_FETCH_TIMEOUT_SECONDS)
+        return
     except Exception as e:
         logger.error("[FUTU] API 호출 실패: %s", e)
         return
@@ -257,7 +271,7 @@ async def fetch_stock_news(
         if batch_index > 0 and STOCK_NEWS_FETCH_DELAY_SECONDS > 0:
             await asyncio.sleep(STOCK_NEWS_FETCH_DELAY_SECONDS)
         try:
-            df = await asyncio.to_thread(_fetch_stock_news_raw, code)
+            df = await _fetch_source(_fetch_stock_news_raw, code)
             if df.empty:
                 await send_no_recent_news(name)
                 continue
@@ -341,27 +355,31 @@ async def fetch_all(app: Application) -> None:
     stock_db: StockDatabase = app.bot_data["stock_db"]
 
     # 전역 속보 소스(CLS/Futu)도 매 주기 전부 처리하지 않고 커서로 회전 분산한다.
-    global_sources = [
-        (
+    global_sources = []
+    if NEWS_ENABLE_CLS:
+        global_sources.append((
             "CLS",
             lambda: fetch_cls(
                 app.bot, tracker, translator, translate_semaphore, TELEGRAM_CHAT_ID, stock_db
             ),
-        ),
+        ))
+    else:
+        logger.info("[CLS] NEWS_ENABLE_CLS=false; CLS 수집을 건너뜁니다.")
+    global_sources.append(
         (
             "FUTU",
             lambda: fetch_futu(
                 app.bot, tracker, translator, translate_semaphore, TELEGRAM_CHAT_ID, stock_db
             ),
         ),
-    ]
+    )
     cursor = app.bot_data.get("global_news_cursor", 0)
     selected_sources, next_cursor = select_rotating_batch(
         global_sources, cursor, GLOBAL_NEWS_BATCH_SIZE
     )
     app.bot_data["global_news_cursor"] = next_cursor
     logger.info(
-        "[GLOBAL] 이번 주기 처리 소스 %d/%d (커서 %d→%d): %s",
+        "[GLOBAL] 이번 주기 처리 소스 %d/%d (커서 %d->%d): %s",
         len(selected_sources),
         len(global_sources),
         cursor,
