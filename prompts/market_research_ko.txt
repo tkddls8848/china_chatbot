@@ -7,6 +7,7 @@
 - current_watchlist: 현재 사용자가 저장한 워치리스트
 - news_items: CLS/Futu 등 전체 시장 뉴스
 - candidate_universe: 현재 워치리스트, 최신 뉴스 언급 후보, Futu theme_candidates 기반 테마 후보
+- remove_relevance_threshold: 현재 워치리스트에서 삭제 후보로 판단할 관련도 기준(0~1)
 
 액션:
 - add: 워치리스트에 새로 추가할 종목
@@ -19,6 +20,10 @@
 - ticker는 종목 코드를 사용한다.
 - reason, summary, risks는 한국어로 작성한다.
 - confidence는 숫자로 작성한다.
+- relevance는 해당 종목과 market_view의 관련도를 나타내는 0~1 숫자다. 뉴스에 당장 언급되지 않았다는 이유만으로 관련도를 낮추지 말고 사업·산업·공급망 연관성을 함께 평가한다.
+- current_watchlist의 모든 종목을 빠짐없이 한 번씩 평가하고 keep 또는 remove 중 하나를 부여한다. 현재 워치리스트 종목에는 add나 watch를 사용하지 않는다.
+- 현재 워치리스트 종목의 relevance가 remove_relevance_threshold 미만이면 remove, 이상이면 keep을 사용한다.
+- current_watchlist에 없는 종목에만 add 또는 watch를 사용한다.
 
 출력 형식:
 {
@@ -29,6 +34,7 @@
       "name": "CATL",
       "action": "add | keep | remove | watch",
       "confidence": 0.75,
+      "relevance": 0.8,
       "reason": "판단 이유",
       "evidence": [
         {

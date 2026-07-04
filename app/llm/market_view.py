@@ -79,6 +79,7 @@ class MarketViewAnalyzer:
         num_predict: int,
         prompt_file: Path,
         num_gpu: int = 0,
+        remove_relevance_threshold: float = 0.35,
     ):
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -86,6 +87,7 @@ class MarketViewAnalyzer:
         self._timeout = timeout
         self._num_predict = num_predict
         self._num_gpu = num_gpu
+        self._remove_relevance_threshold = remove_relevance_threshold
         self._prompt = prompt_file.read_text(encoding="utf-8")
 
     def set_num_gpu(self, num_gpu: int) -> None:
@@ -107,6 +109,7 @@ class MarketViewAnalyzer:
             "current_watchlist": watchlist,
             "news_items": news_items,
             "candidate_universe": candidate_universe or [],
+            "remove_relevance_threshold": self._remove_relevance_threshold,
         }
         raw = self._request_analysis(payload)
         return self._parse_analysis(raw)
@@ -184,12 +187,22 @@ class MarketViewAnalyzer:
             if not isinstance(evidence, list):
                 raise MarketViewError("analysis action evidence must be a list")
 
+            relevance = item.get("relevance")
+            if relevance is not None:
+                try:
+                    relevance = min(1.0, max(0.0, float(relevance)))
+                except (TypeError, ValueError) as e:
+                    raise MarketViewError(
+                        "analysis action relevance must be numeric"
+                    ) from e
+
             normalized_actions.append(
                 {
                     "ticker": ticker.strip(),
                     "name": str(item.get("name") or "").strip(),
                     "action": action,
                     "confidence": confidence,
+                    "relevance": relevance,
                     "reason": str(item.get("reason") or "").strip(),
                     "evidence": [e for e in evidence if isinstance(e, dict)],
                 }

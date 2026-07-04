@@ -77,6 +77,13 @@ RESEARCH_NEWS_GLOBAL_LIMIT = int(
 RESEARCH_ANALYSIS_NUM_PREDICT = int(
     os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
 )
+RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
+    1.0,
+    max(
+        0.0,
+        float(os.environ.get("RESEARCH_REMOVE_RELEVANCE_THRESHOLD", "0.35")),
+    ),
+)
 HELP_TEXT = (
     "<b>사용 가능한 명령어</b>\n\n"
     "/start — 봇 소개와 사용 가능한 경로 보기\n"

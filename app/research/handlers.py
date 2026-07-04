@@ -8,6 +8,7 @@ from typing import Any, Dict
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from core.config import RESEARCH_REMOVE_RELEVANCE_THRESHOLD
 from research.candidates import build_research_candidate_universe
 from llm.market_view import MarketViewError, MarketViewManager
 from stocks import StockDatabase
@@ -53,13 +54,30 @@ def _collect_research_actions(
         if not isinstance(item, dict):
             continue
         action = item.get("action")
-        if action not in {"add", "remove"}:
+        if action not in {"add", "keep", "remove", "watch"}:
             continue
         confidence = float(item.get("confidence") or 0)
+        raw_relevance = item.get("relevance")
+        relevance = None
+        if raw_relevance is not None:
+            try:
+                relevance = min(1.0, max(0.0, float(raw_relevance)))
+            except (TypeError, ValueError):
+                relevance = None
 
         code = _normalize_code(str(item.get("ticker") or ""))
         if not code:
             continue
+
+        # 현재 관심종목은 LLM이 keep/watch로 응답하더라도 마켓 뷰 관련도가
+        # 기준 미만이면 삭제 후보로 승격한다. 실제 삭제는 사용자의 적용 승인 후 수행한다.
+        low_relevance = (
+            code in watchlist
+            and relevance is not None
+            and relevance < RESEARCH_REMOVE_RELEVANCE_THRESHOLD
+        )
+        if low_relevance:
+            action = "remove"
 
         if action == "add":
             if code in watchlist or code in seen_add:
@@ -75,18 +93,27 @@ def _collect_research_actions(
                     "name": name,
                     "reason": str(item.get("reason") or "").strip(),
                     "confidence": confidence,
+                    "relevance": relevance,
                 }
             )
             seen_add.add(code)
         elif action == "remove":
             if code not in watchlist or code in seen_remove:
                 continue
+            reason = str(item.get("reason") or "").strip()
+            if low_relevance and item.get("action") != "remove":
+                threshold_reason = (
+                    f"마켓 뷰 관련도 {relevance:.0%}가 삭제 기준 "
+                    f"{RESEARCH_REMOVE_RELEVANCE_THRESHOLD:.0%} 미만"
+                )
+                reason = f"{threshold_reason}. {reason}" if reason else threshold_reason
             remove_items.append(
                 {
                     "code": code,
                     "name": watchlist[code],
-                    "reason": str(item.get("reason") or "").strip(),
+                    "reason": reason,
                     "confidence": confidence,
+                    "relevance": relevance,
                 }
             )
             seen_remove.add(code)
@@ -101,8 +128,12 @@ def _format_action_lines(items: list[dict[str, Any]]) -> str:
         code = html.escape(str(item["code"]))
         name = html.escape(str(item["name"]))
         confidence = float(item.get("confidence") or 0)
+        relevance = item.get("relevance")
+        scores = [f"판단 {confidence:.0%}"]
+        if relevance is not None:
+            scores.insert(0, f"관련도 {float(relevance):.0%}")
         suffix = f" - {reason}" if reason else ""
-        lines.append(f"- {name} ({code}) [{confidence:.0%}]{suffix}")
+        lines.append(f"- {name} ({code}) [{' · '.join(scores)}]{suffix}")
     return "\n".join(lines) if lines else "- 없음"
 
 
@@ -132,7 +163,10 @@ def _format_research_result_message(
         code = html.escape(_normalize_code(str(item.get("ticker") or "")))
         name = html.escape(str(item.get("name") or code))
         reason = html.escape(str(item.get("reason") or ""))
+        relevance = item.get("relevance")
         line = f"- {name} ({code})"
+        if relevance is not None:
+            line += f" [관련도 {float(relevance):.0%}]"
         if reason:
             line += f" - {reason}"
         if action == "watch":

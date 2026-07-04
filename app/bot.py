@@ -22,6 +22,7 @@ from core.config import (
     PROMPT_DIR,
     RESEARCH_ANALYSIS_NUM_PREDICT,
     RESEARCH_ANALYSIS_PROMPT_FILE,
+    RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
     RESEARCH_STATE_FILE,
     RUNTIME_CONFIG_FILE,
     SCHEDULER_INTERVAL_MINUTES,
@@ -124,6 +125,7 @@ def main() -> None:
         num_predict=RESEARCH_ANALYSIS_NUM_PREDICT,
         prompt_file=RESEARCH_ANALYSIS_PROMPT_FILE,
         num_gpu=ollama_num_gpu,
+        remove_relevance_threshold=RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
     )
     app.bot_data["translate_semaphore"]  = asyncio.Semaphore(TRANSLATION_CONCURRENCY)
     app.bot_data["research_news_collector"] = collect_global_market_news_items
