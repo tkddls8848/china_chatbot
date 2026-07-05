@@ -59,7 +59,7 @@ async def cmd_stockdb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
-def _format_system_status(system: SystemControlManager) -> str:
+def _format_system_status(system: SystemControlManager, source_lines: list[str] | None = None) -> str:
     if system.gpu_enabled:
         gpu_line = (
             f"GPU 가속: <b>켜짐</b> "
@@ -70,9 +70,15 @@ def _format_system_status(system: SystemControlManager) -> str:
             f"GPU 가속: <b>꺼짐</b> (CPU 전용, "
             f"켜면 {SystemControlManager.describe(system.gpu_on_value)})"
         )
+    sources_part = ""
+    if source_lines:
+        sources_part = "\n\n<b>전역 뉴스 소스</b>\n" + "\n".join(
+            f"  {line}" for line in source_lines
+        )
     return (
         "<b>시스템 상태</b>\n\n"
-        f"{gpu_line}\n\n"
+        f"{gpu_line}"
+        f"{sources_part}\n\n"
         "제어:\n"
         "  /system gpu on — GPU 가속 켜기(자동)\n"
         "  /system gpu off — CPU 전용\n"
@@ -112,7 +118,11 @@ async def cmd_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
 
-    await message.reply_text(_format_system_status(system), parse_mode="HTML")
+    registry = context.bot_data.get("news_registry")
+    source_lines = registry.status_lines() if registry is not None else None
+    await message.reply_text(
+        _format_system_status(system, source_lines), parse_mode="HTML"
+    )
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -142,6 +152,7 @@ async def configure_telegram_menu(app: Application) -> None:
         BotCommand("add", "관심종목 추가: /add 600519"),
         BotCommand("list", "현재 관심종목 목록 보기"),
         BotCommand("research", "리서치 주제 확인/설정/실행"),
+        BotCommand("briefing", "모닝/마감 브리핑·성적표 즉시 실행"),
         BotCommand("stockdb", "종목 DB 빌드/EODHD 보강"),
         BotCommand("system", "시스템 상태 보기/GPU 가속 제어"),
         BotCommand("help", "명령어 경로와 설명 보기"),

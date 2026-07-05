@@ -1,4 +1,8 @@
-"""스케줄러가 주기적으로 호출하는 뉴스 수집·번역·전송 파이프라인."""
+"""스케줄러가 주기적으로 호출하는 뉴스 수집·번역·전송 파이프라인.
+
+전역 속보는 NewsSourceRegistry에 등록된 소스를 회전 처리하며, 소스별
+수집·번역·전송 흐름은 process_global_source 하나로 공통화되어 있다.
+"""
 
 import asyncio
 import html
@@ -11,27 +15,27 @@ from telegram.ext import Application
 
 from core.config import (
     GLOBAL_NEWS_BATCH_SIZE,
-    NEWS_ENABLE_CLS,
     NEWS_GLOBAL_LIMIT,
+    NEWS_NEGATIVE_ALERT_THRESHOLD,
     NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
     NEWS_STOCK_LIMIT_PER_SYMBOL,
     STOCK_NEWS_BATCH_SIZE,
     STOCK_NEWS_FETCH_DELAY_SECONDS,
     TELEGRAM_CHAT_ID,
 )
-from news.sources import (
-    fetch_cls_raw as _fetch_cls_raw,
-    fetch_futu_raw as _fetch_futu_raw,
-    fetch_stock_news_raw as _fetch_stock_news_raw,
-)
+from news.registry import NewsSourceRegistry, SourceSpec
+from news.sources import GlobalArticle, fetch_stock_news_raw as _fetch_stock_news_raw
 from news.utils import (
     build_news_message,
     format_china_time_as_kst,
+    format_sentiment_line,
     is_timeout_error,
+    normalize_stock_code,
     select_rotating_batch,
     translate_article,
 )
 from state import SentNewsTracker
+from state.news_log import NewsLog
 from stocks import StockDatabase
 from llm.translator import TranslationService
 from watchlist import WatchlistManager
@@ -47,160 +51,123 @@ async def _fetch_source(func, *args):
         timeout=NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
     )
 
-async def fetch_cls(
+
+def _watchlist_hits(codes: list[str], watchlist: dict[str, str]) -> list[str]:
+    return [
+        normalized
+        for code in codes
+        if (normalized := normalize_stock_code(code)) in watchlist
+    ]
+
+
+def _negative_alert_prefix(sentiment: float | None, related_to_watchlist: bool) -> str:
+    if (
+        related_to_watchlist
+        and sentiment is not None
+        and sentiment <= NEWS_NEGATIVE_ALERT_THRESHOLD
+    ):
+        return "⚠️ <b>관심종목 부정 뉴스</b>\n"
+    return ""
+
+
+async def process_global_source(
+    spec: SourceSpec,
+    registry: NewsSourceRegistry,
     bot: Bot,
     tracker: SentNewsTracker,
     translator: TranslationService,
     translate_semaphore: asyncio.Semaphore,
     chat_id: str,
     stock_db: StockDatabase,
+    news_log: NewsLog | None,
+    watchlist: dict[str, str],
 ) -> None:
     try:
-        df = await _fetch_source(_fetch_cls_raw)
+        articles: list[GlobalArticle] = await _fetch_source(spec.fetch)
+        registry.record_success(spec.key)
     except TimeoutError:
-        logger.error("[CLS] API 호출 시간 초과: %.1f초", NEWS_SOURCE_FETCH_TIMEOUT_SECONDS)
+        registry.record_failure(spec.key, "timeout")
+        logger.error(
+            "[%s] API 호출 시간 초과: %.1f초", spec.key, NEWS_SOURCE_FETCH_TIMEOUT_SECONDS
+        )
         return
     except Exception as e:
-        logger.error("[CLS] API 호출 실패: %s", e)
+        registry.record_failure(spec.key, str(e))
+        logger.error("[%s] API 호출 실패: %s", spec.key, e)
         return
 
-    async def prepare_row(row):
-        article_id = str(row["发布日期"]) + " " + str(row["发布时间"]) + str(row["标题"])
+    async def prepare_article(article: GlobalArticle):
+        article_id = article.article_id
         try:
             if not await tracker.reserve(article_id):
                 return None
-            raw_title = str(row["标题"])
-            raw_content = str(row["内容"])
             translated = await translate_article(
                 translator,
                 translate_semaphore,
-                "cls",
-                raw_title,
-                raw_content,
+                spec.prompt_key,
+                article.title,
+                article.content,
             )
             mentioned_stocks = [
                 (code, name)
                 for code in translated.mentioned_stocks
                 if (name := stock_db.get_display_name(code))
             ]
-            text = build_news_message(
-                header=(
-                    f"<b>재련사(財联社) 속보</b>\n"
-                    f"시간: {format_china_time_as_kst(row['发布时间'], row['发布日期'])}\n\n"
-                ),
-                title=translated.title,
-                content=translated.content,
-                mentioned_stocks=mentioned_stocks,
-            )
-            return article_id, text, translated.title
-        except Exception as e:
-            await tracker.release(article_id)
-            logger.error("[CLS] 번역 실패: %s", e)
-            return None
-
-    prepared_rows = await asyncio.gather(
-        *(prepare_row(row) for _, row in df.tail(NEWS_GLOBAL_LIMIT).iterrows())
-    )
-
-    for prepared in prepared_rows:
-        if prepared is None:
-            continue
-        article_id, text, title = prepared
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML",
-            )
-            await tracker.confirm(article_id)
-            logger.info("[CLS] 전송 완료: %s", title[:30])
-        except Exception as e:
-            await tracker.release(article_id)
-            logger.error("[CLS] 전송 실패: %s", e)
-
-
-async def fetch_futu(
-    bot: Bot,
-    tracker: SentNewsTracker,
-    translator: TranslationService,
-    translate_semaphore: asyncio.Semaphore,
-    chat_id: str,
-    stock_db: StockDatabase,
-) -> None:
-    try:
-        df = await _fetch_source(_fetch_futu_raw)
-    except TimeoutError:
-        logger.error("[FUTU] API 호출 시간 초과: %.1f초", NEWS_SOURCE_FETCH_TIMEOUT_SECONDS)
-        return
-    except Exception as e:
-        logger.error("[FUTU] API 호출 실패: %s", e)
-        return
-
-    async def prepare_row(row):
-        article_id = str(row["发布时间"]) + str(row["内容"])[:20]
-        try:
-            if not await tracker.reserve(article_id):
-                return None
-            raw_title = str(row["标题"]) if row["标题"] else ""
-            raw_content = str(row["内容"])
-            translated = await translate_article(
-                translator,
-                translate_semaphore,
-                "futu",
-                raw_title,
-                raw_content,
-            )
-            mentioned_stocks = [
-                (code, name)
-                for code in translated.mentioned_stocks
-                if (name := stock_db.get_display_name(code))
-            ]
-            link_url = str(row.get("链接") or "")
             link_part = (
-                f'\n링크: <a href="{html.escape(link_url)}">{html.escape(link_url)}</a>'
-                if link_url else ""
+                f'\n링크: <a href="{html.escape(article.url)}">{html.escape(article.url)}</a>'
+                if article.url
+                else ""
+            )
+            hits = _watchlist_hits(translated.mentioned_stocks, watchlist)
+            header = (
+                _negative_alert_prefix(translated.sentiment, bool(hits))
+                + f"<b>{html.escape(spec.label)} 속보</b>\n"
+                f"시간: {format_china_time_as_kst(article.published_at, article.published_date or None)}\n"
+                f"{format_sentiment_line(translated.sentiment, translated.impact)}\n"
             )
             text = build_news_message(
-                header=(
-                    f"<b>푸투니우니우(富途牛牛) 속보</b>\n"
-                    f"시간: {format_china_time_as_kst(row['发布时间'])}\n\n"
-                ),
+                header=header,
                 title=translated.title,
                 content=translated.content,
                 footer=link_part,
                 mentioned_stocks=mentioned_stocks,
             )
-            return article_id, text, translated.content
+            return article_id, text, translated
         except Exception as e:
             await tracker.release(article_id)
-            logger.error("[FUTU] 번역 실패: %s", e)
+            logger.error("[%s] 번역 실패: %s", spec.key, e)
             if is_timeout_error(e):
                 raise
             return None
 
+    # 최신 N건을 과거→최신 순서로 전송한다.
     prepared_rows = []
-    for _, row in df.head(NEWS_GLOBAL_LIMIT).iloc[::-1].iterrows():
+    for article in articles[:NEWS_GLOBAL_LIMIT][::-1]:
         try:
-            prepared_rows.append(await prepare_row(row))
+            prepared_rows.append(await prepare_article(article))
         except Exception:
-            logger.error("[FUTU] 타임아웃으로 이번 주기 남은 Futu 번역을 중단합니다.")
+            logger.error("[%s] 타임아웃으로 이번 주기 남은 번역을 중단합니다.", spec.key)
             break
 
     for prepared in prepared_rows:
         if prepared is None:
             continue
-        article_id, text, content = prepared
+        article_id, text, translated = prepared
         try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML",
-            )
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
             await tracker.confirm(article_id)
-            logger.info("[FUTU] 전송 완료: %s", content[:30])
+            if news_log is not None:
+                await news_log.record(
+                    source=spec.key,
+                    title=translated.title,
+                    sentiment=translated.sentiment,
+                    impact=translated.impact,
+                    codes=[normalize_stock_code(c) for c in translated.mentioned_stocks],
+                )
+            logger.info("[%s] 전송 완료: %s", spec.key, translated.title[:30])
         except Exception as e:
             await tracker.release(article_id)
-            logger.error("[FUTU] 전송 실패: %s", e)
+            logger.error("[%s] 전송 실패: %s", spec.key, e)
 
 
 async def fetch_stock_news(
@@ -217,6 +184,8 @@ async def fetch_stock_news(
     if not watchlist:
         return
 
+    news_log: NewsLog | None = bot_data.get("news_log")
+
     if bot_data.get("stock_news_first_run", True):
         stock_list = "\n".join(
             f"  • {name} ({code})" for code, name in watchlist.items()
@@ -230,6 +199,7 @@ async def fetch_stock_news(
                     "삭제: /menu 에서 버튼으로\n"
                     "목록: /list\n"
                     "리서치: /research show | set | run | clear\n"
+                    "브리핑: /briefing morning | evening | scorecard\n"
                     "시스템: /system | /system gpu on | off\n"
                     "도움말: /help\n\n"
                     f"{stock_list}"
@@ -299,17 +269,20 @@ async def fetch_stock_news(
                     source = html.escape(str(row["文章来源"]))
                     link_url = str(row["新闻链接"])
                     link = f'<a href="{html.escape(link_url)}">{html.escape(link_url)}</a>'
+                    header = (
+                        _negative_alert_prefix(translated.sentiment, True)
+                        + f"<b>{html.escape(name)} ({code}) 뉴스</b>\n"
+                        f"시간: {format_china_time_as_kst(row['发布时间'])}\n"
+                        f"출처: {source}\n"
+                        f"{format_sentiment_line(translated.sentiment, translated.impact)}\n"
+                    )
                     text = build_news_message(
-                        header=(
-                            f"<b>{html.escape(name)} ({code}) 뉴스</b>\n"
-                            f"시간: {format_china_time_as_kst(row['发布时间'])}\n"
-                            f"출처: {source}\n\n"
-                        ),
+                        header=header,
                         title=translated.title,
                         content=translated.content,
                         footer=f"\n\n링크: {link}",
                     )
-                    return article_id, text, translated.title
+                    return article_id, text, translated
                 except Exception as e:
                     await tracker.release(article_id)
                     logger.error("[STOCK] %s 번역 실패: %s", name, e)
@@ -322,7 +295,7 @@ async def fetch_stock_news(
             for prepared in prepared_rows:
                 if prepared is None:
                     continue
-                article_id, text, title = prepared
+                article_id, text, translated = prepared
                 try:
                     await bot.send_message(
                         chat_id=chat_id,
@@ -330,7 +303,15 @@ async def fetch_stock_news(
                         parse_mode="HTML",
                     )
                     await tracker.confirm(article_id)
-                    logger.info("[STOCK] 전송 완료: %s %s", name, title[:20])
+                    if news_log is not None:
+                        await news_log.record(
+                            source="stock",
+                            title=translated.title,
+                            sentiment=translated.sentiment,
+                            impact=translated.impact,
+                            codes=[code],
+                        )
+                    logger.info("[STOCK] 전송 완료: %s %s", name, translated.title[:20])
                 except Exception as e:
                     await tracker.release(article_id)
                     logger.error("[STOCK] %s 전송 실패: %s", name, e)
@@ -353,41 +334,40 @@ async def fetch_all(app: Application) -> None:
     translator: TranslationService = app.bot_data["translator"]
     translate_semaphore: asyncio.Semaphore = app.bot_data["translate_semaphore"]
     stock_db: StockDatabase = app.bot_data["stock_db"]
+    registry: NewsSourceRegistry = app.bot_data["news_registry"]
+    news_log: NewsLog | None = app.bot_data.get("news_log")
+    watchlist = await wm.get_all()
 
-    # 전역 속보 소스(CLS/Futu)도 매 주기 전부 처리하지 않고 커서로 회전 분산한다.
-    global_sources = []
-    if NEWS_ENABLE_CLS:
-        global_sources.append((
-            "CLS",
-            lambda: fetch_cls(
-                app.bot, tracker, translator, translate_semaphore, TELEGRAM_CHAT_ID, stock_db
-            ),
-        ))
-    else:
-        logger.info("[CLS] NEWS_ENABLE_CLS=false; CLS 수집을 건너뜁니다.")
-    global_sources.append(
-        (
-            "FUTU",
-            lambda: fetch_futu(
-                app.bot, tracker, translator, translate_semaphore, TELEGRAM_CHAT_ID, stock_db
-            ),
-        ),
-    )
+    # 쿨다운 중이 아닌 소스만 회전 처리한다. 쿨다운이 끝난 소스는 자동 복귀.
+    active_specs = registry.active_specs()
+    if not active_specs:
+        logger.warning("[GLOBAL] 사용 가능한 전역 뉴스 소스가 없습니다(전부 쿨다운).")
     cursor = app.bot_data.get("global_news_cursor", 0)
-    selected_sources, next_cursor = select_rotating_batch(
-        global_sources, cursor, GLOBAL_NEWS_BATCH_SIZE
+    selected_specs, next_cursor = select_rotating_batch(
+        active_specs, cursor, GLOBAL_NEWS_BATCH_SIZE
     )
     app.bot_data["global_news_cursor"] = next_cursor
     logger.info(
         "[GLOBAL] 이번 주기 처리 소스 %d/%d (커서 %d->%d): %s",
-        len(selected_sources),
-        len(global_sources),
+        len(selected_specs),
+        len(active_specs),
         cursor,
         next_cursor,
-        ", ".join(name for name, _ in selected_sources),
+        ", ".join(spec.key for spec in selected_specs),
     )
-    for _, runner in selected_sources:
-        await runner()
+    for spec in selected_specs:
+        await process_global_source(
+            spec,
+            registry,
+            app.bot,
+            tracker,
+            translator,
+            translate_semaphore,
+            TELEGRAM_CHAT_ID,
+            stock_db,
+            news_log,
+            watchlist,
+        )
 
     await fetch_stock_news(
         app.bot,

@@ -19,6 +19,8 @@ class TranslationResult:
     content: str
     mentioned_stocks: list[str]
     theme_candidates: list[dict[str, Any]]
+    sentiment: float | None = None
+    impact: str = ""
 
 
 class TranslationService:
@@ -28,6 +30,7 @@ class TranslationService:
         "cls": "cls_ko.txt",
         "futu": "futu_ko.txt",
         "stock": "stock_ko.txt",
+        "global": "global_ko.txt",
     }
 
     def __init__(
@@ -118,6 +121,21 @@ class TranslationService:
             raise ValueError("empty Ollama response content")
         return translated
 
+    @staticmethod
+    def _parse_sentiment(value: Any) -> float | None:
+        """감성 점수(-1~1)를 관대하게 파싱한다. 실패하면 None(미표기)."""
+        if value is None:
+            return None
+        try:
+            return min(1.0, max(-1.0, float(value)))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_impact(value: Any) -> str:
+        impact = str(value or "").strip().lower()
+        return impact if impact in ("high", "medium", "low") else ""
+
     def _parse_translation(self, translated: str) -> TranslationResult:
         data = json.loads(self._extract_json_object(translated))
         title = data.get("title")
@@ -141,6 +159,8 @@ class TranslationService:
             content.strip(),
             [str(code).strip() for code in mentioned_stocks if str(code).strip()],
             theme_candidates,
+            sentiment=self._parse_sentiment(data.get("sentiment")),
+            impact=self._parse_impact(data.get("impact")),
         )
 
     def _extract_json_object(self, text: str) -> str:

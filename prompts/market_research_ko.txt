@@ -5,9 +5,11 @@
 입력 데이터:
 - market_view: 사용자가 저장한 투자/시장 관심사
 - current_watchlist: 현재 사용자가 저장한 워치리스트
-- news_items: CLS/Futu 등 전체 시장 뉴스
-- candidate_universe: 현재 워치리스트, 최신 뉴스 언급 후보, Futu theme_candidates 기반 테마 후보
+- news_items: CLS/Futu/동방재부 등 전체 시장 뉴스(감성 점수 sentiment 포함 가능)
+- candidate_universe: 현재 워치리스트, 최신 뉴스 언급 후보, 테마 후보, 강세 섹터 구성종목 후보
 - remove_relevance_threshold: 현재 워치리스트에서 삭제 후보로 판단할 관련도 기준(0~1)
+- quant_context: 관심종목 시세·주력 자금흐름, 섹터 상·하위, 涨停 수, 인기순위·용호방 진입(있을 때만)
+- previous_analyses: 직전 분석들의 요약과 제안 이력(있을 때만). 직전 제안과 판단이 달라지면 그 이유를 reason에 명시한다.
 
 액션:
 - add: 워치리스트에 새로 추가할 종목

@@ -97,6 +97,32 @@ def is_timeout_error(error: Exception) -> bool:
     return "timed out" in str(error).lower() or "timeout" in str(error).lower()
 
 
+def normalize_stock_code(raw: Any) -> str:
+    """숫자 코드를 시장 규칙에 맞게 0패딩한다(HK 5자리, A주 6자리)."""
+    code = str(raw or "").strip()
+    digits = "".join(ch for ch in code if ch.isdigit())
+    if not digits:
+        return code
+    return digits.zfill(5) if len(digits) <= 5 else digits.zfill(6)
+
+
+def format_sentiment_line(sentiment: float | None, impact: str = "") -> str:
+    """뉴스 메시지에 붙일 감성 한 줄. 감성 값이 없으면 빈 문자열."""
+    from core.config import NEWS_SENTIMENT_ENABLED
+
+    if not NEWS_SENTIMENT_ENABLED or sentiment is None:
+        return ""
+    if sentiment >= 0.15:
+        marker = "🟢"
+    elif sentiment <= -0.15:
+        marker = "🔴"
+    else:
+        marker = "⚪"
+    impact_labels = {"high": "높음", "medium": "중간", "low": "낮음"}
+    impact_part = f" · 영향 {impact_labels[impact]}" if impact in impact_labels else ""
+    return f"감성: {marker} {sentiment:+.2f}{impact_part}\n"
+
+
 def select_rotating_batch(
     items: list,
     cursor: int,

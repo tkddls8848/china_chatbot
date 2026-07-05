@@ -1,0 +1,42 @@
+# 봇 + Ollama(+선택 RSSHub) 구성.
+#
+#   docker compose up -d --build            # 봇 + Ollama
+#   docker compose --profile rss up -d      # RSSHub까지 함께
+#
+# .env의 OLLAMA_BASE_URL은 http://ollama:11434 로 설정한다.
+# RSSHub를 쓰면 NEWS_RSS_FEEDS에 http://rsshub:1200/... 라우트를 지정한다.
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    # GPU를 쓰려면 아래 주석을 해제한다(NVIDIA Container Toolkit 필요).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  rsshub:
+    image: diygod/rsshub:latest
+    restart: unless-stopped
+    profiles: ["rss"]
+    ports:
+      - "1200:1200"
+
+volumes:
+  ollama-models:

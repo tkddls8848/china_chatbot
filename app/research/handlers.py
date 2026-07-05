@@ -10,9 +10,11 @@ from telegram.ext import ContextTypes
 
 from core.config import RESEARCH_REMOVE_RELEVANCE_THRESHOLD
 from research.candidates import build_research_candidate_universe
+from research.discovery import collect_extra_candidates
 from llm.market_view import MarketViewError, MarketViewManager
 from stocks import StockDatabase
 from llm.translator import TranslationService
+from watchlist.events import record_watchlist_event
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,8 @@ def _collect_research_actions(
                     "reason": str(item.get("reason") or "").strip(),
                     "confidence": confidence,
                     "relevance": relevance,
+                    "bull_case": str(item.get("bull_case") or "").strip(),
+                    "bear_case": str(item.get("bear_case") or "").strip(),
                 }
             )
             seen_add.add(code)
@@ -114,6 +118,8 @@ def _collect_research_actions(
                     "reason": reason,
                     "confidence": confidence,
                     "relevance": relevance,
+                    "bull_case": str(item.get("bull_case") or "").strip(),
+                    "bear_case": str(item.get("bear_case") or "").strip(),
                 }
             )
             seen_remove.add(code)
@@ -134,6 +140,12 @@ def _format_action_lines(items: list[dict[str, Any]]) -> str:
             scores.insert(0, f"관련도 {float(relevance):.0%}")
         suffix = f" - {reason}" if reason else ""
         lines.append(f"- {name} ({code}) [{' · '.join(scores)}]{suffix}")
+        bull_case = str(item.get("bull_case") or "").strip()
+        bear_case = str(item.get("bear_case") or "").strip()
+        if bull_case:
+            lines.append(f"  🐂 {html.escape(bull_case[:120])}")
+        if bear_case:
+            lines.append(f"  🐻 {html.escape(bear_case[:120])}")
     return "\n".join(lines) if lines else "- 없음"
 
 
@@ -174,10 +186,22 @@ def _format_research_result_message(
         else:
             keep_lines.append(line)
 
+    dropped = result.get("verification_dropped") or []
+    dropped_lines = []
+    for item in dropped[:5]:
+        if not isinstance(item, dict):
+            continue
+        code = html.escape(_normalize_code(str(item.get("ticker") or "")))
+        name = html.escape(str(item.get("name") or code))
+        reason = html.escape(str(item.get("reason") or "")[:100])
+        action_label = "추가" if item.get("action") == "add" else "제외"
+        dropped_lines.append(f"- [{action_label} 기각] {name} ({code}) {reason}")
+
     risks = result.get("risks") or []
     risk_lines = "\n".join(f"- {html.escape(str(r))}" for r in risks[:5]) or "- 없음"
+    verified_mark = " ✅검증됨" if result.get("verified") else ""
     text = (
-        f"<b>{html.escape(title)}</b>\n"
+        f"<b>{html.escape(title)}</b>{verified_mark}\n"
         f"분석 뉴스: {news_count}건 / 후보 universe: {candidate_count}개\n\n"
         f"<b>요약</b>\n{summary}\n\n"
         f"<b>추가 후보</b>\n{add_lines}\n\n"
@@ -186,6 +210,8 @@ def _format_research_result_message(
         f"<b>유지</b>\n{chr(10).join(keep_lines[:5]) or '- 없음'}\n\n"
         f"<b>리스크</b>\n{risk_lines}"
     )
+    if dropped_lines:
+        text += f"\n\n<b>검증에서 기각된 후보</b>\n{chr(10).join(dropped_lines)}"
     if len(text) > TELEGRAM_MESSAGE_LIMIT:
         text = text[: TELEGRAM_MESSAGE_LIMIT - 3] + "..."
     return text
@@ -318,6 +344,30 @@ async def _handle_research_run(
         return
     candidate_universe = build_research_candidate_universe(stock_db, watchlist, news_items, market_view)
 
+    # 강세 섹터 구성종목·问财 스크리닝 후보를 코드 중복 없이 병합한다.
+    quote_service = context.bot_data.get("quote_service")
+    try:
+        extra_candidates = await asyncio.to_thread(
+            collect_extra_candidates, quote_service, stock_db, watchlist, market_view
+        )
+        existing_codes = {c["code"] for c in candidate_universe}
+        candidate_universe.extend(
+            c for c in extra_candidates if c["code"] not in existing_codes
+        )
+    except Exception as e:
+        logger.warning("[RESEARCH] 추가 후보 수집 실패: %s", e)
+
+    # 정량 스냅샷과 직전 분석 이력을 분석 입력에 주입한다(각각 최선 노력).
+    quant_context = None
+    if quote_service is not None and quote_service.enabled:
+        try:
+            quant_context = await asyncio.to_thread(
+                quote_service.build_quant_context, watchlist
+            )
+        except Exception as e:
+            logger.warning("[RESEARCH] 정량 컨텍스트 수집 실패: %s", e)
+    previous_analyses = mvm.get_history_summaries()
+
     try:
         result = await asyncio.to_thread(
             analyzer.analyze,
@@ -325,6 +375,8 @@ async def _handle_research_run(
             watchlist,
             news_items,
             candidate_universe,
+            quant_context,
+            previous_analyses,
         )
     except MarketViewError as e:
         logger.error("[RESEARCH] analysis failed: %s", e)
@@ -402,6 +454,13 @@ async def _handle_research_apply(query, context: ContextTypes.DEFAULT_TYPE, uid:
             name = await wm.remove(code)
             removed.append(f"{name or item.get('name') or code} ({code})")
             watchlist.pop(code, None)
+            await record_watchlist_event(
+                context.bot_data,
+                "remove",
+                code,
+                name or str(item.get("name") or code),
+                reason=str(item.get("reason") or "리서치 적용"),
+            )
         else:
             skipped.append(f"{item.get('name') or code} ({code})")
 
@@ -414,6 +473,13 @@ async def _handle_research_apply(query, context: ContextTypes.DEFAULT_TYPE, uid:
         await wm.add(code, name)
         added.append(f"{name} ({code})")
         watchlist[code] = name
+        await record_watchlist_event(
+            context.bot_data,
+            "add",
+            code,
+            name,
+            reason=str(item.get("reason") or "리서치 적용"),
+        )
 
     text = (
         "<b>리서치 변경 적용 완료</b>\n\n"

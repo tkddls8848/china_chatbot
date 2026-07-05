@@ -41,6 +41,8 @@ WATCHLIST_FILE    = BASE_DIR / "data" / "watchlist.json"
 STOCK_DB_FILE     = BASE_DIR / "data" / "stock_db.json"
 RESEARCH_STATE_FILE = BASE_DIR / "data" / "market_research.json"
 RUNTIME_CONFIG_FILE = BASE_DIR / "data" / "runtime_config.json"
+NEWS_LOG_FILE     = BASE_DIR / "data" / "news_log.json"
+WATCHLIST_EVENTS_FILE = BASE_DIR / "data" / "watchlist_events.json"
 PROMPT_DIR        = Path(os.environ.get("TRANSLATION_PROMPT_DIR", "prompts"))
 if not PROMPT_DIR.is_absolute():
     PROMPT_DIR = BASE_DIR / PROMPT_DIR
@@ -54,6 +56,46 @@ NEWS_ENABLE_CLS = _env_bool("NEWS_ENABLE_CLS", "false")
 NEWS_SOURCE_FETCH_TIMEOUT_SECONDS = float(
     os.environ.get("NEWS_SOURCE_FETCH_TIMEOUT_SECONDS", "45")
 )
+
+
+def _parse_global_source_keys() -> list[str]:
+    """전역 뉴스 소스 우선순위 목록.
+
+    NEWS_GLOBAL_SOURCES가 설정되면 그 목록이 전부다. 미설정이면 기본
+    futu,em,sina에 NEWS_ENABLE_CLS=true일 때 cls를 덧붙인다(하위 호환).
+    """
+    raw = os.environ.get("NEWS_GLOBAL_SOURCES", "").strip()
+    if raw:
+        return [key.strip().lower() for key in raw.split(",") if key.strip()]
+    keys = ["futu", "em", "sina"]
+    if NEWS_ENABLE_CLS:
+        keys.append("cls")
+    return keys
+
+
+def _parse_rss_feeds() -> list[tuple[str, str]]:
+    """NEWS_RSS_FEEDS='라벨|URL,라벨|URL' → [(라벨, URL), ...]"""
+    raw = os.environ.get("NEWS_RSS_FEEDS", "").strip()
+    feeds: list[tuple[str, str]] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        label, _, url = chunk.partition("|")
+        label, url = label.strip(), url.strip()
+        if label and url.startswith("http"):
+            feeds.append((label, url))
+    return feeds
+
+
+NEWS_GLOBAL_SOURCE_KEYS = _parse_global_source_keys()
+NEWS_RSS_FEEDS = _parse_rss_feeds()
+NEWS_SOURCE_FAILURE_THRESHOLD = int(os.environ.get("NEWS_SOURCE_FAILURE_THRESHOLD", "3"))
+NEWS_SOURCE_COOLDOWN_MINUTES = int(os.environ.get("NEWS_SOURCE_COOLDOWN_MINUTES", "60"))
+# 뉴스 메시지에 감성 점수 표기 여부와, 관심종목 부정 뉴스 경고 기준(-1~0).
+NEWS_SENTIMENT_ENABLED = _env_bool("NEWS_SENTIMENT_ENABLED", "true")
+NEWS_NEGATIVE_ALERT_THRESHOLD = float(os.environ.get("NEWS_NEGATIVE_ALERT_THRESHOLD", "-0.6"))
+NEWS_LOG_RETENTION_DAYS = int(os.environ.get("NEWS_LOG_RETENTION_DAYS", "3"))
 # 한 주기에 처리할 관심종목 수. 0 이하면 전체를 한 번에 처리(기존 동작).
 # 전체 종목을 매 주기 일괄 요청/번역하지 않고 여러 주기에 나눠 회전 처리해 부하를 분산한다.
 STOCK_NEWS_BATCH_SIZE = int(os.environ.get("STOCK_NEWS_BATCH_SIZE", "3"))
@@ -84,6 +126,56 @@ RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
         float(os.environ.get("RESEARCH_REMOVE_RELEVANCE_THRESHOLD", "0.35")),
     ),
 )
+# 시장뷰 분석 강화: bull/bear 검증 패스, 분석 이력 메모리
+RESEARCH_VERIFICATION_ENABLED = _env_bool("RESEARCH_VERIFICATION_ENABLED", "true")
+RESEARCH_VERIFICATION_PROMPT_FILE = PROMPT_DIR / "market_research_verify_ko.txt"
+RESEARCH_HISTORY_LIMIT = int(os.environ.get("RESEARCH_HISTORY_LIMIT", "5"))
+# 강세 섹터 구성종목을 리서치 후보군에 추가
+RESEARCH_SECTOR_CANDIDATES_ENABLED = _env_bool("RESEARCH_SECTOR_CANDIDATES_ENABLED", "true")
+RESEARCH_SECTOR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_SECTOR_CANDIDATE_LIMIT", "10"))
+# 동화순 问财 자연어 스크리닝(비공식 API, pywencai 별도 설치 필요)
+WENCAI_ENABLED = _env_bool("WENCAI_ENABLED", "false")
+WENCAI_CANDIDATE_LIMIT = int(os.environ.get("WENCAI_CANDIDATE_LIMIT", "10"))
+
+# 정량 컨텍스트(시세·자금흐름·섹터·인기순위·涨停·용호방)
+QUANT_CONTEXT_ENABLED = _env_bool("QUANT_CONTEXT_ENABLED", "true")
+QUANT_CACHE_TTL_MINUTES = int(os.environ.get("QUANT_CACHE_TTL_MINUTES", "10"))
+QUANT_SECTOR_TOP_N = int(os.environ.get("QUANT_SECTOR_TOP_N", "5"))
+
+# 모닝/마감 브리핑과 주간 성적표(호스트 현지 시각 기준 cron)
+BRIEFING_MORNING_ENABLED = _env_bool("BRIEFING_MORNING_ENABLED", "true")
+BRIEFING_MORNING_HOUR = int(os.environ.get("BRIEFING_MORNING_HOUR", "8"))
+BRIEFING_MORNING_MINUTE = int(os.environ.get("BRIEFING_MORNING_MINUTE", "50"))
+BRIEFING_EVENING_ENABLED = _env_bool("BRIEFING_EVENING_ENABLED", "true")
+BRIEFING_EVENING_HOUR = int(os.environ.get("BRIEFING_EVENING_HOUR", "17"))
+BRIEFING_EVENING_MINUTE = int(os.environ.get("BRIEFING_EVENING_MINUTE", "40"))
+BRIEFING_LLM_ENABLED = _env_bool("BRIEFING_LLM_ENABLED", "true")
+BRIEFING_NEWS_MAX_ITEMS = int(os.environ.get("BRIEFING_NEWS_MAX_ITEMS", "5"))
+BRIEFING_PROMPT_FILE = PROMPT_DIR / "briefing_ko.txt"
+SCORECARD_ENABLED = _env_bool("SCORECARD_ENABLED", "true")
+SCORECARD_DAY_OF_WEEK = os.environ.get("SCORECARD_DAY_OF_WEEK", "sat")
+SCORECARD_HOUR = int(os.environ.get("SCORECARD_HOUR", "10"))
+SCORECARD_LOOKBACK_DAYS = int(os.environ.get("SCORECARD_LOOKBACK_DAYS", "30"))
+
+
+def _parse_allowed_chat_ids() -> frozenset[int]:
+    raw = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
+    ids: set[int] = set()
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            ids.add(int(chunk))
+        except ValueError:
+            logging.getLogger(__name__).warning(
+                "ALLOWED_CHAT_IDS에 숫자가 아닌 값이 있어 무시합니다: %s", chunk
+            )
+    return frozenset(ids)
+
+
+# 비어 있으면 모두 허용(기존 동작). 채우면 해당 chat_id에서만 명령을 받는다.
+ALLOWED_CHAT_IDS = _parse_allowed_chat_ids()
 HELP_TEXT = (
     "<b>사용 가능한 명령어</b>\n\n"
     "/start — 봇 소개와 사용 가능한 경로 보기\n"
@@ -94,6 +186,9 @@ HELP_TEXT = (
     "/research set 리서치주제 — 리서치 주제 저장\n"
     "/research run — 최근 뉴스 기준 리서치 실행\n"
     "/research clear — 리서치 주제 삭제\n"
+    "/briefing morning — 모닝 브리핑 즉시 실행\n"
+    "/briefing evening — 마감 브리핑 즉시 실행\n"
+    "/briefing scorecard — 시장뷰 성적표 즉시 실행\n"
     "/stockdb build — 종목 코드·이름 목록 갱신\n"
     "/stockdb enrich — EODHD로 시총·업종 보강\n"
     "/system — 시스템 상태 보기\n"

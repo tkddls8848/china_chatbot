@@ -17,8 +17,9 @@ class MarketViewError(RuntimeError):
 
 
 class MarketViewManager:
-    def __init__(self, file_path: Path):
+    def __init__(self, file_path: Path, history_limit: int = 5):
         self._file_path = file_path
+        self._history_limit = max(1, history_limit)
         self._data: dict[str, Any] = {}
         self._load()
 
@@ -37,7 +38,7 @@ class MarketViewManager:
             self._persist()
 
     def _default_data(self) -> dict[str, Any]:
-        return {SIGHT_KEY: None, "updated_at": None, "last_result": None}
+        return {SIGHT_KEY: None, "updated_at": None, "last_result": None, "history": []}
 
     def _persist(self) -> None:
         self._file_path.write_text(
@@ -66,7 +67,35 @@ class MarketViewManager:
 
     def save_result(self, result: dict[str, Any]) -> None:
         self._data["last_result"] = result
+        history = self._data.get("history")
+        if not isinstance(history, list):
+            history = []
+        history.append(result)
+        self._data["history"] = history[-self._history_limit :]
         self._persist()
+
+    def get_history_summaries(self) -> list[dict[str, Any]]:
+        """이전 분석의 압축 요약. 다음 분석 프롬프트에 맥락으로 주입한다."""
+        history = self._data.get("history")
+        if not isinstance(history, list):
+            return []
+        summaries: list[dict[str, Any]] = []
+        for result in history:
+            if not isinstance(result, dict):
+                continue
+            actions = [
+                {"ticker": item.get("ticker"), "action": item.get("action")}
+                for item in result.get("actions", [])
+                if isinstance(item, dict) and item.get("action") in ("add", "remove")
+            ]
+            summaries.append(
+                {
+                    "generated_at": result.get("generated_at"),
+                    "summary": str(result.get("summary") or "")[:300],
+                    "actions": actions,
+                }
+            )
+        return summaries
 
 
 class MarketViewAnalyzer:
@@ -80,6 +109,8 @@ class MarketViewAnalyzer:
         prompt_file: Path,
         num_gpu: int = 0,
         remove_relevance_threshold: float = 0.35,
+        verification_enabled: bool = False,
+        verification_prompt_file: Path | None = None,
     ):
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -89,6 +120,10 @@ class MarketViewAnalyzer:
         self._num_gpu = num_gpu
         self._remove_relevance_threshold = remove_relevance_threshold
         self._prompt = prompt_file.read_text(encoding="utf-8")
+        self._verification_prompt = ""
+        if verification_prompt_file is not None and verification_prompt_file.exists():
+            self._verification_prompt = verification_prompt_file.read_text(encoding="utf-8")
+        self._verification_enabled = verification_enabled and bool(self._verification_prompt)
 
     def set_num_gpu(self, num_gpu: int) -> None:
         """런타임에 Ollama num_gpu를 변경한다(-1=자동, 0=CPU, N=레이어). 다음 요청부터 반영."""
@@ -100,6 +135,8 @@ class MarketViewAnalyzer:
         watchlist: dict[str, str],
         news_items: list[dict[str, Any]],
         candidate_universe: list[dict[str, Any]] | None = None,
+        quant_context: dict[str, Any] | None = None,
+        previous_analyses: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not self._enabled:
             raise MarketViewError("market view analysis is disabled")
@@ -111,16 +148,110 @@ class MarketViewAnalyzer:
             "candidate_universe": candidate_universe or [],
             "remove_relevance_threshold": self._remove_relevance_threshold,
         }
+        if quant_context:
+            payload["quant_context"] = quant_context
+        if previous_analyses:
+            payload["previous_analyses"] = previous_analyses
         raw = self._request_analysis(payload)
-        return self._parse_analysis(raw)
+        result = self._parse_analysis(raw)
+        if self._verification_enabled:
+            result = self._verify_actions(market_view, result, news_items, quant_context)
+        return result
 
-    def _request_analysis(self, payload: dict[str, Any]) -> str:
+    def _verify_actions(
+        self,
+        market_view: str,
+        result: dict[str, Any],
+        news_items: list[dict[str, Any]],
+        quant_context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """추가/삭제 후보에 bull/bear 근거를 붙이고 기각(drop) 후보를 걸러낸다.
+
+        검증 호출이 실패하면 1차 결과를 그대로 반환한다(fail-open).
+        """
+        targets = [
+            item for item in result.get("actions", [])
+            if item.get("action") in ("add", "remove")
+        ]
+        if not targets:
+            return result
+
+        payload: dict[str, Any] = {
+            "market_view": market_view,
+            "proposals": [
+                {
+                    "ticker": item.get("ticker"),
+                    "name": item.get("name"),
+                    "action": item.get("action"),
+                    "reason": item.get("reason"),
+                }
+                for item in targets
+            ],
+            "news_titles": [
+                str(item.get("title") or "")[:120] for item in news_items
+            ],
+        }
+        if quant_context:
+            payload["quant_context"] = quant_context
+
+        try:
+            raw = self._request_analysis(payload, prompt=self._verification_prompt)
+            data = json.loads(self._extract_json_object(raw))
+            verdicts = data.get("verdicts")
+            if not isinstance(verdicts, list):
+                raise MarketViewError("verification JSON verdicts must be a list")
+        except Exception as e:
+            logger.warning("[VERIFY] 검증 패스 실패, 1차 결과 유지: %s", e)
+            return result
+
+        verdict_by_ticker: dict[str, dict[str, Any]] = {}
+        for verdict in verdicts:
+            if isinstance(verdict, dict) and isinstance(verdict.get("ticker"), str):
+                verdict_by_ticker[verdict["ticker"].strip()] = verdict
+
+        kept_actions: list[dict[str, Any]] = []
+        dropped: list[dict[str, Any]] = []
+        for item in result.get("actions", []):
+            if item.get("action") not in ("add", "remove"):
+                kept_actions.append(item)
+                continue
+            verdict = verdict_by_ticker.get(str(item.get("ticker") or "").strip())
+            if verdict is None:
+                kept_actions.append(item)
+                continue
+            item["bull_case"] = str(verdict.get("bull_case") or "").strip()
+            item["bear_case"] = str(verdict.get("bear_case") or "").strip()
+            try:
+                item["verification_confidence"] = min(
+                    1.0, max(0.0, float(verdict.get("confidence")))
+                )
+            except (TypeError, ValueError):
+                pass
+            if str(verdict.get("verdict") or "").strip().lower() == "drop":
+                dropped.append(
+                    {
+                        "ticker": item.get("ticker"),
+                        "name": item.get("name"),
+                        "action": item.get("action"),
+                        "reason": str(verdict.get("bear_case") or verdict.get("reason") or "").strip(),
+                    }
+                )
+                continue
+            kept_actions.append(item)
+
+        result["actions"] = kept_actions
+        if dropped:
+            result["verification_dropped"] = dropped
+        result["verified"] = True
+        return result
+
+    def _request_analysis(self, payload: dict[str, Any], prompt: str | None = None) -> str:
         response = requests.post(
             f"{self._base_url}/api/chat",
             json={
                 "model": self._model,
                 "messages": [
-                    {"role": "system", "content": self._prompt},
+                    {"role": "system", "content": prompt or self._prompt},
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                     {"role": "assistant", "content": "{"},
                 ],

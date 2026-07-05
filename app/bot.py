@@ -17,15 +17,46 @@ from handlers import (
     cmd_system,
     configure_telegram_menu,
 )
+from briefing import (
+    TradeCalendar,
+    cmd_briefing,
+    send_evening_briefing,
+    send_morning_briefing,
+    send_weekly_scorecard,
+)
+from core.access import restricted
 from core.config import (
     BASE_DIR,
+    BRIEFING_EVENING_ENABLED,
+    BRIEFING_EVENING_HOUR,
+    BRIEFING_EVENING_MINUTE,
+    BRIEFING_LLM_ENABLED,
+    BRIEFING_MORNING_ENABLED,
+    BRIEFING_MORNING_HOUR,
+    BRIEFING_MORNING_MINUTE,
+    BRIEFING_PROMPT_FILE,
+    NEWS_GLOBAL_SOURCE_KEYS,
+    NEWS_LOG_FILE,
+    NEWS_LOG_RETENTION_DAYS,
+    NEWS_RSS_FEEDS,
+    NEWS_SOURCE_COOLDOWN_MINUTES,
+    NEWS_SOURCE_FAILURE_THRESHOLD,
     PROMPT_DIR,
+    QUANT_CACHE_TTL_MINUTES,
+    QUANT_CONTEXT_ENABLED,
+    QUANT_SECTOR_TOP_N,
     RESEARCH_ANALYSIS_NUM_PREDICT,
     RESEARCH_ANALYSIS_PROMPT_FILE,
+    RESEARCH_HISTORY_LIMIT,
     RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
     RESEARCH_STATE_FILE,
+    RESEARCH_VERIFICATION_ENABLED,
+    RESEARCH_VERIFICATION_PROMPT_FILE,
     RUNTIME_CONFIG_FILE,
     SCHEDULER_INTERVAL_MINUTES,
+    SCORECARD_DAY_OF_WEEK,
+    SCORECARD_ENABLED,
+    SCORECARD_HOUR,
     SENT_IDS_FILE,
     SENT_NEWS_MAX_IDS,
     SENT_NEWS_RETENTION_DAYS,
@@ -33,16 +64,18 @@ from core.config import (
     STOCK_DB_FILE,
     TELEGRAM_BOT_TOKEN,
     TRANSLATION_CONCURRENCY,
+    WATCHLIST_EVENTS_FILE,
     WATCHLIST_FILE,
 )
+from news import NewsSourceRegistry, build_source_specs
 from news.pipeline import fetch_all, refresh_stock_db
-from llm import MarketViewAnalyzer, MarketViewManager
+from llm import BriefingWriter, MarketViewAnalyzer, MarketViewManager
 from research import cmd_research, collect_global_market_news_items
-from state import SentNewsTracker
-from stocks import StockDatabase
+from state import NewsLog, SentNewsTracker
+from stocks import QuoteService, StockDatabase
 from core.system_control import SystemControlManager
 from llm import TranslationService
-from watchlist import WatchlistManager, cmd_add, cmd_list, cmd_menu
+from watchlist import WatchlistEventLog, WatchlistManager, cmd_add, cmd_list, cmd_menu
 
 logger = logging.getLogger(__name__)
 _SINGLE_INSTANCE_LOCK = None
@@ -91,14 +124,30 @@ def main() -> None:
     stock_db = StockDatabase(cache_file=STOCK_DB_FILE, enabled=STOCK_DB_ENABLED)
     stock_db.load_or_build()
 
+    news_registry = NewsSourceRegistry(
+        build_source_specs(NEWS_GLOBAL_SOURCE_KEYS, NEWS_RSS_FEEDS),
+        failure_threshold=NEWS_SOURCE_FAILURE_THRESHOLD,
+        cooldown_minutes=NEWS_SOURCE_COOLDOWN_MINUTES,
+    )
+    quote_service = QuoteService(
+        enabled=QUANT_CONTEXT_ENABLED,
+        cache_ttl_minutes=QUANT_CACHE_TTL_MINUTES,
+        sector_top_n=QUANT_SECTOR_TOP_N,
+    )
+
     app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE, SENT_NEWS_MAX_IDS, SENT_NEWS_RETENTION_DAYS)
     app.bot_data["watchlist_manager"]    = WatchlistManager(WATCHLIST_FILE)
-    app.bot_data["market_view_manager"]  = MarketViewManager(RESEARCH_STATE_FILE)
+    app.bot_data["market_view_manager"]  = MarketViewManager(RESEARCH_STATE_FILE, history_limit=RESEARCH_HISTORY_LIMIT)
     app.bot_data["research_pending"]     = {}
     app.bot_data["stock_news_first_run"] = True
     app.bot_data["stock_news_cursor"]    = 0
     app.bot_data["global_news_cursor"]   = 0
     app.bot_data["stock_db"]             = stock_db
+    app.bot_data["news_registry"]        = news_registry
+    app.bot_data["quote_service"]        = quote_service
+    app.bot_data["news_log"]             = NewsLog(NEWS_LOG_FILE, NEWS_LOG_RETENTION_DAYS)
+    app.bot_data["watchlist_events"]     = WatchlistEventLog(WATCHLIST_EVENTS_FILE)
+    app.bot_data["trade_calendar"]       = TradeCalendar()
     ollama_num_gpu = int(os.environ.get("OLLAMA_NUM_GPU", "0"))
     app.bot_data["translator"]           = TranslationService(
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
@@ -126,9 +175,37 @@ def main() -> None:
         prompt_file=RESEARCH_ANALYSIS_PROMPT_FILE,
         num_gpu=ollama_num_gpu,
         remove_relevance_threshold=RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
+        verification_enabled=RESEARCH_VERIFICATION_ENABLED,
+        verification_prompt_file=RESEARCH_VERIFICATION_PROMPT_FILE,
+    )
+    app.bot_data["briefing_writer"] = BriefingWriter(
+        base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+        model=os.environ.get(
+            "BRIEFING_MODEL",
+            os.environ.get(
+                "RESEARCH_ANALYSIS_MODEL",
+                os.environ.get("TRANSLATION_MODEL", "gemma4"),
+            ),
+        ),
+        enabled=BRIEFING_LLM_ENABLED,
+        timeout=int(
+            os.environ.get(
+                "BRIEFING_TIMEOUT",
+                os.environ.get("TRANSLATION_TIMEOUT", "120"),
+            )
+        ),
+        prompt_file=BRIEFING_PROMPT_FILE,
+        num_gpu=ollama_num_gpu,
     )
     app.bot_data["translate_semaphore"]  = asyncio.Semaphore(TRANSLATION_CONCURRENCY)
-    app.bot_data["research_news_collector"] = collect_global_market_news_items
+
+    # 리서치·브리핑 뉴스 수집기는 파이프라인과 같은 레지스트리를 공유한다.
+    async def _collect_research_news(translator, translate_semaphore, **kwargs):
+        return await collect_global_market_news_items(
+            translator, translate_semaphore, news_registry, **kwargs
+        )
+
+    app.bot_data["research_news_collector"] = _collect_research_news
 
     # 런타임 시스템 제어(텔레그램에서 GPU 사용 토글). 영속화된 값이 있으면
     # env 기본값 대신 그 값을 두 LLM 서비스에 적용한다.
@@ -140,6 +217,7 @@ def main() -> None:
     )
     system_control.register_consumer(app.bot_data["translator"].set_num_gpu)
     system_control.register_consumer(app.bot_data["market_view_analyzer"].set_num_gpu)
+    system_control.register_consumer(app.bot_data["briefing_writer"].set_num_gpu)
     app.bot_data["system_control"] = system_control
     logger.info(
         "[System] GPU 가속 초기 상태: %s (num_gpu=%d)",
@@ -147,15 +225,17 @@ def main() -> None:
         system_control.num_gpu,
     )
 
-    app.add_handler(CommandHandler("start",   cmd_start))
-    app.add_handler(CommandHandler("help",    cmd_help))
-    app.add_handler(CommandHandler("menu",    cmd_menu))
-    app.add_handler(CommandHandler("add",     cmd_add))
-    app.add_handler(CommandHandler("list",    cmd_list))
-    app.add_handler(CommandHandler("research", cmd_research))
-    app.add_handler(CommandHandler("stockdb", cmd_stockdb))
-    app.add_handler(CommandHandler("system",  cmd_system))
-    app.add_handler(CallbackQueryHandler(callback_handler))
+    # ALLOWED_CHAT_IDS가 설정되어 있으면 restricted가 그 외 채팅을 무시한다.
+    app.add_handler(CommandHandler("start",   restricted(cmd_start)))
+    app.add_handler(CommandHandler("help",    restricted(cmd_help)))
+    app.add_handler(CommandHandler("menu",    restricted(cmd_menu)))
+    app.add_handler(CommandHandler("add",     restricted(cmd_add)))
+    app.add_handler(CommandHandler("list",    restricted(cmd_list)))
+    app.add_handler(CommandHandler("research", restricted(cmd_research)))
+    app.add_handler(CommandHandler("briefing", restricted(cmd_briefing)))
+    app.add_handler(CommandHandler("stockdb", restricted(cmd_stockdb)))
+    app.add_handler(CommandHandler("system",  restricted(cmd_system)))
+    app.add_handler(CallbackQueryHandler(restricted(callback_handler)))
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -175,13 +255,47 @@ def main() -> None:
         args=[stock_db],
         id="refresh_stock_db",
     )
+    if BRIEFING_MORNING_ENABLED:
+        scheduler.add_job(
+            send_morning_briefing,
+            trigger="cron",
+            hour=BRIEFING_MORNING_HOUR,
+            minute=BRIEFING_MORNING_MINUTE,
+            args=[app],
+            id="morning_briefing",
+            max_instances=1,
+            coalesce=True,
+        )
+    if BRIEFING_EVENING_ENABLED:
+        scheduler.add_job(
+            send_evening_briefing,
+            trigger="cron",
+            hour=BRIEFING_EVENING_HOUR,
+            minute=BRIEFING_EVENING_MINUTE,
+            args=[app],
+            id="evening_briefing",
+            max_instances=1,
+            coalesce=True,
+        )
+    if SCORECARD_ENABLED:
+        scheduler.add_job(
+            send_weekly_scorecard,
+            trigger="cron",
+            day_of_week=SCORECARD_DAY_OF_WEEK,
+            hour=SCORECARD_HOUR,
+            args=[app],
+            id="weekly_scorecard",
+            max_instances=1,
+            coalesce=True,
+        )
     scheduler.start()
 
     logger.info(
-        "봇 시작됨. %s분마다 재련사(財联社) + 푸투니우니우(富途牛牛) + 관심종목 뉴스 전송.",
+        "봇 시작됨. %s분마다 전역 뉴스(%s) + 관심종목 뉴스 전송.",
         SCHEDULER_INTERVAL_MINUTES,
+        ", ".join(spec.key for spec in news_registry.specs) or "없음",
     )
-    logger.info("명령어: /start /help /menu /add /list /research /stockdb /system")
+    logger.info("명령어: /start /help /menu /add /list /research /briefing /stockdb /system")
     app.run_polling()
 
 

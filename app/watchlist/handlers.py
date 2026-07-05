@@ -6,6 +6,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from stocks import StockDatabase
+from watchlist.events import record_watchlist_event
 from watchlist.keyboards import build_list_keyboard
 from watchlist.manager import WatchlistManager
 
@@ -71,6 +72,7 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await wm.add(code, name)
+    await record_watchlist_event(context.bot_data, "add", code, name, reason="수동 추가")
     await update.message.reply_text(f"추가됨: {name} ({code})\n/menu 로 목록 확인")
     logger.info("[WATCHLIST] 추가 (DB): %s %s", code, name)
 
@@ -106,6 +108,7 @@ async def handle_watchlist_callback(query, context: ContextTypes.DEFAULT_TYPE, d
         wm: WatchlistManager = context.bot_data["watchlist_manager"]
         code = data.split(":", 1)[1]
         name = await wm.remove(code) or code
+        await record_watchlist_event(context.bot_data, "remove", code, name, reason="수동 삭제")
         logger.info("[WATCHLIST] 삭제: %s %s", code, name)
         watchlist = await wm.get_all()
         if not watchlist:

@@ -7,7 +7,9 @@
 - 본문은 핵심만 2~4문장으로 간결하게 번역한다.
 - 개별 종목 뉴스에서는 관련종목을 추출하지 않는다.
 - mentioned_stocks는 항상 빈 배열로 출력한다.
+- sentiment는 이 뉴스가 해당 종목에 주는 영향을 -1.0(매우 부정)~1.0(매우 긍정) 사이 숫자로 평가한다. 중립이면 0.
+- impact는 해당 종목 주가에 미칠 영향 크기를 high, medium, low 중 하나로 평가한다.
 - 설명 없이 JSON만 출력한다.
 
 출력:
-{"title": "한국어 제목", "content": "한국어 본문", "mentioned_stocks": []}
+{"title": "한국어 제목", "content": "한국어 본문", "mentioned_stocks": [], "sentiment": 0.5, "impact": "high"}

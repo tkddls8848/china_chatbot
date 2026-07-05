@@ -8,7 +8,9 @@
 - 본문에 명시적으로 언급된 홍콩·상해·심천 상장 기업이 있으면 종목코드를 mentioned_stocks에 포함한다.
 - mentioned_stocks는 본문에서 직접 언급된 종목만 포함한다. 추론이나 연관 종목은 포함하지 않는다.
 - 종목코드가 불확실하면 mentioned_stocks를 빈 배열로 출력한다.
+- sentiment는 이 뉴스가 관련 종목·시장에 주는 영향을 -1.0(매우 부정)~1.0(매우 긍정) 사이 숫자로 평가한다. 중립이면 0.
+- impact는 주가에 미칠 영향 크기를 high, medium, low 중 하나로 평가한다.
 - 설명 없이 JSON만 출력한다.
 
 출력:
-{"title": "한국어 제목", "content": "한국어 본문", "mentioned_stocks": ["09988", "600519"]}
+{"title": "한국어 제목", "content": "한국어 본문", "mentioned_stocks": ["09988", "600519"], "sentiment": -0.3, "impact": "low"}
