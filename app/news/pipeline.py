@@ -34,8 +34,7 @@ from news.utils import (
     select_rotating_batch,
     translate_article,
 )
-from state import SentNewsTracker
-from state.news_log import NewsLog
+from state import PredictionLog, SentNewsTracker
 from stocks import StockDatabase
 from llm.translator import TranslationService
 from watchlist import WatchlistManager
@@ -79,7 +78,7 @@ async def process_global_source(
     translate_semaphore: asyncio.Semaphore,
     chat_id: str,
     stock_db: StockDatabase,
-    news_log: NewsLog | None,
+    prediction_log: PredictionLog | None,
     watchlist: dict[str, str],
 ) -> None:
     try:
@@ -156,8 +155,8 @@ async def process_global_source(
         try:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
             await tracker.confirm(article_id)
-            if news_log is not None:
-                await news_log.record(
+            if prediction_log is not None and translated.sentiment is not None:
+                await prediction_log.record(
                     source=spec.key,
                     title=translated.title,
                     sentiment=translated.sentiment,
@@ -184,7 +183,7 @@ async def fetch_stock_news(
     if not watchlist:
         return
 
-    news_log: NewsLog | None = bot_data.get("news_log")
+    prediction_log: PredictionLog | None = bot_data.get("prediction_log")
 
     if bot_data.get("stock_news_first_run", True):
         stock_list = "\n".join(
@@ -303,8 +302,8 @@ async def fetch_stock_news(
                         parse_mode="HTML",
                     )
                     await tracker.confirm(article_id)
-                    if news_log is not None:
-                        await news_log.record(
+                    if prediction_log is not None and translated.sentiment is not None:
+                        await prediction_log.record(
                             source="stock",
                             title=translated.title,
                             sentiment=translated.sentiment,
@@ -335,7 +334,7 @@ async def fetch_all(app: Application) -> None:
     translate_semaphore: asyncio.Semaphore = app.bot_data["translate_semaphore"]
     stock_db: StockDatabase = app.bot_data["stock_db"]
     registry: NewsSourceRegistry = app.bot_data["news_registry"]
-    news_log: NewsLog | None = app.bot_data.get("news_log")
+    prediction_log: PredictionLog | None = app.bot_data.get("prediction_log")
     watchlist = await wm.get_all()
 
     # 쿨다운 중이 아닌 소스만 회전 처리한다. 쿨다운이 끝난 소스는 자동 복귀.
@@ -365,7 +364,7 @@ async def fetch_all(app: Application) -> None:
             translate_semaphore,
             TELEGRAM_CHAT_ID,
             stock_db,
-            news_log,
+            prediction_log,
             watchlist,
         )
 

@@ -4,15 +4,16 @@
 텔레그램을 시스템 제어 대시보드로 쓰기 위한 단일 진입점이며, 이후 다른
 런타임 설정도 이 매니저로 확장한다.
 
+설정의 원본은 `.env`(OLLAMA_NUM_GPU 등)다. 여기서의 변경은 세션 한정으로,
+영속화하지 않으며 재시작하면 `.env` 값으로 되돌아간다.
+
 Ollama의 num_gpu 의미:
   - -1 → GPU 자동 (가능한 레이어를 전부 오프로딩)
   -  0 → CPU 전용
   -  N>0 → GPU에 올릴 레이어 수 (모델 레이어 수로 클램프됨)
 """
 
-import json
 import logging
-from pathlib import Path
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -30,15 +31,13 @@ def _normalize(value: Any) -> int:
 
 
 class SystemControlManager:
-    """런타임 시스템 설정을 보유·영속화하고 소비자(서비스)에 전파한다."""
+    """런타임 시스템 설정을 세션 한정으로 보유하고 소비자(서비스)에 전파한다."""
 
     def __init__(
         self,
-        file_path: Path,
         default_num_gpu: int,
         gpu_on_value: int = DEFAULT_GPU_ON_VALUE,
     ):
-        self._file_path = file_path
         self._num_gpu = _normalize(default_num_gpu)
         # "켜짐" 복원값: env 기본이 GPU 사용(≠0)이면 그 값을, 아니면 인자값을 쓴다.
         if self._num_gpu != 0:
@@ -46,32 +45,6 @@ class SystemControlManager:
         else:
             self._gpu_on_value = _normalize(gpu_on_value) or DEFAULT_GPU_ON_VALUE
         self._consumers: list[Callable[[int], None]] = []
-        self._load()
-
-    # ── 영속화 ────────────────────────────────────────
-    def _load(self) -> None:
-        if not self._file_path.exists():
-            self._persist()
-            return
-        try:
-            data: dict[str, Any] = json.loads(self._file_path.read_text(encoding="utf-8"))
-            self._num_gpu = _normalize(data.get("num_gpu", self._num_gpu))
-            on_value = _normalize(data.get("gpu_on_value", self._gpu_on_value))
-            self._gpu_on_value = on_value or DEFAULT_GPU_ON_VALUE
-        except Exception as e:
-            logger.warning("[System] 런타임 설정 로드 실패, 기본값 사용: %s", e)
-            self._persist()
-
-    def _persist(self) -> None:
-        self._file_path.parent.mkdir(parents=True, exist_ok=True)
-        self._file_path.write_text(
-            json.dumps(
-                {"num_gpu": self._num_gpu, "gpu_on_value": self._gpu_on_value},
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
 
     # ── 소비자 연동 ───────────────────────────────────
     def register_consumer(self, setter: Callable[[int], None]) -> None:
@@ -122,7 +95,6 @@ class SystemControlManager:
             if self._num_gpu != 0:
                 self._gpu_on_value = self._num_gpu
             self._num_gpu = 0
-        self._persist()
         self._notify()
 
     def set_gpu_layers(self, layers: int) -> None:
@@ -130,5 +102,4 @@ class SystemControlManager:
         if layers > 0:
             self._gpu_on_value = layers
         self._num_gpu = layers
-        self._persist()
         self._notify()

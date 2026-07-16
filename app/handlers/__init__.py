@@ -3,17 +3,21 @@
 from handlers.commands import (
     callback_handler,
     cmd_help,
+    cmd_score,
     cmd_start,
     cmd_stockdb,
     cmd_system,
+    cmd_view,
     configure_telegram_menu,
 )
 
 __all__ = [
     "callback_handler",
     "cmd_help",
+    "cmd_score",
     "cmd_start",
     "cmd_stockdb",
     "cmd_system",
+    "cmd_view",
     "configure_telegram_menu",
 ]

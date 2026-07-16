@@ -68,78 +68,7 @@ def _fetch_hkex_file(url: str) -> bytes:
     return response.content
 
 
-# ── EODHD 관련 함수 ───────────────────────────────────────────────────────────
-
-_EODHD_BASE = "https://eodhd.com/api"
-
-_MARKET_TO_EODHD_EXCHANGE: dict[str, str] = {
-    "SH": "SHG",
-    "STAR": "SHG",
-    "SZ": "SHE",
-    "CHI": "SHE",
-    "HK": "HK",
-}
-
-
-def _eodhd_exchange(market: str) -> str:
-    return _MARKET_TO_EODHD_EXCHANGE.get(market, "")
-
-
-def _eodhd_code(code: str, market: str) -> str:
-    """앱 내부 코드 → EODHD 심볼 코드 (거래소 접미사 제외)."""
-    if market == "HK":
-        return f"{int(code):04d}"
-    return code
-
-
-@_retry_on_network
-def _fetch_eodhd_fundamentals(symbol: str, exchange: str, token: str) -> dict:
-    resp = requests.get(
-        f"{_EODHD_BASE}/fundamentals/{symbol}.{exchange}",
-        params={"api_token": token, "fmt": "json"},
-        timeout=20,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _parse_eodhd_entry(item: dict) -> tuple[str, str, float, str]:
-    """(sector, industry, market_cap, currency) 추출. market_cap은 로컬 통화 기준."""
-    general = item.get("General") or item
-    sector = str(general.get("Sector") or "").strip()
-    industry = str(general.get("Industry") or "").strip()
-    currency = str(general.get("CurrencyCode") or general.get("Currency") or "").upper()
-
-    market_cap = 0.0
-    for src in (general, item.get("Highlights") or {}, item):
-        for key in ("MarketCapitalization", "marketCapitalization", "market_cap"):
-            raw = src.get(key)
-            if raw:
-                try:
-                    v = float(raw)
-                    if v > 0:
-                        market_cap = v
-                        break
-                except (TypeError, ValueError):
-                    pass
-        if market_cap > 0:
-            break
-
-    return sector, industry, market_cap, currency
-
-
-def _fetch_hkd_cny_rate() -> float:
-    try:
-        df = ak.currency_latest(symbol="HKDCNY")
-        rate = float(df.iloc[0, -1])
-        if 0.5 < rate < 2.0:
-            return rate
-    except Exception as e:
-        logger.debug("[StockDB] HKD/CNY 환율 조회 실패, 0.92 사용: %s", e)
-    return 0.92
-
-
-# ── 기존 유틸리티 함수 ────────────────────────────────────────────────────
+# ── 종목 분류·정규화 유틸리티 ────────────────────────────────────────────
 
 def _classify_market(code: str) -> str:
     if len(code) <= 5:

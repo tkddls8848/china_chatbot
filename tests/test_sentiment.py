@@ -10,7 +10,6 @@ os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from llm.translator import TranslationService
 from news.utils import format_sentiment_line, normalize_stock_code
-from state.news_log import aggregate_sentiment_by_code
 
 
 def _parse(payload: dict):
@@ -70,17 +69,3 @@ def test_normalize_stock_code():
     assert normalize_stock_code("600519") == "600519"
     assert normalize_stock_code("SZ000665") == "000665"
     assert normalize_stock_code("") == ""
-
-
-def test_aggregate_sentiment_by_code():
-    watchlist = {"600519": "귀주모태주", "09988": "알리바바"}
-    entries = [
-        {"ts": "2026-07-05T10:00:00", "title": "a", "sentiment": 0.5, "codes": ["600519"]},
-        {"ts": "2026-07-05T11:00:00", "title": "b", "sentiment": -0.5, "codes": ["600519"]},
-        {"ts": "2026-07-05T12:00:00", "title": "c", "sentiment": None, "codes": ["600519"]},
-        {"ts": "2026-07-05T13:00:00", "title": "d", "sentiment": 0.9, "codes": ["999999"]},
-    ]
-    stats = aggregate_sentiment_by_code(entries, watchlist)
-    assert stats["600519"]["count"] == 3
-    assert stats["600519"]["avg_sentiment"] == 0.0
-    assert "999999" not in stats

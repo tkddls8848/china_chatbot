@@ -5,23 +5,16 @@
 
 import json
 import logging
-import os
-import time
 from pathlib import Path
 from typing import Callable
 
 from stocks.sources import (
     _classify_market,
-    _eodhd_code,
-    _eodhd_exchange,
     _fetch_a_code_name,
-    _fetch_eodhd_fundamentals,
     _fetch_hk_spot,
-    _fetch_hkd_cny_rate,
     _fetch_northbound_individual_a_codes,
     _is_foreign_individual_a_share_fallback,
     _is_foreign_individual_hk_security,
-    _parse_eodhd_entry,
     _stock_entry,
 )
 
@@ -125,96 +118,6 @@ class StockDatabase:
         self._db = db
         logger.info("[StockDB] DB 빌드 완료: 총 %d종목", len(db))
 
-    def enrich(self) -> None:
-        """EODHD API로 시가총액·업종·섹터를 보강하고 캐시에 저장한다.
-        EODHD_API_TOKEN 환경변수 필요. 봇 시작 시 자동 실행하지 않는다.
-        """
-        if not self._db:
-            logger.warning("[StockDB] DB가 비어있음, enrich 전에 load 또는 build 필요")
-            return
-
-        token = os.environ.get("EODHD_API_TOKEN", "").strip()
-        if not token:
-            logger.warning("[StockDB] EODHD_API_TOKEN 미설정, enrich 생략")
-            return
-
-        # 미보강 종목만 선별 (market_cap_cny 없는 것)
-        limit = int(os.environ.get("EODHD_ENRICH_LIMIT", "200"))
-        call_delay = float(os.environ.get("EODHD_ENRICH_DELAY", "0.5"))
-
-        targets = [
-            (code, entry)
-            for code, entry in self._db.items()
-            if not float(entry.get("market_cap_cny") or 0) > 0
-        ][:limit]
-
-        hkd_cny = _fetch_hkd_cny_rate()
-        total_unenriched = sum(
-            1 for e in self._db.values()
-            if not float(e.get("market_cap_cny") or 0) > 0
-        )
-        print(f"[StockDB] EODHD 보강 시작: {len(targets)}종목 조회 (전체 미보강 {total_unenriched}종목)")
-
-        # 개별 fundamentals 호출
-        fetch_results: dict[str, dict] = {}
-        failures = 0
-        for i, (code, entry) in enumerate(targets):
-            market = entry.get("market", "")
-            exchange = _eodhd_exchange(market)
-            if not exchange:
-                print(f"  [{i+1:>3}/{len(targets)}] {code} SKIP (exchange 없음)")
-                continue
-            symbol = _eodhd_code(code, market)
-            try:
-                data = _fetch_eodhd_fundamentals(symbol, exchange, token)
-                _sector, industry, market_cap, currency = _parse_eodhd_entry(data)
-                fetch_results[code] = {
-                    "industry": industry,
-                    "market_cap": market_cap, "currency": currency,
-                }
-                failures = 0
-                cap_str = f"{market_cap/1e8:.0f}억" if market_cap > 0 else "시총없음"
-                print(f"  [{i+1:>3}/{len(targets)}] {symbol}.{exchange} OK  {industry or '업종없음'} / {cap_str}")
-            except Exception as e:
-                failures += 1
-                print(f"  [{i+1:>3}/{len(targets)}] {symbol}.{exchange} FAIL({failures}) {type(e).__name__}: {e}")
-                if failures >= 5:
-                    print(f"  연속 5회 실패, 조회 중단")
-                    break
-            if i < len(targets) - 1:
-                time.sleep(call_delay)
-
-        print(f"[StockDB] EODHD 조회 완료: {len(fetch_results)}/{len(targets)}종목 성공")
-
-        # DB 주입
-        enriched = 0
-        for code, info in fetch_results.items():
-            entry = self._db.get(code)
-            if entry is None:
-                continue
-            market = entry.get("market", "")
-            industry = str(info.get("industry") or "")
-            raw_cap = float(info.get("market_cap") or 0)
-            currency = str(info.get("currency") or "").upper()
-
-            if raw_cap > 0:
-                market_cap_cny = raw_cap * hkd_cny if (market == "HK" and currency in ("", "HKD")) else raw_cap
-                enriched += 1
-            else:
-                market_cap_cny = float(entry.get("market_cap_cny") or 0)
-
-            entry["market_cap_cny"] = market_cap_cny
-            entry["industry"] = industry
-            entry["schema_version"] = "6"
-
-        self._cache_file.write_text(json.dumps(self._db, ensure_ascii=False), encoding="utf-8")
-
-        remaining = sum(
-            1 for e in self._db.values()
-            if not float(e.get("market_cap_cny") or 0) > 0
-        )
-        print(f"[StockDB] 보강 완료: {enriched}종목 시총 갱신, 잔여 미보강 {remaining}종목")
-
     def _load_existing_cache(self) -> dict[str, dict]:
         if not self._cache_file.exists():
             return {}
@@ -276,17 +179,3 @@ class StockDatabase:
 
     def get_all(self) -> dict[str, dict]:
         return self._db.copy()
-
-    def get_candidate_universe(self, limit: int | None = None) -> list[dict]:
-        items = [
-            {
-                "code": code,
-                "display_name": str(entry.get("display_name") or ""),
-                "cn_name": str(entry.get("cn_name") or entry.get("display_name") or ""),
-                "ko_name": str(entry.get("ko_name") or ""),
-                "market": str(entry.get("market") or ""),
-                "market_cap_cny": float(entry.get("market_cap_cny") or 0.0),
-            }
-            for code, entry in self._db.items()
-        ]
-        return items[:limit] if limit else items
