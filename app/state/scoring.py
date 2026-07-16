@@ -14,6 +14,7 @@ scripts/score_predictions.py CLI와 /score 텔레그램 핸들러가 공유한�
 
 import json
 import logging
+import re
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -48,7 +49,8 @@ def load_signals(log_path: Path, threshold: float) -> tuple[list[dict], int]:
             continue
         for code in entry.get("codes") or []:
             code = str(code).strip()
-            if code:
+            # 과거 로그에 섞인 미국 티커 등 형식 외 코드는 채점 대상이 아니다.
+            if re.fullmatch(r"\d{5,6}", code):
                 per_day[(code, ts.date())].append(sentiment)
 
     signals: list[dict] = []

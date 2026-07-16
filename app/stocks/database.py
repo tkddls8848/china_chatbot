@@ -179,3 +179,18 @@ class StockDatabase:
 
     def get_all(self) -> dict[str, dict]:
         return self._db.copy()
+
+    def get_candidate_universe(self, limit: int | None = None) -> list[dict]:
+        """리서치 후보 탐색용 종목 목록(코드·이름·시장·시총)."""
+        items = [
+            {
+                "code": code,
+                "display_name": str(entry.get("display_name") or ""),
+                "cn_name": str(entry.get("cn_name") or entry.get("display_name") or ""),
+                "ko_name": str(entry.get("ko_name") or ""),
+                "market": str(entry.get("market") or ""),
+                "market_cap_cny": float(entry.get("market_cap_cny") or 0.0),
+            }
+            for code, entry in self._db.items()
+        ]
+        return items[:limit] if limit else items

@@ -106,6 +106,23 @@ def normalize_stock_code(raw: Any) -> str:
     return digits.zfill(5) if len(digits) <= 5 else digits.zfill(6)
 
 
+_SIGNAL_CODE_RE = re.compile(r"\d{5,6}")
+
+
+def signal_codes(raw_codes: list | None) -> list[str]:
+    """신호 로그에 기록할 종목코드만 남긴다(정규화 후 5~6자리 숫자, 중복 제거).
+
+    LLM이 추출한 mentioned_stocks에는 미국 티커(JNJ.N, NVDA 등)처럼
+    A주·홍콩 코드 형식이 아닌 값이 섞일 수 있어 기록 전에 걸러낸다.
+    """
+    codes: list[str] = []
+    for raw in raw_codes or []:
+        code = normalize_stock_code(raw)
+        if _SIGNAL_CODE_RE.fullmatch(code) and code not in codes:
+            codes.append(code)
+    return codes
+
+
 def format_sentiment_line(sentiment: float | None, impact: str = "") -> str:
     """뉴스 메시지에 붙일 감성 한 줄. 감성 값이 없으면 빈 문자열."""
     from core.config import NEWS_SENTIMENT_ENABLED

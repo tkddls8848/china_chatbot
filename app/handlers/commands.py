@@ -23,6 +23,7 @@ from state.scoring import (
     load_signals,
     score_signals,
 )
+from research import handle_research_callback
 from stocks import StockDatabase
 from core.system_control import SystemControlManager
 from watchlist import handle_watchlist_callback
@@ -274,6 +275,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
     data = query.data
 
+    if await handle_research_callback(query, context, data):
+        return
+
     if await handle_watchlist_callback(query, context, data):
         return
 
@@ -286,6 +290,8 @@ async def configure_telegram_menu(app: Application) -> None:
         BotCommand("list", "현재 관심종목 목록 보기"),
         BotCommand("view", "뉴스 감성 기반 종목 뷰 보기"),
         BotCommand("score", "감성 신호 적중률 채점 (/score backtest)"),
+        BotCommand("research", "리서치 주제 확인/설정/실행"),
+        BotCommand("briefing", "모닝/마감 브리핑·성적표 즉시 실행"),
         BotCommand("stockdb", "종목 DB 빌드"),
         BotCommand("system", "시스템 상태 보기/GPU 가속 제어"),
         BotCommand("help", "명령어 경로와 설명 보기"),

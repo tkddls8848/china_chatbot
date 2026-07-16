@@ -47,6 +47,9 @@ WATCHLIST_FILE    = BASE_DIR / "data" / "watchlist.json"
 STOCK_DB_FILE     = BASE_DIR / "data" / "stock_db.json"
 PREDICTION_LOG_FILE = BASE_DIR / "data" / "prediction_log.jsonl"
 BACKTEST_LOG_FILE = BASE_DIR / "data" / "backtest_log.jsonl"
+RESEARCH_STATE_FILE = BASE_DIR / "data" / "market_research.json"
+WATCHLIST_EVENTS_FILE = BASE_DIR / "data" / "watchlist_events.json"
+NEWS_LOG_FILE     = BASE_DIR / "data" / "news_log.json"
 PROMPT_DIR        = Path(os.environ.get("TRANSLATION_PROMPT_DIR", "prompts"))
 if not PROMPT_DIR.is_absolute():
     PROMPT_DIR = BASE_DIR / PROMPT_DIR
@@ -125,6 +128,67 @@ GLOBAL_NEWS_BATCH_SIZE = int(os.environ.get("GLOBAL_NEWS_BATCH_SIZE", "1"))
 SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5"))
 STOCK_DB_ENABLED = _env_bool("STOCK_DB_ENABLED", "true")
 
+# ── 시황 리서치(/research) ────────────────────────────
+RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
+RESEARCH_ANALYSIS_MODEL = os.environ.get("RESEARCH_ANALYSIS_MODEL", TRANSLATION_MODEL)
+RESEARCH_ANALYSIS_ENABLED = _env_bool("RESEARCH_ANALYSIS_ENABLED", "true")
+RESEARCH_ANALYSIS_TIMEOUT = int(os.environ.get("RESEARCH_ANALYSIS_TIMEOUT", "180"))
+RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL = int(
+    os.environ.get("RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL", "3")
+)
+RESEARCH_NEWS_MAX_ITEMS = int(
+    os.environ.get("RESEARCH_NEWS_MAX_ITEMS", "3")
+)
+RESEARCH_NEWS_GLOBAL_LIMIT = int(
+    os.environ.get("RESEARCH_NEWS_GLOBAL_LIMIT", "3")
+)
+RESEARCH_ANALYSIS_NUM_PREDICT = int(
+    os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
+)
+RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
+    1.0,
+    max(
+        0.0,
+        float(os.environ.get("RESEARCH_REMOVE_RELEVANCE_THRESHOLD", "0.35")),
+    ),
+)
+# 시장뷰 분석 강화: bull/bear 검증 패스, 분석 이력 메모리
+RESEARCH_VERIFICATION_ENABLED = _env_bool("RESEARCH_VERIFICATION_ENABLED", "true")
+RESEARCH_VERIFICATION_PROMPT_FILE = PROMPT_DIR / "market_research_verify_ko.txt"
+RESEARCH_HISTORY_LIMIT = int(os.environ.get("RESEARCH_HISTORY_LIMIT", "5"))
+# 강세 섹터 구성종목을 리서치 후보군에 추가
+RESEARCH_SECTOR_CANDIDATES_ENABLED = _env_bool("RESEARCH_SECTOR_CANDIDATES_ENABLED", "true")
+RESEARCH_SECTOR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_SECTOR_CANDIDATE_LIMIT", "10"))
+# 동화순 问财 자연어 스크리닝(비공식 API, pywencai 별도 설치 필요)
+WENCAI_ENABLED = _env_bool("WENCAI_ENABLED", "false")
+WENCAI_CANDIDATE_LIMIT = int(os.environ.get("WENCAI_CANDIDATE_LIMIT", "10"))
+
+# 정량 컨텍스트(시세·자금흐름·섹터·인기순위·涨停·용호방)
+QUANT_CONTEXT_ENABLED = _env_bool("QUANT_CONTEXT_ENABLED", "true")
+QUANT_CACHE_TTL_MINUTES = int(os.environ.get("QUANT_CACHE_TTL_MINUTES", "10"))
+QUANT_SECTOR_TOP_N = int(os.environ.get("QUANT_SECTOR_TOP_N", "5"))
+
+# 최근 뉴스 로그(마감 브리핑 요약 입력)
+NEWS_LOG_RETENTION_DAYS = int(os.environ.get("NEWS_LOG_RETENTION_DAYS", "3"))
+
+# 모닝/마감 브리핑과 주간 성적표(호스트 현지 시각 기준 cron)
+BRIEFING_MORNING_ENABLED = _env_bool("BRIEFING_MORNING_ENABLED", "true")
+BRIEFING_MORNING_HOUR = int(os.environ.get("BRIEFING_MORNING_HOUR", "8"))
+BRIEFING_MORNING_MINUTE = int(os.environ.get("BRIEFING_MORNING_MINUTE", "50"))
+BRIEFING_EVENING_ENABLED = _env_bool("BRIEFING_EVENING_ENABLED", "true")
+BRIEFING_EVENING_HOUR = int(os.environ.get("BRIEFING_EVENING_HOUR", "17"))
+BRIEFING_EVENING_MINUTE = int(os.environ.get("BRIEFING_EVENING_MINUTE", "40"))
+BRIEFING_LLM_ENABLED = _env_bool("BRIEFING_LLM_ENABLED", "true")
+BRIEFING_NEWS_MAX_ITEMS = int(os.environ.get("BRIEFING_NEWS_MAX_ITEMS", "5"))
+BRIEFING_PROMPT_FILE = PROMPT_DIR / "briefing_ko.txt"
+# 미설정 시 리서치 모델·타임아웃을 따른다.
+BRIEFING_MODEL = os.environ.get("BRIEFING_MODEL", RESEARCH_ANALYSIS_MODEL)
+BRIEFING_TIMEOUT = int(os.environ.get("BRIEFING_TIMEOUT", "120"))
+SCORECARD_ENABLED = _env_bool("SCORECARD_ENABLED", "true")
+SCORECARD_DAY_OF_WEEK = os.environ.get("SCORECARD_DAY_OF_WEEK", "sat")
+SCORECARD_HOUR = int(os.environ.get("SCORECARD_HOUR", "10"))
+SCORECARD_LOOKBACK_DAYS = int(os.environ.get("SCORECARD_LOOKBACK_DAYS", "30"))
+
 
 def _parse_allowed_chat_ids() -> frozenset[int]:
     raw = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
@@ -154,6 +218,13 @@ HELP_TEXT = (
     "/view 종목코드 — 종목별 상세 뷰\n"
     "/score — 감성 신호 적중률 채점\n"
     "/score backtest — 백필 신호 채점\n"
+    "/research show — 저장된 리서치 주제 보기\n"
+    "/research set 리서치주제 — 리서치 주제 저장\n"
+    "/research run — 최근 뉴스 기준 리서치 실행\n"
+    "/research clear — 리서치 주제 삭제\n"
+    "/briefing morning — 모닝 브리핑 즉시 실행\n"
+    "/briefing evening — 마감 브리핑 즉시 실행\n"
+    "/briefing scorecard — 시장뷰 성적표 즉시 실행\n"
     "/stockdb build — 종목 코드·이름 목록 갱신\n"
     "/system — 시스템 상태 보기\n"
     "/system gpu on|off — Ollama GPU 가속 켜기/끄기\n"
