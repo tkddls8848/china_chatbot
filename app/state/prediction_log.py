@@ -31,6 +31,7 @@ class PredictionLog:
         sentiment: float,
         impact: str,
         codes: list[str],
+        market: str = "",
     ) -> None:
         """신호 1건을 기록한다. 실패해도 뉴스 전송 흐름을 막지 않는다."""
         entry = {
@@ -39,6 +40,7 @@ class PredictionLog:
             "title": str(title)[:120],
             "sentiment": sentiment,
             "impact": impact,
+            "market": str(market).upper().strip(),
             "codes": [c for c in codes if c],
         }
         line = json.dumps(entry, ensure_ascii=False)

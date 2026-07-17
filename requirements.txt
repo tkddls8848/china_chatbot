@@ -9,5 +9,4 @@ requests
 tenacity
 feedparser
 yfinance
-streamlit
 matplotlib

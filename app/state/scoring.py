@@ -22,10 +22,13 @@ from pathlib import Path
 import akshare as ak
 import pandas as pd
 
+from stocks.market_data import fetch_closes as fetch_market_closes
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_HORIZONS = [1, 3, 5]
 DEFAULT_THRESHOLD = 0.2
+_SCORABLE_CODE_RE = re.compile(r"(?:\d{5,6}|[A-Za-z][A-Za-z0-9.-]{0,14})")
 
 
 def load_signals(log_path: Path, threshold: float) -> tuple[list[dict], int]:
@@ -36,7 +39,7 @@ def load_signals(log_path: Path, threshold: float) -> tuple[list[dict], int]:
     if not log_path.exists():
         raise FileNotFoundError(log_path)
 
-    per_day: dict[tuple[str, date], list[float]] = defaultdict(list)
+    per_day: dict[tuple[str, str, date], list[float]] = defaultdict(list)
     for line in log_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -47,20 +50,21 @@ def load_signals(log_path: Path, threshold: float) -> tuple[list[dict], int]:
             sentiment = float(entry["sentiment"])
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             continue
+        market = str(entry.get("market") or "").upper().strip()
         for code in entry.get("codes") or []:
             code = str(code).strip()
             # 과거 로그에 섞인 미국 티커 등 형식 외 코드는 채점 대상이 아니다.
-            if re.fullmatch(r"\d{5,6}", code):
-                per_day[(code, ts.date())].append(sentiment)
+            if _SCORABLE_CODE_RE.fullmatch(code):
+                per_day[(market, code, ts.date())].append(sentiment)
 
     signals: list[dict] = []
     neutral = 0
-    for (code, day), values in sorted(per_day.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+    for (market, code, day), values in sorted(per_day.items(), key=lambda kv: (kv[0][2], kv[0][1])):
         avg = sum(values) / len(values)
         if abs(avg) < threshold:
             neutral += 1
             continue
-        signals.append({"code": code, "date": day, "avg": avg, "up": avg > 0})
+        signals.append({"code": code, "market": market, "date": day, "avg": avg, "up": avg > 0})
     return signals, neutral
 
 
@@ -79,6 +83,7 @@ def fetch_closes(code: str, start: date, end: date) -> "pd.Series | None":
 
     1차 동방재부(east) → 2차 신랑(sina) 순으로 페일오버한다(뉴스 소스 레지스트리와 같은 패턴).
     """
+    return fetch_market_closes(code, None, start, end)
     start_s, end_s = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
     if len(code) == 5:  # 홍콩
         attempts = [
@@ -116,16 +121,16 @@ def fetch_closes(code: str, start: date, end: date) -> "pd.Series | None":
 
 def score_signals(signals: list[dict], horizons: list[int]) -> dict[int, dict]:
     """수평별 채점 결과: {수평: {n, hit, up_real, pending}}."""
-    codes = sorted({s["code"] for s in signals})
+    codes = sorted({(str(s.get("market") or ""), s["code"]) for s in signals})
     start = min(s["date"] for s in signals)
     end = date.today()
 
     logger.info("[SCORE] 시세 조회: %d종목 (%s ~ %s)", len(codes), start, end)
-    closes_by_code = {code: fetch_closes(code, start, end) for code in codes}
+    closes_by_code = {key: fetch_market_closes(key[1], key[0], start, end) for key in codes}
 
     results = {h: {"n": 0, "hit": 0, "up_real": 0, "pending": 0} for h in horizons}
     for signal in signals:
-        closes = closes_by_code.get(signal["code"])
+        closes = closes_by_code.get((str(signal.get("market") or ""), signal["code"]))
         if closes is None:
             continue
         # 신호일 '이후' 첫 거래일 종가를 기준가로 삼는다(look-ahead 통제).

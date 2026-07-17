@@ -13,6 +13,7 @@ data/*.json
 data/*.jsonl
 !data/.gitkeep
 data/bot.lock
+data/yfinance_cache/
 
 *.log
 *.tmp

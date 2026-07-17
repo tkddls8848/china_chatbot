@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from core.workers import run_non_urgent
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,7 +87,7 @@ async def record_watchlist_event(
     quote_service = bot_data.get("quote_service")
     if quote_service is not None and getattr(quote_service, "enabled", False):
         try:
-            price = await asyncio.to_thread(quote_service.get_price, code)
+            price = await run_non_urgent(quote_service.get_price, code)
         except Exception as e:
             logger.debug("[EVENTS] %s 가격 조회 실패: %s", code, e)
     try:

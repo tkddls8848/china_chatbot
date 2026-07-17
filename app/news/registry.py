@@ -17,7 +17,6 @@ from news.sources import (
     fetch_cls_articles,
     fetch_em_articles,
     fetch_futu_articles,
-    fetch_gdelt_global_articles,
     fetch_google_news_global_articles,
     fetch_rss_articles,
     fetch_sina_articles,
@@ -51,7 +50,6 @@ _BUILTIN_SPECS: dict[str, tuple[str, str, Callable[[], list[GlobalArticle]]]] = 
     "ths": ("동화순(同花顺)", "global", fetch_ths_articles),
 }
 
-_BUILTIN_SPECS["gdelt"] = ("GDELT Global", "global", fetch_gdelt_global_articles)
 _BUILTIN_SPECS["gnews"] = ("Google News Global", "global", fetch_google_news_global_articles)
 
 
@@ -142,6 +140,34 @@ class NewsSourceRegistry:
                 health.consecutive_failures,
                 health.cooldown_until.strftime("%H:%M:%S"),
             )
+
+    def record_rate_limited(self, key: str, error: str) -> None:
+        """Immediately cool down a source that explicitly returned HTTP 429."""
+        health = self._health.get(key)
+        if health is None:
+            return
+        health.consecutive_failures = self._failure_threshold
+        health.last_error = error[:200]
+        health.cooldown_until = datetime.now() + self._cooldown
+        logger.warning(
+            "[NEWS] 소스 %s 요청 제한(429): %s까지 쿨다운",
+            key,
+            health.cooldown_until.strftime("%H:%M:%S"),
+        )
+
+    def record_unavailable(self, key: str, error: str) -> None:
+        """Cool down a public source that is unreachable or does not respond."""
+        health = self._health.get(key)
+        if health is None:
+            return
+        health.consecutive_failures = self._failure_threshold
+        health.last_error = error[:200]
+        health.cooldown_until = datetime.now() + self._cooldown
+        logger.warning(
+            "[NEWS] source %s unavailable; cooldown until %s",
+            key,
+            health.cooldown_until.strftime("%H:%M:%S"),
+        )
 
     def status_lines(self) -> list[str]:
         """/system 표시용 소스 상태 요약."""

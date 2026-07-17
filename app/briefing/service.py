@@ -18,6 +18,7 @@ from core.config import (
     TELEGRAM_CHAT_ID,
     TELEGRAM_MESSAGE_LIMIT,
 )
+from core.workers import run_non_urgent
 from research.news import collect_global_market_news_items
 from state.news_log import aggregate_sentiment_by_code
 from stocks.quotes import format_quant_summary
@@ -53,7 +54,7 @@ async def _is_holiday(app: Application) -> bool:
     calendar = app.bot_data.get("trade_calendar")
     if calendar is None:
         return False
-    return not await asyncio.to_thread(calendar.is_trade_date)
+    return not await run_non_urgent(calendar.is_trade_date)
 
 
 async def _build_quant_section(app: Application, include_fund_flow: bool) -> tuple[dict, str]:
@@ -62,7 +63,7 @@ async def _build_quant_section(app: Application, include_fund_flow: bool) -> tup
     watchlist = await wm.get_all()
     if quote_service is None or not quote_service.enabled or not watchlist:
         return {}, ""
-    context = await asyncio.to_thread(
+    context = await run_non_urgent(
         quote_service.build_quant_context, watchlist, include_fund_flow
     )
     return context, format_quant_summary(context, watchlist)
@@ -101,7 +102,7 @@ async def _write_llm_comment(app: Application, payload: dict) -> str:
     if writer is None or not writer.enabled:
         return ""
     try:
-        return await asyncio.to_thread(writer.write, payload)
+        return await run_non_urgent(writer.write, payload)
     except Exception as e:
         logger.warning("[BRIEFING] LLM 코멘트 생성 실패, 데이터 전용으로 전송: %s", e)
         return ""
@@ -247,7 +248,7 @@ async def send_weekly_scorecard(app: Application, notify_empty: bool = False) ->
     codes = sorted({str(e.get("code")) for e in events if e.get("code")})
     current_prices: dict[str, float | None] = {}
     if quote_service is not None and quote_service.enabled:
-        quotes = await asyncio.to_thread(quote_service.get_watchlist_quotes, codes)
+        quotes = await run_non_urgent(quote_service.get_watchlist_quotes, codes)
         current_prices = {code: (quotes.get(code) or {}).get("price") for code in codes}
 
     lines = build_scorecard_lines(events, watchlist, current_prices)

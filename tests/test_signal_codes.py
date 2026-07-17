@@ -16,9 +16,9 @@ from news.utils import signal_codes
 from state.scoring import load_signals
 
 
-def test_signal_codes_drops_non_china_hk_tickers():
+def test_signal_codes_keeps_explicit_global_tickers():
     raw = ["JNJ.N", "NVDA", "NVDA.O", "GOOGL", "600519", "09988"]
-    assert signal_codes(raw) == ["600519", "09988"]
+    assert signal_codes(raw) == ["JNJ.N", "NVDA", "NVDA.O", "GOOGL", "600519", "09988"]
 
 
 def test_signal_codes_normalizes_and_dedupes():
@@ -28,7 +28,7 @@ def test_signal_codes_normalizes_and_dedupes():
     assert signal_codes(None) == []
 
 
-def test_load_signals_skips_non_numeric_codes(tmp_path):
+def test_load_signals_keeps_explicit_global_tickers(tmp_path):
     # 이미 로그에 기록된 과거 미국 티커 줄도 채점에서 제외되어야 한다.
     log = tmp_path / "prediction_log.jsonl"
     log.write_text(
@@ -38,5 +38,5 @@ def test_load_signals_skips_non_numeric_codes(tmp_path):
         encoding="utf-8",
     )
     signals, neutral = load_signals(log, threshold=0.2)
-    assert [s["code"] for s in signals] == ["600519"]
+    assert [s["code"] for s in signals] == ["600519", "GOOGL", "JNJ.N", "NVDA"]
     assert neutral == 0

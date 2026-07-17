@@ -13,8 +13,23 @@ from typing import Any, Callable
 
 import akshare as ak
 import pandas as pd
+import requests
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
+
+
+def _akshare_retry(func):
+    return retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=5),
+        retry=retry_if_exception_type((requests.exceptions.RequestException, ConnectionError, TimeoutError, OSError, ValueError)),
+        reraise=True,
+    )(func)
+
+
+class ProviderCooldownError(RuntimeError):
+    """A provider recently failed, so another network call is temporarily skipped."""
 
 
 def _safe_float(value: Any) -> float | None:
@@ -26,26 +41,49 @@ def _safe_float(value: Any) -> float | None:
 
 
 class _TTLCache:
-    def __init__(self, ttl_seconds: float):
+    def __init__(self, ttl_seconds: float, failure_cooldown_seconds: float):
         self._ttl = ttl_seconds
         self._store: dict[str, tuple[float, Any]] = {}
+        self._failure_cooldown = failure_cooldown_seconds
+        self._failures: dict[str, tuple[float, Exception]] = {}
 
     def get_or_fetch(self, key: str, fetch: Callable[[], Any]):
         now = time.monotonic()
         cached = self._store.get(key)
         if cached and now - cached[0] < self._ttl:
             return cached[1]
-        value = fetch()
+        previous_failure = self._failures.get(key)
+        if previous_failure and now - previous_failure[0] < self._failure_cooldown:
+            if cached:
+                return cached[1]
+            raise ProviderCooldownError(f"{key} is in failure cooldown") from previous_failure[1]
+        try:
+            value = fetch()
+        except Exception as exc:
+            self._failures[key] = (now, exc)
+            if cached:
+                return cached[1]
+            raise
         self._store[key] = (now, value)
+        self._failures.pop(key, None)
         return value
 
 
 class QuoteService:
     """관심종목·시장 정량 스냅샷 제공자(블로킹, to_thread에서 호출)."""
 
-    def __init__(self, enabled: bool = True, cache_ttl_minutes: int = 10, sector_top_n: int = 5):
+    def __init__(
+        self,
+        enabled: bool = True,
+        cache_ttl_minutes: int = 10,
+        sector_top_n: int = 5,
+        failure_cooldown_minutes: int = 15,
+    ):
         self._enabled = enabled
-        self._cache = _TTLCache(ttl_seconds=max(1, cache_ttl_minutes) * 60)
+        self._cache = _TTLCache(
+            ttl_seconds=max(1, cache_ttl_minutes) * 60,
+            failure_cooldown_seconds=max(1, failure_cooldown_minutes) * 60,
+        )
         self._sector_top_n = max(1, sector_top_n)
 
     @property
@@ -55,10 +93,10 @@ class QuoteService:
     # ── 시세 ─────────────────────────────────────────
 
     def _a_spot(self) -> pd.DataFrame:
-        return self._cache.get_or_fetch("a_spot", ak.stock_zh_a_spot_em)
+        return self._cache.get_or_fetch("a_spot", _akshare_retry(ak.stock_zh_a_spot_em))
 
     def _hk_spot(self) -> pd.DataFrame:
-        return self._cache.get_or_fetch("hk_spot", ak.stock_hk_spot_em)
+        return self._cache.get_or_fetch("hk_spot", _akshare_retry(ak.stock_hk_spot_em))
 
     def get_watchlist_quotes(self, codes: list[str]) -> dict[str, dict[str, Any]]:
         """코드별 {price, pct_change, amount}. 실패한 시장은 조용히 비운다."""
@@ -113,7 +151,7 @@ class QuoteService:
         try:
             df = self._cache.get_or_fetch(
                 f"fund_flow:{code}",
-                lambda: ak.stock_individual_fund_flow(stock=code, market=market),
+                _akshare_retry(lambda: ak.stock_individual_fund_flow(stock=code, market=market)),
             )
             if df is None or df.empty:
                 return None
@@ -134,7 +172,7 @@ class QuoteService:
         if not self._enabled:
             return {"top": [], "bottom": []}
         try:
-            df = self._cache.get_or_fetch("industry_boards", ak.stock_board_industry_name_em)
+            df = self._cache.get_or_fetch("industry_boards", _akshare_retry(ak.stock_board_industry_name_em))
             df = df.copy()
             df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
             df = df.dropna(subset=["涨跌幅"]).sort_values("涨跌幅", ascending=False)
@@ -164,7 +202,7 @@ class QuoteService:
         try:
             df = self._cache.get_or_fetch(
                 f"board_cons:{board_name}",
-                lambda: ak.stock_board_industry_cons_em(symbol=board_name),
+                _akshare_retry(lambda: ak.stock_board_industry_cons_em(symbol=board_name)),
             )
             return [
                 {"code": str(row["代码"]).zfill(6), "name": str(row["名称"])}
@@ -179,7 +217,7 @@ class QuoteService:
         if not self._enabled or not codes:
             return []
         try:
-            df = self._cache.get_or_fetch("hot_rank", ak.stock_hot_rank_em)
+            df = self._cache.get_or_fetch("hot_rank", _akshare_retry(ak.stock_hot_rank_em))
             hits = []
             for _, row in df.iterrows():
                 raw = str(row.get("代码") or "")
@@ -204,7 +242,8 @@ class QuoteService:
         try:
             date = datetime.now().strftime("%Y%m%d")
             df = self._cache.get_or_fetch(
-                f"zt_pool:{date}", lambda: ak.stock_zt_pool_em(date=date)
+                f"zt_pool:{date}",
+                _akshare_retry(lambda: ak.stock_zt_pool_em(date=date)),
             )
             if df is None or df.empty:
                 return {"count": 0, "names": []}
@@ -225,10 +264,10 @@ class QuoteService:
             start = end - timedelta(days=max(1, lookback_days))
             df = self._cache.get_or_fetch(
                 f"lhb:{end.strftime('%Y%m%d')}",
-                lambda: ak.stock_lhb_detail_em(
+                _akshare_retry(lambda: ak.stock_lhb_detail_em(
                     start_date=start.strftime("%Y%m%d"),
                     end_date=end.strftime("%Y%m%d"),
-                ),
+                )),
             )
             if df is None or df.empty:
                 return []

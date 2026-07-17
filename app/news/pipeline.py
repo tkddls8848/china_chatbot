@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timedelta
 
 import pandas as pd
+import requests
 from telegram import Bot
 from telegram.ext import Application
 
@@ -24,6 +25,7 @@ from core.config import (
     STOCK_NEWS_FETCH_DELAY_SECONDS,
     TELEGRAM_CHAT_ID,
 )
+from core.workers import run_non_urgent
 from news.registry import NewsSourceRegistry, SourceSpec
 from news.sources import GlobalArticle, fetch_stock_news_raw as _fetch_stock_news_raw
 from news.utils import (
@@ -94,14 +96,32 @@ async def process_global_source(
         )
         return
     except Exception as e:
-        registry.record_failure(spec.key, str(e))
+        is_rss_blocked = (
+            spec.key.startswith("rss:")
+            and isinstance(e, requests.HTTPError)
+            and e.response is not None
+            and e.response.status_code in (403, 429)
+        )
+        if spec.key.startswith("rss:") and (isinstance(e, requests.Timeout) or is_rss_blocked):
+            registry.record_unavailable(spec.key, str(e))
+        elif isinstance(e, requests.HTTPError) and e.response is not None and e.response.status_code == 429:
+            registry.record_rate_limited(spec.key, str(e))
+        else:
+            registry.record_failure(spec.key, str(e))
         logger.error("[%s] API 호출 실패: %s", spec.key, e)
         return
 
-    async def prepare_article(article: GlobalArticle):
+    if not articles:
+        logger.info("[%s] 수집 기사 0건: 전송할 새 기사가 없습니다.", spec.key)
+        return
+
+    metrics = {"duplicate": 0, "translate_failed": 0, "prepared": 0, "sent": 0}
+
+    async def prepare_article(article: GlobalArticle, already_reserved: bool = False):
         article_id = article.article_id
         try:
-            if not await tracker.reserve(article_id):
+            if not already_reserved and not await tracker.reserve(article_id):
+                metrics["duplicate"] += 1
                 return None
             translated = await translate_article(
                 translator,
@@ -134,19 +154,32 @@ async def process_global_source(
                 footer=link_part,
                 mentioned_stocks=mentioned_stocks,
             )
+            metrics["prepared"] += 1
             return article_id, text, translated
         except Exception as e:
             await tracker.release(article_id)
+            metrics["translate_failed"] += 1
             logger.error("[%s] 번역 실패: %s", spec.key, e)
             if is_timeout_error(e):
                 raise
             return None
 
-    # 최신 N건을 과거→최신 순서로 전송한다.
+    # 앞부분의 중복 기사 때문에 새 기사를 놓치지 않도록 충분한 범위에서
+    # 미전송 기사만 먼저 고른 뒤, 과거→최신 순서로 번역·전송한다.
+    scan_limit = max(NEWS_GLOBAL_LIMIT * 20, NEWS_GLOBAL_LIMIT)
+    selected_articles: list[GlobalArticle] = []
+    for article in articles[:scan_limit]:
+        if await tracker.reserve(article.article_id):
+            selected_articles.append(article)
+            if len(selected_articles) >= NEWS_GLOBAL_LIMIT:
+                break
+        else:
+            metrics["duplicate"] += 1
+
     prepared_rows = []
-    for article in articles[:NEWS_GLOBAL_LIMIT][::-1]:
+    for article in selected_articles[::-1]:
         try:
-            prepared_rows.append(await prepare_article(article))
+            prepared_rows.append(await prepare_article(article, already_reserved=True))
         except Exception:
             logger.error("[%s] 타임아웃으로 이번 주기 남은 번역을 중단합니다.", spec.key)
             break
@@ -159,6 +192,7 @@ async def process_global_source(
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
             await tracker.confirm(article_id)
             codes = signal_codes(translated.mentioned_stocks)
+            market = str(article.extra.get("market") or NEWS_SOURCE_MARKETS.get(spec.key.lower(), "OTHER"))
             if prediction_log is not None and translated.sentiment is not None:
                 await prediction_log.record(
                     source=spec.key,
@@ -166,6 +200,7 @@ async def process_global_source(
                     sentiment=translated.sentiment,
                     impact=translated.impact,
                     codes=codes,
+                    market=market,
                 )
             if news_log is not None:
                 await news_log.record(
@@ -174,13 +209,25 @@ async def process_global_source(
                     sentiment=translated.sentiment,
                     impact=translated.impact,
                     codes=codes,
-                    market=str(article.extra.get("market") or NEWS_SOURCE_MARKETS.get(spec.key.lower(), "OTHER")),
+                    market=market,
                     article_id=article_id,
                 )
+            metrics["sent"] += 1
             logger.info("[%s] 전송 완료: %s", spec.key, translated.title[:30])
         except Exception as e:
             await tracker.release(article_id)
             logger.error("[%s] 전송 실패: %s", spec.key, e)
+
+    logger.info(
+        "[%s] 기사 처리: 수집 %d / 확인 %d / 중복 %d / 번역 준비 %d / 번역 실패 %d / 전송 %d",
+        spec.key,
+        len(articles),
+        min(len(articles), scan_limit),
+        metrics["duplicate"],
+        metrics["prepared"],
+        metrics["translate_failed"],
+        metrics["sent"],
+    )
 
 
 async def fetch_stock_news(
@@ -324,6 +371,7 @@ async def fetch_stock_news(
                             sentiment=translated.sentiment,
                             impact=translated.impact,
                             codes=[code],
+                            market=NEWS_SOURCE_MARKETS.get("stock", "CN"),
                         )
                     if news_log is not None:
                         await news_log.record(
@@ -346,7 +394,7 @@ async def fetch_stock_news(
 
 async def refresh_stock_db(stock_db: StockDatabase) -> None:
     try:
-        await asyncio.to_thread(stock_db.build)
+        await run_non_urgent(stock_db.build)
         logger.info("[StockDB] 일별 갱신 완료")
     except Exception as e:
         logger.warning("[StockDB] 일별 갱신 실패: %s", e)

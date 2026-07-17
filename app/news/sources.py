@@ -10,12 +10,14 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import akshare as ak
 import requests
 import requests.exceptions
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from core.config import NEWS_SOURCE_ARTICLE_LIMIT
 
 
 def retry_on_network(func):
@@ -72,9 +74,15 @@ def fetch_stock_news_raw(symbol: str):
     return ak.stock_news_em(symbol=symbol)
 
 
-@retry_on_network
 def fetch_rss_raw(url: str) -> bytes:
-    response = requests.get(url, timeout=20)
+    host = urlparse(url).netloc.lower()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; ChinaChatbotRSS/1.0)",
+        "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
+    }
+    if host.endswith("mk.co.kr"):
+        headers["Referer"] = "https://www.mk.co.kr/rss/"
+    response = requests.get(url, headers=headers, timeout=(3, 5))
     response.raise_for_status()
     return response.content
 
@@ -110,7 +118,7 @@ def fetch_cls_articles() -> list[GlobalArticle]:
             )
         )
     # CLS는 과거→최신 순이므로 뒤집어 최신순으로 맞춘다.
-    return articles[::-1]
+    return articles[::-1][:NEWS_SOURCE_ARTICLE_LIMIT]
 
 
 def fetch_futu_articles() -> list[GlobalArticle]:
@@ -132,7 +140,7 @@ def fetch_futu_articles() -> list[GlobalArticle]:
                 url=_cell(row, "链接"),
             )
         )
-    return articles
+    return articles[:NEWS_SOURCE_ARTICLE_LIMIT]
 
 
 def fetch_em_articles() -> list[GlobalArticle]:
@@ -153,7 +161,7 @@ def fetch_em_articles() -> list[GlobalArticle]:
                 url=_cell(row, "链接"),
             )
         )
-    return articles
+    return articles[:NEWS_SOURCE_ARTICLE_LIMIT]
 
 
 def fetch_sina_articles() -> list[GlobalArticle]:
@@ -172,7 +180,7 @@ def fetch_sina_articles() -> list[GlobalArticle]:
                 published_at=published_at,
             )
         )
-    return articles
+    return articles[:NEWS_SOURCE_ARTICLE_LIMIT]
 
 
 def fetch_ths_articles() -> list[GlobalArticle]:
@@ -193,7 +201,7 @@ def fetch_ths_articles() -> list[GlobalArticle]:
                 url=_cell(row, "链接"),
             )
         )
-    return articles
+    return articles[:NEWS_SOURCE_ARTICLE_LIMIT]
 
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -203,12 +211,16 @@ def _strip_html(text: str) -> str:
     return html.unescape(_TAG_RE.sub(" ", text or "")).strip()
 
 
-def fetch_rss_articles(url: str, label: str) -> list[GlobalArticle]:
+def fetch_rss_articles(
+    url: str,
+    label: str,
+    max_articles: int | None = NEWS_SOURCE_ARTICLE_LIMIT,
+) -> list[GlobalArticle]:
     import feedparser
 
     feed = feedparser.parse(fetch_rss_raw(url))
     articles = []
-    for entry in feed.entries:
+    for entry in feed.entries[:max_articles]:
         title = _strip_html(str(entry.get("title") or ""))
         content = _strip_html(str(entry.get("summary") or entry.get("description") or ""))
         published_at = str(entry.get("published") or entry.get("updated") or "")
@@ -238,7 +250,7 @@ def fetch_google_news_history(query: str, day: date, market: str) -> list[Global
     next_day = date.fromordinal(day.toordinal() + 1)
     bounded_query = f"{query} after:{day.isoformat()} before:{next_day.isoformat()}"
     url = "https://news.google.com/rss/search?q=" + quote_plus(bounded_query) + "&hl=en-US&gl=US&ceid=US:en"
-    return fetch_rss_articles(url, f"history:{market}:{day.isoformat()}")
+    return fetch_rss_articles(url, f"history:{market}:{day.isoformat()}", max_articles=None)
 
 
 _REGIONAL_MARKET_QUERIES = {
@@ -251,17 +263,6 @@ _REGIONAL_MARKET_QUERIES = {
     "TW": "Taiwan stock market economy",
 }
 
-_GDELT_SOURCE_FILTERS = {
-    "CN": "china",
-    "US": "unitedstates",
-    "EU": "(sourcecountry:france OR sourcecountry:germany OR sourcecountry:unitedkingdom)",
-    "RU": "russia",
-    "KR": "southkorea",
-    "JP": "japan",
-    "TW": "taiwan",
-}
-
-
 def _interleave(groups: list[list[GlobalArticle]]) -> list[GlobalArticle]:
     result: list[GlobalArticle] = []
     highest = max((len(group) for group in groups), default=0)
@@ -272,62 +273,11 @@ def _interleave(groups: list[list[GlobalArticle]]) -> list[GlobalArticle]:
     return result
 
 
-def _fetch_gdelt_market(market: str) -> list[GlobalArticle]:
-    query = _REGIONAL_MARKET_QUERIES[market]
-    country_filter = _GDELT_SOURCE_FILTERS[market]
-    response = requests.get(
-        "https://api.gdeltproject.org/api/v2/doc/doc",
-        params={
-            "query": f"({query}) {country_filter}",
-            "mode": "artlist",
-            "format": "json",
-            "maxrecords": 8,
-        },
-        timeout=12,
-    )
-    response.raise_for_status()
-    rows = response.json().get("articles") or []
-    articles: list[GlobalArticle] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        title = str(row.get("title") or "").strip()
-        url = str(row.get("url") or "").strip()
-        if not title:
-            continue
-        published_at = str(row.get("seendate") or "")
-        articles.append(
-            GlobalArticle(
-                article_id=f"gdelt:{market}:{url or published_at + title[:80]}",
-                title=title,
-                content=title,
-                published_at=published_at,
-                url=url,
-                extra={"market": market, "provider": "gdelt"},
-            )
-        )
-    return articles
-
-
-def fetch_gdelt_global_articles() -> list[GlobalArticle]:
-    """One keyless GDELT source covering China, US, Europe, Russia and Asia."""
-    markets = list(_REGIONAL_MARKET_QUERIES)
-    with ThreadPoolExecutor(max_workers=len(markets)) as executor:
-        futures = {market: executor.submit(_fetch_gdelt_market, market) for market in markets}
-        groups = []
-        for market in markets:
-            try:
-                groups.append(futures[market].result())
-            except Exception:
-                # A regional endpoint failure must not discard the other regions.
-                groups.append([])
-    return _interleave(groups)
-
-
 def _fetch_google_news_market(market: str) -> list[GlobalArticle]:
     query = _REGIONAL_MARKET_QUERIES[market]
     url = "https://news.google.com/rss/search?q=" + quote_plus(query) + "&hl=en-US&gl=US&ceid=US:en"
-    articles = fetch_rss_articles(url, f"gnews:{market}")
+    per_market_limit = max(1, (NEWS_SOURCE_ARTICLE_LIMIT + 6) // 7)
+    articles = fetch_rss_articles(url, f"gnews:{market}", max_articles=per_market_limit)
     return [
         GlobalArticle(
             article_id=f"gnews:{market}:{article.article_id}",
@@ -343,7 +293,7 @@ def _fetch_google_news_market(market: str) -> list[GlobalArticle]:
 
 
 def fetch_google_news_global_articles() -> list[GlobalArticle]:
-    """Public RSS fallback with the same regional coverage as GDELT."""
+    """Public RSS source with market-specific queries."""
     markets = list(_REGIONAL_MARKET_QUERIES)
     with ThreadPoolExecutor(max_workers=len(markets)) as executor:
         futures = {market: executor.submit(_fetch_google_news_market, market) for market in markets}
@@ -353,4 +303,4 @@ def fetch_google_news_global_articles() -> list[GlobalArticle]:
                 groups.append(futures[market].result())
             except Exception:
                 groups.append([])
-    return _interleave(groups)
+    return _interleave(groups)[:NEWS_SOURCE_ARTICLE_LIMIT]

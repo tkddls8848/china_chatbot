@@ -2,6 +2,7 @@
 import html
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict
 
@@ -9,6 +10,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from core.config import RESEARCH_REMOVE_RELEVANCE_THRESHOLD
+from core.workers import run_non_urgent
 from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
 from llm.market_view import MarketViewError, MarketViewManager
@@ -17,8 +19,18 @@ from llm.translator import TranslationService
 from watchlist.events import record_watchlist_event
 
 logger = logging.getLogger(__name__)
+_RESEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="research")
 
 TELEGRAM_MESSAGE_LIMIT = 4096
+
+
+def _log_research_task_error(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.info("[RESEARCH] background analysis cancelled")
+    except Exception:
+        logger.exception("[RESEARCH] background analysis failed")
 
 
 def build_research_result_keyboard(uid: str) -> InlineKeyboardMarkup:
@@ -323,6 +335,37 @@ async def _handle_research_run(
     if message is None:
         logger.warning("[RESEARCH] run update has no effective message: %s", update)
         return
+    if not market_view:
+        await message.reply_text("사용법: /research set 리서치주제")
+        return
+
+    tasks: set[asyncio.Task] = context.bot_data.setdefault("research_tasks", set())
+    active_tasks = {task for task in tasks if not task.done()}
+    if active_tasks:
+        context.bot_data["research_tasks"] = active_tasks
+        await message.reply_text("⏳ 이미 리서치 분석이 실행 중입니다. 완료 후 다시 요청해 주세요.")
+        return
+
+    task = asyncio.create_task(
+        _run_research_job(update, context, market_view, temporary),
+        name="research-analysis",
+    )
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+    task.add_done_callback(_log_research_task_error)
+    await message.reply_text("⏳ 리서치 분석을 백그라운드에서 시작했습니다. 완료되면 결과를 알려드립니다.")
+
+
+async def _run_research_job(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    market_view: str,
+    temporary: bool = False,
+) -> None:
+    message = update.effective_message
+    if message is None:
+        logger.warning("[RESEARCH] run update has no effective message: %s", update)
+        return
 
     if not market_view:
         await message.reply_text("사용법: /research set 리서치주제")
@@ -347,7 +390,7 @@ async def _handle_research_run(
     # 강세 섹터 구성종목·问财 스크리닝 후보를 코드 중복 없이 병합한다.
     quote_service = context.bot_data.get("quote_service")
     try:
-        extra_candidates = await asyncio.to_thread(
+        extra_candidates = await run_non_urgent(
             collect_extra_candidates, quote_service, stock_db, watchlist, market_view
         )
         existing_codes = {c["code"] for c in candidate_universe}
@@ -361,7 +404,7 @@ async def _handle_research_run(
     quant_context = None
     if quote_service is not None and quote_service.enabled:
         try:
-            quant_context = await asyncio.to_thread(
+            quant_context = await run_non_urgent(
                 quote_service.build_quant_context, watchlist
             )
         except Exception as e:
@@ -369,7 +412,8 @@ async def _handle_research_run(
     previous_analyses = mvm.get_history_summaries()
 
     try:
-        result = await asyncio.to_thread(
+        result = await asyncio.get_running_loop().run_in_executor(
+            _RESEARCH_EXECUTOR,
             analyzer.analyze,
             market_view,
             watchlist,
@@ -389,7 +433,7 @@ async def _handle_research_run(
 
     pending = _collect_research_actions(result, watchlist, stock_db)
     if not temporary:
-        await asyncio.to_thread(mvm.save_result, result)
+        await run_non_urgent(mvm.save_result, result)
 
     text = _format_research_result_message(
         result,

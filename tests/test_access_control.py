@@ -40,3 +40,29 @@ def test_restricted_decorator_skips_disallowed(monkeypatch):
     asyncio.run(handler(_update(111), None))
     asyncio.run(handler(_update(222), None))
     assert calls == [111]
+
+
+def test_restricted_decorator_updates_request_status(monkeypatch):
+    monkeypatch.setattr(access, "ALLOWED_CHAT_IDS", frozenset())
+    edits = []
+
+    class StatusMessage:
+        async def edit_text(self, text):
+            edits.append(text)
+
+    class RequestMessage:
+        async def reply_text(self, text):
+            assert text == "⏳ 요청 작업 처리 중..."
+            return StatusMessage()
+
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=123),
+        effective_message=RequestMessage(),
+    )
+
+    @access.restricted
+    async def handler(update, context):
+        return None
+
+    asyncio.run(handler(update, None))
+    assert edits == ["✅ 요청 작업 처리 완료"]

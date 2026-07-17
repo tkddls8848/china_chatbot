@@ -107,6 +107,7 @@ def normalize_stock_code(raw: Any) -> str:
 
 
 _SIGNAL_CODE_RE = re.compile(r"\d{5,6}")
+_GLOBAL_TICKER_RE = re.compile(r"[A-Za-z][A-Za-z0-9.-]{0,14}")
 
 
 def signal_codes(raw_codes: list | None) -> list[str]:
@@ -118,8 +119,13 @@ def signal_codes(raw_codes: list | None) -> list[str]:
     codes: list[str] = []
     for raw in raw_codes or []:
         code = normalize_stock_code(raw)
-        if _SIGNAL_CODE_RE.fullmatch(code) and code not in codes:
-            codes.append(code)
+        if _SIGNAL_CODE_RE.fullmatch(code):
+            candidate = code
+        else:
+            raw_text = str(raw or "").strip().upper()
+            candidate = raw_text if _GLOBAL_TICKER_RE.fullmatch(raw_text) else ""
+        if candidate and candidate not in codes:
+            codes.append(candidate)
     return codes
 
 

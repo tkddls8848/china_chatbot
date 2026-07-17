@@ -23,10 +23,10 @@ def test_build_source_specs_ignores_unknown_and_duplicates():
     assert specs[2].prompt_key == "global"
 
 
-def test_build_source_specs_supports_two_global_public_providers():
-    specs = build_source_specs(["gdelt", "gnews"], [])
+def test_build_source_specs_supports_google_news_provider():
+    specs = build_source_specs(["gnews"], [])
 
-    assert [spec.key for spec in specs] == ["gdelt", "gnews"]
+    assert [spec.key for spec in specs] == ["gnews"]
     assert all(spec.prompt_key == "global" for spec in specs)
 
 

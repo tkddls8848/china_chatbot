@@ -67,14 +67,17 @@ TRANSLATION_TIMEOUT = int(os.environ.get("TRANSLATION_TIMEOUT", "60"))
 TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "4096"))
 TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "2"))
 
-SENT_NEWS_MAX_IDS = int(os.environ.get("SENT_NEWS_MAX_IDS", "0"))
 SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
 TELEGRAM_MESSAGE_LIMIT = 4096
 NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))
-NEWS_STOCK_LIMIT_PER_SYMBOL = int(os.environ.get("NEWS_STOCK_LIMIT_PER_SYMBOL", "3"))
+NEWS_STOCK_LIMIT_PER_SYMBOL = int(os.environ.get("NEWS_STOCK_LIMIT_PER_SYMBOL", "1"))
 NEWS_ENABLE_CLS = _env_bool("NEWS_ENABLE_CLS", "false")
 NEWS_SOURCE_FETCH_TIMEOUT_SECONDS = float(
     os.environ.get("NEWS_SOURCE_FETCH_TIMEOUT_SECONDS", "45")
+)
+NEWS_SOURCE_ARTICLE_LIMIT = max(
+    1,
+    int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "10")),
 )
 
 
@@ -87,7 +90,7 @@ def _parse_global_source_keys() -> list[str]:
     raw = os.environ.get("NEWS_GLOBAL_SOURCES", "").strip()
     if raw:
         return [key.strip().lower() for key in raw.split(",") if key.strip()]
-    keys = ["futu", "em", "sina", "gdelt", "gnews"]
+    keys = ["futu", "em", "sina", "gnews"]
     if NEWS_ENABLE_CLS:
         keys.append("cls")
     return keys
@@ -124,15 +127,24 @@ STOCK_NEWS_BATCH_SIZE = int(os.environ.get("STOCK_NEWS_BATCH_SIZE", "3"))
 STOCK_NEWS_FETCH_DELAY_SECONDS = float(os.environ.get("STOCK_NEWS_FETCH_DELAY_SECONDS", "0"))
 # 한 주기에 처리할 전역 속보 소스(CLS/Futu) 수. 1이면 매 주기 한 소스씩 번갈아 처리.
 # 0 이하이면 매 주기 전체(CLS+Futu)를 처리(기존 동작).
-GLOBAL_NEWS_BATCH_SIZE = int(os.environ.get("GLOBAL_NEWS_BATCH_SIZE", "1"))
-SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5"))
+GLOBAL_NEWS_BATCH_SIZE = int(os.environ.get("GLOBAL_NEWS_BATCH_SIZE", "2"))
+SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "2"))
 STOCK_DB_ENABLED = _env_bool("STOCK_DB_ENABLED", "true")
+YAHOO_KR_UNIVERSE_ENABLED = _env_bool("YAHOO_KR_UNIVERSE_ENABLED", "true")
+YAHOO_KR_TICKER_SEEDS = tuple(
+    value.strip().upper()
+    for value in os.environ.get(
+        "YAHOO_KR_TICKER_SEEDS",
+        "005930.KS,000660.KS,035420.KS,051910.KS,005380.KS",
+    ).split(",")
+    if value.strip()
+)
+OPENFIGI_API_KEY = os.environ.get("OPENFIGI_API_KEY", "").strip()
 
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
 RESEARCH_ANALYSIS_MODEL = os.environ.get("RESEARCH_ANALYSIS_MODEL", TRANSLATION_MODEL)
 RESEARCH_ANALYSIS_ENABLED = _env_bool("RESEARCH_ANALYSIS_ENABLED", "true")
-RESEARCH_ANALYSIS_TIMEOUT = int(os.environ.get("RESEARCH_ANALYSIS_TIMEOUT", "180"))
 RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL = int(
     os.environ.get("RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL", "3")
 )
@@ -145,6 +157,11 @@ RESEARCH_NEWS_GLOBAL_LIMIT = int(
 RESEARCH_ANALYSIS_NUM_PREDICT = int(
     os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
 )
+RESEARCH_CPU_THREADS = max(
+    1,
+    int(os.environ.get("RESEARCH_CPU_THREADS", str(max(1, (os.cpu_count() or 4) // 3)))),
+)
+NON_URGENT_WORKER_COUNT = max(1, int(os.environ.get("NON_URGENT_WORKER_COUNT", "1")))
 RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
     1.0,
     max(
@@ -167,6 +184,7 @@ WENCAI_CANDIDATE_LIMIT = int(os.environ.get("WENCAI_CANDIDATE_LIMIT", "10"))
 QUANT_CONTEXT_ENABLED = _env_bool("QUANT_CONTEXT_ENABLED", "true")
 QUANT_CACHE_TTL_MINUTES = int(os.environ.get("QUANT_CACHE_TTL_MINUTES", "10"))
 QUANT_SECTOR_TOP_N = int(os.environ.get("QUANT_SECTOR_TOP_N", "5"))
+QUANT_FAILURE_COOLDOWN_MINUTES = int(os.environ.get("QUANT_FAILURE_COOLDOWN_MINUTES", "15"))
 
 # 최근 뉴스 로그(마감 브리핑 요약 입력)
 NEWS_LOG_RETENTION_DAYS = int(os.environ.get("NEWS_LOG_RETENTION_DAYS", "30"))
@@ -267,29 +285,14 @@ def _parse_allowed_chat_ids() -> frozenset[int]:
 # 비어 있으면 모두 허용(기존 동작). 채우면 해당 chat_id에서만 명령을 받는다.
 ALLOWED_CHAT_IDS = _parse_allowed_chat_ids()
 HELP_TEXT = (
-    "<b>사용 가능한 명령어</b>\n\n"
-    "/start — 봇 소개와 사용 가능한 경로 보기\n"
-    "/menu — 관심종목 관리 (삭제)\n"
+    "<b>명령어 안내</b>\n\n"
+    "/market [일수] — 국가별 뉴스 감성\n"
+    "/menu · /list — 관심종목 관리·목록\n"
     "/add 종목코드 — 관심종목 추가\n"
-    "/list — 관심종목 목록 확인\n"
-    "/view — 관심종목 뉴스 감성 뷰\n"
-    "/view 종목코드 — 종목별 상세 뷰\n"
-    "/score — 감성 신호 적중률 채점\n"
-    "/score backtest — 백필 신호 채점\n"
-    "/research show — 저장된 리서치 주제 보기\n"
-    "/research set 리서치주제 — 리서치 주제 저장\n"
-    "/research run — 최근 뉴스 기준 리서치 실행\n"
-    "/research clear — 리서치 주제 삭제\n"
-    "/briefing morning — 모닝 브리핑 즉시 실행\n"
-    "/briefing evening — 마감 브리핑 즉시 실행\n"
-    "/briefing scorecard — 시장뷰 성적표 즉시 실행\n"
-    "/stockdb build — 종목 코드·이름 목록 갱신\n"
-    "/system — 시스템 상태 보기\n"
-    "/system gpu on|off — Ollama GPU 가속 켜기/끄기\n"
-    "/system gpu 레이어수 — GPU 오프로딩 레이어 수 지정\n"
-    "/help — 도움말\n\n"
-    "종목코드 형식:\n"
-    "  • A주 상해: 6자리 (예: 600519)\n"
-    "  • A주 심천: 6자리 (예: 300750)\n"
-    "  • 홍콩: 5자리 (예: 09988)"
+    "/view [종목코드] — 종목 감성\n"
+    "/score [backtest] — 신호 성과\n"
+    "/research show|set|run|clear — 리서치\n"
+    "/briefing morning|evening|scorecard — 브리핑\n"
+    "/stockdb build · /system — 관리\n\n"
+    "종목코드 예: 중국 600519 · 홍콩 09988"
 )

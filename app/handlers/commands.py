@@ -28,7 +28,8 @@ from state import (
     aggregate_stock_views,
     market_history_gaps,
 )
-from market_chart import market_label, render_market_chart
+from handlers.market_chart import market_label, render_market_chart
+from handlers.navigation import handle_menu_callback, main_menu, persistent_menu
 from state.scoring import (
     DEFAULT_HORIZONS,
     DEFAULT_THRESHOLD,
@@ -39,6 +40,7 @@ from state.scoring import (
 from research import handle_research_callback
 from stocks import StockDatabase
 from core.system_control import SystemControlManager
+from core.workers import run_non_urgent
 from watchlist import handle_watchlist_callback
 
 logger = logging.getLogger(__name__)
@@ -103,7 +105,7 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 "불완전한 선이나 단일 점 차트는 만들지 않았습니다. 잠시 뒤 다시 시도해 주세요."
             )
             return
-        image = await asyncio.to_thread(render_market_chart, ready_markets, days)
+        image = await run_non_urgent(render_market_chart, ready_markets, days)
         ranking = " | ".join(
             f"{market_label(market)} {stats['avg_sentiment']:+.2f} ({stats['count']})"
             for market, stats in sorted(ready_markets.items(), key=lambda item: item[1]["avg_sentiment"], reverse=True)
@@ -134,7 +136,7 @@ async def cmd_stockdb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if command == "build":
         status = await message.reply_text("종목 DB 빌드 중...")
         try:
-            await asyncio.to_thread(stock_db.build)
+            await run_non_urgent(stock_db.build)
             total = len(stock_db.get_all())
             await status.edit_text(f"종목 DB 빌드 완료: {total:,}종목")
         except Exception as e:
@@ -345,7 +347,7 @@ async def cmd_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     status = await message.reply_text(f"{label} 신호 채점 중... (시세 조회)")
     try:
-        report = await asyncio.to_thread(_score_report, log_path, label)
+        report = await run_non_urgent(_score_report, log_path, label)
         await status.edit_text(report, parse_mode="HTML")
     except Exception as e:
         logger.exception("[SCORE] 채점 실패")
@@ -353,17 +355,22 @@ async def cmd_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
+    await update.message.reply_text(HELP_TEXT, parse_mode="HTML", reply_markup=persistent_menu())
+    await update.message.reply_text("원하는 기능을 선택하세요.", reply_markup=main_menu())
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
+    await update.message.reply_text(HELP_TEXT, parse_mode="HTML", reply_markup=persistent_menu())
+    await update.message.reply_text("원하는 기능을 선택하세요.", reply_markup=main_menu())
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     data = query.data
+
+    if await handle_menu_callback(update, context, data):
+        return
 
     if await handle_research_callback(query, context, data):
         return
@@ -374,7 +381,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def configure_telegram_menu(app: Application) -> None:
     commands = [
-        BotCommand("market", "Market news sentiment chart"),
+        BotCommand("market", "국가별 뉴스 감성"),
         BotCommand("start", "봇 소개와 사용 가능한 경로 보기"),
         BotCommand("menu", "관심종목 삭제/관리 버튼 열기"),
         BotCommand("add", "관심종목 추가: /add 600519"),
@@ -386,6 +393,20 @@ async def configure_telegram_menu(app: Application) -> None:
         BotCommand("stockdb", "종목 DB 빌드"),
         BotCommand("system", "시스템 상태 보기/GPU 가속 제어"),
         BotCommand("help", "명령어 경로와 설명 보기"),
+    ]
+    commands = [
+        BotCommand("market", "국가별 뉴스 감성"),
+        BotCommand("start", "사용 안내"),
+        BotCommand("menu", "관심종목 관리"),
+        BotCommand("add", "관심종목 추가"),
+        BotCommand("list", "관심종목 목록"),
+        BotCommand("view", "종목 감성 보기"),
+        BotCommand("score", "신호 성과 채점"),
+        BotCommand("research", "리서치 실행"),
+        BotCommand("briefing", "브리핑 생성"),
+        BotCommand("stockdb", "종목 DB 갱신"),
+        BotCommand("system", "시스템 상태"),
+        BotCommand("help", "명령어 안내"),
     ]
     await app.bot.set_my_commands(commands)
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())

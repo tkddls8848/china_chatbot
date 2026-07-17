@@ -22,6 +22,12 @@ def market_label(market: str) -> str:
 
 def render_market_chart(markets: dict[str, dict], lookback_days: int) -> BytesIO:
     """Return a PNG with latest market mood ranking and daily sentiment trends."""
+    # Telegram handlers run outside the process main thread.  A GUI backend
+    # attempts to create a window there, so force Matplotlib's file-only backend
+    # before importing pyplot.
+    import matplotlib
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     ordered = sorted(markets.items(), key=lambda item: item[1]["avg_sentiment"], reverse=True)

@@ -77,12 +77,15 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     wm: WatchlistManager = context.bot_data["watchlist_manager"]
+    message = update.effective_message
+    if message is None:
+        return
     watchlist = await wm.get_all()
     if not watchlist:
-        await update.message.reply_text("관심종목이 없습니다.\n/add 종목코드 로 추가하세요.")
+        await message.reply_text("관심종목이 없습니다.\n/add 종목코드 로 추가하세요.")
         return
     stock_list = "\n".join(f"  • {name} ({code})" for code, name in watchlist.items())
-    await update.message.reply_text(
+    await message.reply_text(
         f"<b>현재 관심종목</b>\n\n{stock_list}",
         parse_mode="HTML",
         reply_markup=build_list_keyboard(watchlist),

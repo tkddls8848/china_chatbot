@@ -12,11 +12,10 @@ from stocks.sources import (
     _classify_market,
     _fetch_a_code_name,
     _fetch_hk_spot,
-    _fetch_northbound_individual_a_codes,
-    _is_foreign_individual_a_share_fallback,
-    _is_foreign_individual_hk_security,
     _stock_entry,
 )
+from stocks.enrichment import enrich_openfigi, fetch_yahoo_korea_trial
+from core.config import OPENFIGI_API_KEY, YAHOO_KR_TICKER_SEEDS, YAHOO_KR_UNIVERSE_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +32,6 @@ class StockDatabase:
         old_db = self._load_existing_cache()
         a_loaded = False
         hk_loaded = False
-        northbound_codes: set[str] | None = None
-
-        try:
-            northbound_codes = _fetch_northbound_individual_a_codes()
-            if not northbound_codes:
-                raise RuntimeError("HKEX Northbound eligible code list is empty")
-            logger.info("[StockDB] HKEX 개인투자자 가능 A주 %d종목 로드", len(northbound_codes))
-        except Exception as e:
-            logger.warning("[StockDB] HKEX 가능 A주 목록 로드 실패, 코드 규칙 fallback 사용: %s", e)
-
         try:
             df_a = _fetch_a_code_name()
             cols = list(df_a.columns)
@@ -52,16 +41,13 @@ class StockDatabase:
                 code_col, name_col = "股票代码", "股票名称"
             for _, row in df_a.iterrows():
                 code = str(row[code_col]).zfill(6)
-                if northbound_codes is not None:
-                    if code not in northbound_codes:
-                        continue
-                elif not _is_foreign_individual_a_share_fallback(code):
-                    continue
                 cn_name = row[name_col]
-                entry = _stock_entry(cn_name, _classify_market(code))
+                market = _classify_market(code)
+                ticker = f"{code}.SS" if market == "SH" else f"{code}.SZ"
+                entry = _stock_entry(cn_name, market, ticker=ticker, exchange=market)
                 # 기존 enrichment 데이터 보존
                 old = old_db.get(code, {})
-                for field in ("market_cap_cny", "industry", "schema_version"):
+                for field in ("market_cap_cny", "industry"):
                     if old.get(field):
                         entry[field] = old[field]
                 db[code] = entry
@@ -69,16 +55,7 @@ class StockDatabase:
             logger.info("[StockDB] A주 %d종목 로드", len(db))
         except Exception as e:
             logger.warning("[StockDB] A주 빌드 실패: %s", e)
-            if northbound_codes is not None:
-                self._preserve_markets(
-                    db, old_db, {"SH", "SZ", "STAR", "CHI"},
-                    code_filter=lambda code: code in northbound_codes,
-                )
-            else:
-                self._preserve_markets(
-                    db, old_db, {"SH", "SZ", "STAR", "CHI"},
-                    code_filter=_is_foreign_individual_a_share_fallback,
-                )
+            self._preserve_markets(db, old_db, {"SH", "SZ", "STAR", "CHI"})
 
         hk_before = len(db)
         try:
@@ -92,12 +69,10 @@ class StockDatabase:
                 hk_code_col, hk_name_col = cols[1], cols[2]
             for _, row in df_hk.iterrows():
                 code = str(row[hk_code_col]).zfill(5)
-                if not _is_foreign_individual_hk_security(code):
-                    continue
                 cn_name = row[hk_name_col]
-                entry = _stock_entry(cn_name, "HK")
+                entry = _stock_entry(cn_name, "HK", ticker=f"{code.zfill(4)}.HK", exchange="HKEX")
                 old = old_db.get(code, {})
-                for field in ("market_cap_cny", "industry", "schema_version"):
+                for field in ("market_cap_cny", "industry"):
                     if old.get(field):
                         entry[field] = old[field]
                 db[code] = entry
@@ -105,10 +80,10 @@ class StockDatabase:
             logger.info("[StockDB] 홍콩 %d종목 로드", len(db) - hk_before)
         except Exception as e:
             logger.warning("[StockDB] 홍콩 빌드 실패: %s", e)
-            self._preserve_markets(
-                db, old_db, {"HK"},
-                code_filter=_is_foreign_individual_hk_security,
-            )
+            self._preserve_markets(db, old_db, {"HK"})
+
+        if YAHOO_KR_UNIVERSE_ENABLED:
+            self._build_korean_yahoo_trial(db)
 
         if not a_loaded and not hk_loaded and not db:
             raise RuntimeError("A주와 홍콩 주식 DB 빌드가 모두 실패했습니다")
@@ -117,6 +92,38 @@ class StockDatabase:
         self._cache_file.write_text(json.dumps(db, ensure_ascii=False), encoding="utf-8")
         self._db = db
         logger.info("[StockDB] DB 빌드 완료: 총 %d종목", len(db))
+
+    @staticmethod
+    def _build_korean_yahoo_trial(db: dict[str, dict]) -> None:
+        try:
+            rows = fetch_yahoo_korea_trial(YAHOO_KR_TICKER_SEEDS)
+        except Exception as exc:
+            logger.warning("[StockDB] Yahoo Korea trial collection failed: %s", exc)
+            return
+        for row in rows:
+            code = str(row["code"])
+            ticker = str(row["ticker"])
+            entry = {
+                "display_name": str(row["name"]),
+                "cn_name": "",
+                "ko_name": str(row["name"]),
+                "market": "KR",
+                "ticker": ticker,
+                "yahoo_ticker": ticker,
+                "exchange": str(row["exchange"]),
+                "asset_type": str(row["asset_type"]),
+                "currency": str(row["currency"]),
+                "status": "ACTIVE",
+                "source": "yahoo-finance-trial",
+                "schema_version": 2,
+                "figi": "",
+                "compositeFIGI": "",
+                "shareClassFIGI": "",
+                "isin": "",
+            }
+            entry.update(enrich_openfigi(code, "KS", OPENFIGI_API_KEY))
+            db[f"KR:{code}"] = entry
+        logger.info("[StockDB] Yahoo Korea trial loaded: %d tickers", len(rows))
 
     def _load_existing_cache(self) -> dict[str, dict]:
         if not self._cache_file.exists():
@@ -158,7 +165,9 @@ class StockDatabase:
         if self._cache_file.exists():
             try:
                 self.load()
-                return
+                if any(entry.get("schema_version") == 2 for entry in self._db.values()):
+                    return
+                logger.info("[StockDB] legacy schema detected; rebuilding universe")
             except Exception as e:
                 logger.warning("[StockDB] 캐시 로드 실패, 재빌드: %s", e)
         try:

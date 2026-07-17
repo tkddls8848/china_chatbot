@@ -7,7 +7,14 @@ from datetime import datetime
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from briefing import (
     TradeCalendar,
@@ -27,6 +34,7 @@ from handlers import (
     cmd_view,
     configure_telegram_menu,
 )
+from handlers.navigation import handle_menu_text
 from core.access import restricted
 from core.config import (
     BASE_DIR,
@@ -53,12 +61,13 @@ from core.config import (
     PROMPT_DIR,
     QUANT_CACHE_TTL_MINUTES,
     QUANT_CONTEXT_ENABLED,
+    QUANT_FAILURE_COOLDOWN_MINUTES,
     QUANT_SECTOR_TOP_N,
     RESEARCH_ANALYSIS_ENABLED,
     RESEARCH_ANALYSIS_MODEL,
     RESEARCH_ANALYSIS_NUM_PREDICT,
     RESEARCH_ANALYSIS_PROMPT_FILE,
-    RESEARCH_ANALYSIS_TIMEOUT,
+    RESEARCH_CPU_THREADS,
     RESEARCH_HISTORY_LIMIT,
     RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
     RESEARCH_STATE_FILE,
@@ -69,7 +78,6 @@ from core.config import (
     SCORECARD_ENABLED,
     SCORECARD_HOUR,
     SENT_IDS_FILE,
-    SENT_NEWS_MAX_IDS,
     SENT_NEWS_RETENTION_DAYS,
     STOCK_DB_ENABLED,
     STOCK_DB_FILE,
@@ -121,6 +129,10 @@ def _acquire_single_instance_lock(lock_file: Path):
 
 # ── 진입점 ────────────────────────────────────────────
 
+async def _handle_update_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("[TELEGRAM] update processing failed: %s", context.error, exc_info=context.error)
+
+
 def main() -> None:
     global _SINGLE_INSTANCE_LOCK
     _SINGLE_INSTANCE_LOCK = _acquire_single_instance_lock(BASE_DIR / "data" / "bot.lock")
@@ -144,13 +156,14 @@ def main() -> None:
         cooldown_minutes=NEWS_SOURCE_COOLDOWN_MINUTES,
     )
 
-    app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE, SENT_NEWS_MAX_IDS, SENT_NEWS_RETENTION_DAYS)
+    app.bot_data["sent_tracker"]         = SentNewsTracker(SENT_IDS_FILE, SENT_NEWS_RETENTION_DAYS)
     app.bot_data["watchlist_manager"]    = WatchlistManager(WATCHLIST_FILE)
     app.bot_data["watchlist_events"]     = WatchlistEventLog(WATCHLIST_EVENTS_FILE)
     app.bot_data["quote_service"]        = QuoteService(
         enabled=QUANT_CONTEXT_ENABLED,
         cache_ttl_minutes=QUANT_CACHE_TTL_MINUTES,
         sector_top_n=QUANT_SECTOR_TOP_N,
+        failure_cooldown_minutes=QUANT_FAILURE_COOLDOWN_MINUTES,
     )
     app.bot_data["market_view_manager"]  = MarketViewManager(RESEARCH_STATE_FILE, history_limit=RESEARCH_HISTORY_LIMIT)
     app.bot_data["research_pending"]     = {}
@@ -175,8 +188,9 @@ def main() -> None:
         base_url=OLLAMA_BASE_URL,
         model=RESEARCH_ANALYSIS_MODEL,
         enabled=RESEARCH_ANALYSIS_ENABLED,
-        timeout=RESEARCH_ANALYSIS_TIMEOUT,
+        timeout=None,
         num_predict=RESEARCH_ANALYSIS_NUM_PREDICT,
+        num_thread=RESEARCH_CPU_THREADS,
         prompt_file=RESEARCH_ANALYSIS_PROMPT_FILE,
         num_gpu=OLLAMA_NUM_GPU,
         remove_relevance_threshold=RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
@@ -200,6 +214,7 @@ def main() -> None:
         )
 
     app.bot_data["research_news_collector"] = _collect_research_news
+    app.add_error_handler(_handle_update_error)
 
     # 런타임 시스템 제어(텔레그램에서 GPU 사용 토글). 세션 한정이며
     # 재시작하면 .env의 OLLAMA_NUM_GPU 값으로 되돌아간다.
@@ -231,6 +246,7 @@ def main() -> None:
     app.add_handler(CommandHandler("stockdb", restricted(cmd_stockdb)))
     app.add_handler(CommandHandler("system",  restricted(cmd_system)))
     app.add_handler(CallbackQueryHandler(restricted(callback_handler)))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, restricted(handle_menu_text, show_status=False)))
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -295,4 +311,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        if _SINGLE_INSTANCE_LOCK is not None:
+            _SINGLE_INSTANCE_LOCK.close()
+            _SINGLE_INSTANCE_LOCK = None

@@ -1,13 +1,16 @@
 import asyncio
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class SentNewsTracker:
     """중복 전송 방지. retention_days 이전에 저장된 ID는 자동 만료된다."""
 
-    def __init__(self, file_path: Path, max_size: int = 0, retention_days: int = 7):
+    def __init__(self, file_path: Path, retention_days: int = 7):
         self._file_path = file_path
         self._retention_days = retention_days
         self._id_ts: dict[str, str] = {}  # id → ISO timestamp
@@ -20,23 +23,43 @@ class SentNewsTracker:
 
     def _evict(self) -> None:
         cutoff = self._cutoff()
-        expired = [
-            k for k, ts in self._id_ts.items()
-            if datetime.fromisoformat(ts) < cutoff
-        ]
+        expired = []
+        for article_id, timestamp in self._id_ts.items():
+            try:
+                is_expired = datetime.fromisoformat(timestamp) < cutoff
+            except (TypeError, ValueError):
+                is_expired = True
+            if is_expired:
+                expired.append(article_id)
         for k in expired:
             del self._id_ts[k]
 
-    def _load(self):
+    def _load(self) -> None:
         if not self._file_path.exists():
             return
-        raw = json.loads(self._file_path.read_text(encoding="utf-8"))
+        try:
+            text = self._file_path.read_text(encoding="utf-8").strip()
+            if not text:
+                logger.warning("[SENT] 전송 이력 파일이 비어 있어 새 이력으로 시작합니다: %s", self._file_path)
+                return
+            raw = json.loads(text)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("[SENT] 전송 이력 파일을 읽지 못해 새 이력으로 시작합니다: %s (%s)", self._file_path, exc)
+            return
+
         if isinstance(raw, list):
             # 구형 포맷(list) → 현재 시각으로 마이그레이션
             now = datetime.now().isoformat()
             self._id_ts = {item: now for item in raw if isinstance(item, str)}
         elif isinstance(raw, dict):
-            self._id_ts = raw
+            self._id_ts = {
+                article_id: timestamp
+                for article_id, timestamp in raw.items()
+                if isinstance(article_id, str) and isinstance(timestamp, str)
+            }
+        else:
+            logger.warning("[SENT] 전송 이력 파일 형식이 올바르지 않아 새 이력으로 시작합니다: %s", self._file_path)
+            return
         self._evict()
 
     async def reserve(self, article_id: str) -> bool:

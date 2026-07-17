@@ -104,8 +104,9 @@ class MarketViewAnalyzer:
         base_url: str,
         model: str,
         enabled: bool,
-        timeout: int,
+        timeout: int | None,
         num_predict: int,
+        num_thread: int,
         prompt_file: Path,
         num_gpu: int = 0,
         remove_relevance_threshold: float = 0.35,
@@ -117,6 +118,7 @@ class MarketViewAnalyzer:
         self._enabled = enabled
         self._timeout = timeout
         self._num_predict = num_predict
+        self._num_thread = max(1, num_thread)
         self._num_gpu = num_gpu
         self._remove_relevance_threshold = remove_relevance_threshold
         self._prompt = prompt_file.read_text(encoding="utf-8")
@@ -261,6 +263,7 @@ class MarketViewAnalyzer:
                 "options": {
                     "temperature": 0.2,
                     "num_predict": self._num_predict,
+                    "num_thread": self._num_thread,
                     "num_gpu": self._num_gpu,
                 },
             },
