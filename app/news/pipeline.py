@@ -17,6 +17,7 @@ from core.config import (
     GLOBAL_NEWS_BATCH_SIZE,
     NEWS_GLOBAL_LIMIT,
     NEWS_NEGATIVE_ALERT_THRESHOLD,
+    NEWS_SOURCE_MARKETS,
     NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
     NEWS_STOCK_LIMIT_PER_SYMBOL,
     STOCK_NEWS_BATCH_SIZE,
@@ -173,6 +174,8 @@ async def process_global_source(
                     sentiment=translated.sentiment,
                     impact=translated.impact,
                     codes=codes,
+                    market=str(article.extra.get("market") or NEWS_SOURCE_MARKETS.get(spec.key.lower(), "OTHER")),
+                    article_id=article_id,
                 )
             logger.info("[%s] 전송 완료: %s", spec.key, translated.title[:30])
         except Exception as e:
@@ -329,6 +332,8 @@ async def fetch_stock_news(
                             sentiment=translated.sentiment,
                             impact=translated.impact,
                             codes=[code],
+                            market=NEWS_SOURCE_MARKETS.get("stock", "CN"),
+                            article_id=article_id,
                         )
                     logger.info("[STOCK] 전송 완료: %s %s", name, translated.title[:20])
                 except Exception as e:

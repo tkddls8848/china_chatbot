@@ -3,6 +3,7 @@
 from handlers.commands import (
     callback_handler,
     cmd_help,
+    cmd_market,
     cmd_score,
     cmd_start,
     cmd_stockdb,
@@ -14,6 +15,7 @@ from handlers.commands import (
 __all__ = [
     "callback_handler",
     "cmd_help",
+    "cmd_market",
     "cmd_score",
     "cmd_start",
     "cmd_stockdb",

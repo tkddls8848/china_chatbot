@@ -23,6 +23,13 @@ def test_build_source_specs_ignores_unknown_and_duplicates():
     assert specs[2].prompt_key == "global"
 
 
+def test_build_source_specs_supports_two_global_public_providers():
+    specs = build_source_specs(["gdelt", "gnews"], [])
+
+    assert [spec.key for spec in specs] == ["gdelt", "gnews"]
+    assert all(spec.prompt_key == "global" for spec in specs)
+
+
 def test_source_cooldown_after_consecutive_failures():
     registry = _registry(failure_threshold=3, cooldown_minutes=60)
     assert [s.key for s in registry.active_specs()] == ["futu", "em"]

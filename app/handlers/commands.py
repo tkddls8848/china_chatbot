@@ -11,11 +11,24 @@ from telegram.ext import Application, ContextTypes
 from core.config import (
     BACKTEST_LOG_FILE,
     HELP_TEXT,
+    MARKET_CHART_MARKETS,
+    MARKET_CHART_LOOKBACK_DAYS,
+    MARKET_CHART_MIN_ARTICLES,
+    MARKET_CHART_MIN_DAYS,
+    NEWS_MARKET_BACKFILL_QUERIES,
     PREDICTION_LOG_FILE,
     VIEW_LOOKBACK_DAYS,
 )
+from news import backfill_market_history
 from news.utils import normalize_stock_code
-from state import PredictionLog, aggregate_stock_views
+from state import (
+    NewsLog,
+    PredictionLog,
+    aggregate_market_sentiment,
+    aggregate_stock_views,
+    market_history_gaps,
+)
+from market_chart import market_label, render_market_chart
 from state.scoring import (
     DEFAULT_HORIZONS,
     DEFAULT_THRESHOLD,
@@ -29,6 +42,83 @@ from core.system_control import SystemControlManager
 from watchlist import handle_watchlist_callback
 
 logger = logging.getLogger(__name__)
+
+
+async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send country/market news sentiment ranking and trend chart."""
+    message = update.effective_message
+    if message is None:
+        return
+    args = context.args or []
+    days = MARKET_CHART_LOOKBACK_DAYS
+    if args:
+        try:
+            days = int(args[0])
+        except ValueError:
+            await message.reply_text("사용법: /market [1-30일]")
+            return
+    if not 1 <= days <= 30:
+        await message.reply_text("조회 기간은 1~30일로 지정해 주세요.")
+        return
+
+    news_log: NewsLog | None = context.bot_data.get("news_log")
+    if news_log is None:
+        await message.reply_text("시장 감성 로그를 아직 준비하지 못했습니다.")
+        return
+    required_markets = set(MARKET_CHART_MARKETS)
+    entries = await news_log.snapshot(since_hours=days * 24)
+    markets = aggregate_market_sentiment(entries, since_hours=days * 24)
+    gaps = market_history_gaps(
+        markets, required_markets, MARKET_CHART_MIN_ARTICLES, min(days, MARKET_CHART_MIN_DAYS)
+    )
+    status = await message.reply_text("차트용 과거 뉴스·감성 데이터를 점검하는 중입니다...")
+    try:
+        if gaps:
+            translator = context.bot_data.get("translator")
+            semaphore = context.bot_data.get("translate_semaphore")
+            if translator is None or semaphore is None:
+                await status.edit_text("과거 기사 수집기가 아직 준비되지 않았습니다.")
+                return
+            await status.edit_text("데이터가 부족해 해당 기간의 과거 기사를 수집·분석하는 중입니다...")
+            await backfill_market_history(
+                news_log,
+                translator,
+                semaphore,
+                set(gaps),
+                NEWS_MARKET_BACKFILL_QUERIES,
+                days,
+                max_articles_per_day=1,
+            )
+            entries = await news_log.snapshot(since_hours=days * 24)
+            markets = aggregate_market_sentiment(entries, since_hours=days * 24)
+            gaps = market_history_gaps(
+                markets, required_markets, MARKET_CHART_MIN_ARTICLES, min(days, MARKET_CHART_MIN_DAYS)
+            )
+        ready_markets = {market: stats for market, stats in markets.items() if market not in gaps}
+        if len(ready_markets) < 2:
+            detail = ", ".join(f"{market}: {reason}" for market, reason in sorted(gaps.items()))
+            await status.edit_text(
+                "차트를 그릴 만큼 신뢰할 수 있는 국가별 시계열을 확보하지 못했습니다.\n"
+                f"부족 항목: {detail}\n"
+                "불완전한 선이나 단일 점 차트는 만들지 않았습니다. 잠시 뒤 다시 시도해 주세요."
+            )
+            return
+        image = await asyncio.to_thread(render_market_chart, ready_markets, days)
+        ranking = " | ".join(
+            f"{market_label(market)} {stats['avg_sentiment']:+.2f} ({stats['count']})"
+            for market, stats in sorted(ready_markets.items(), key=lambda item: item[1]["avg_sentiment"], reverse=True)
+        )
+        await message.reply_photo(
+            photo=image,
+            caption=(
+                f"국가·증시별 뉴스 감성 — 최근 {days}일\n{ranking}\n\n"
+                "점수는 기사 단위 분위기 지표(-1~+1)이며 투자 조언이 아닙니다."
+            ),
+        )
+        await status.delete()
+    except Exception as exc:
+        logger.exception("[MARKET] chart rendering failed")
+        await status.edit_text(f"시장 감성 차트를 만들지 못했습니다: {exc}")
 
 
 # ── 명령어 핸들러 ─────────────────────────────────────
@@ -284,6 +374,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def configure_telegram_menu(app: Application) -> None:
     commands = [
+        BotCommand("market", "Market news sentiment chart"),
         BotCommand("start", "봇 소개와 사용 가능한 경로 보기"),
         BotCommand("menu", "관심종목 삭제/관리 버튼 열기"),
         BotCommand("add", "관심종목 추가: /add 600519"),

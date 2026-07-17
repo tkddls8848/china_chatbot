@@ -87,7 +87,7 @@ def _parse_global_source_keys() -> list[str]:
     raw = os.environ.get("NEWS_GLOBAL_SOURCES", "").strip()
     if raw:
         return [key.strip().lower() for key in raw.split(",") if key.strip()]
-    keys = ["futu", "em", "sina"]
+    keys = ["futu", "em", "sina", "gdelt", "gnews"]
     if NEWS_ENABLE_CLS:
         keys.append("cls")
     return keys
@@ -169,7 +169,65 @@ QUANT_CACHE_TTL_MINUTES = int(os.environ.get("QUANT_CACHE_TTL_MINUTES", "10"))
 QUANT_SECTOR_TOP_N = int(os.environ.get("QUANT_SECTOR_TOP_N", "5"))
 
 # 최근 뉴스 로그(마감 브리핑 요약 입력)
-NEWS_LOG_RETENTION_DAYS = int(os.environ.get("NEWS_LOG_RETENTION_DAYS", "3"))
+NEWS_LOG_RETENTION_DAYS = int(os.environ.get("NEWS_LOG_RETENTION_DAYS", "30"))
+# Source-to-market mapping for the market sentiment dashboard.  Values are
+# ISO-like market keys (CN, HK, US, KR, JP, ...); an unmapped source is kept as
+# "OTHER" instead of being silently mixed into another market.
+def _parse_market_map() -> dict[str, str]:
+    raw = os.environ.get("NEWS_SOURCE_MARKETS", "").strip()
+    mapping: dict[str, str] = {
+        "futu": "CN",
+        "em": "CN",
+        "sina": "CN",
+        "ths": "CN",
+        "cls": "CN",
+        "stock": "CN",
+    }
+    for item in raw.split(","):
+        source, separator, market = item.rpartition(":")
+        if not separator:
+            continue
+        source, market = source.strip().lower(), market.strip().upper()
+        if source and market:
+            mapping[source] = market
+    return mapping
+
+
+NEWS_SOURCE_MARKETS = _parse_market_map()
+MARKET_CHART_LOOKBACK_DAYS = int(os.environ.get("MARKET_CHART_LOOKBACK_DAYS", "7"))
+MARKET_CHART_MIN_ARTICLES = int(os.environ.get("MARKET_CHART_MIN_ARTICLES", "6"))
+MARKET_CHART_MIN_DAYS = int(os.environ.get("MARKET_CHART_MIN_DAYS", "3"))
+MARKET_CHART_MARKETS = frozenset(
+    market.strip().upper()
+    for market in os.environ.get("MARKET_CHART_MARKETS", "CN,HK,US,KR").split(",")
+    if market.strip()
+)
+
+
+def _parse_market_backfill_queries() -> dict[str, str]:
+    raw = os.environ.get("NEWS_MARKET_BACKFILL_QUERIES", "").strip()
+    defaults = {
+        "CN": "China stock market",
+        "HK": "Hong Kong stock market",
+        "US": "US stock market",
+        "KR": "Korea stock market",
+        "JP": "Japan stock market",
+        "EU": "European stock market",
+        "RU": "Russia stock market",
+        "TW": "Taiwan stock market",
+    }
+    if not raw:
+        return defaults
+    queries: dict[str, str] = {}
+    for item in raw.split(","):
+        market, separator, query = item.partition("|")
+        market, query = market.strip().upper(), query.strip()
+        if separator and market and query:
+            queries[market] = query
+    return queries
+
+
+NEWS_MARKET_BACKFILL_QUERIES = _parse_market_backfill_queries()
 
 # 모닝/마감 브리핑과 주간 성적표(호스트 현지 시각 기준 cron)
 BRIEFING_MORNING_ENABLED = _env_bool("BRIEFING_MORNING_ENABLED", "true")

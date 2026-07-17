@@ -19,6 +19,7 @@ from briefing import (
 from handlers import (
     callback_handler,
     cmd_help,
+    cmd_market,
     cmd_score,
     cmd_start,
     cmd_stockdb,
@@ -223,6 +224,7 @@ def main() -> None:
     app.add_handler(CommandHandler("add",     restricted(cmd_add)))
     app.add_handler(CommandHandler("list",    restricted(cmd_list)))
     app.add_handler(CommandHandler("view",    restricted(cmd_view)))
+    app.add_handler(CommandHandler("market",  restricted(cmd_market)))
     app.add_handler(CommandHandler("score",   restricted(cmd_score)))
     app.add_handler(CommandHandler("research", restricted(cmd_research)))
     app.add_handler(CommandHandler("briefing", restricted(cmd_briefing)))

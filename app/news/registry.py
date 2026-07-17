@@ -17,6 +17,8 @@ from news.sources import (
     fetch_cls_articles,
     fetch_em_articles,
     fetch_futu_articles,
+    fetch_gdelt_global_articles,
+    fetch_google_news_global_articles,
     fetch_rss_articles,
     fetch_sina_articles,
     fetch_ths_articles,
@@ -48,6 +50,9 @@ _BUILTIN_SPECS: dict[str, tuple[str, str, Callable[[], list[GlobalArticle]]]] = 
     "sina": ("신랑재경(新浪财经)", "global", fetch_sina_articles),
     "ths": ("동화순(同花顺)", "global", fetch_ths_articles),
 }
+
+_BUILTIN_SPECS["gdelt"] = ("GDELT Global", "global", fetch_gdelt_global_articles)
+_BUILTIN_SPECS["gnews"] = ("Google News Global", "global", fetch_google_news_global_articles)
 
 
 def build_source_specs(

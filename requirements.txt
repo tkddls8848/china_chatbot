@@ -10,3 +10,4 @@ tenacity
 feedparser
 yfinance
 streamlit
+matplotlib

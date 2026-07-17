@@ -51,22 +51,31 @@ class NewsLog:
         sentiment: float | None,
         impact: str,
         codes: list[str],
-    ) -> None:
+        market: str = "OTHER",
+        article_id: str = "",
+        occurred_at: datetime | None = None,
+    ) -> bool:
         async with self._lock:
+            normalized_id = str(article_id).strip()
+            if normalized_id and any(entry.get("article_id") == normalized_id for entry in self._entries):
+                return False
             self._entries.append(
                 {
-                    "ts": datetime.now().isoformat(timespec="seconds"),
+                    "ts": (occurred_at or datetime.now()).isoformat(timespec="seconds"),
                     "source": source,
+                    "article_id": normalized_id,
                     "title": title[:120],
                     "sentiment": sentiment,
                     "impact": impact,
                     "codes": list(codes),
+                    "market": str(market or "OTHER").strip().upper(),
                 }
             )
             self._evict()
             data = json.dumps(self._entries, ensure_ascii=False)
             self._file_path.parent.mkdir(parents=True, exist_ok=True)
             await asyncio.to_thread(self._file_path.write_text, data, encoding="utf-8")
+            return True
 
     async def snapshot(self, since_hours: int = 24) -> list[dict[str, Any]]:
         cutoff = datetime.now() - timedelta(hours=max(1, since_hours))
@@ -79,6 +88,14 @@ class NewsLog:
                 except (TypeError, ValueError):
                     continue
             return result
+
+    async def contains_article(self, article_id: str) -> bool:
+        """Check a persistent article ID so on-demand backfills are idempotent."""
+        normalized_id = str(article_id).strip()
+        if not normalized_id:
+            return False
+        async with self._lock:
+            return any(entry.get("article_id") == normalized_id for entry in self._entries)
 
 
 def aggregate_sentiment_by_code(
@@ -108,3 +125,66 @@ def aggregate_sentiment_by_code(
             bucket["sentiment_sum"] / bucket["scored"] if bucket["scored"] else None
         )
     return stats
+
+
+def aggregate_market_sentiment(
+    entries: list[dict[str, Any]],
+    since_hours: int,
+) -> dict[str, dict[str, Any]]:
+    """Aggregate scored news into market-level daily trend data.
+
+    An article is counted once for its assigned market, regardless of how many
+    watchlist symbols it mentions.  This makes the market view a news-mood
+    indicator rather than a watchlist-size indicator.
+    """
+    cutoff = datetime.now() - timedelta(hours=max(1, since_hours))
+    markets: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        sentiment = entry.get("sentiment")
+        if not isinstance(sentiment, (int, float)):
+            continue
+        try:
+            ts = datetime.fromisoformat(str(entry.get("ts")))
+        except (TypeError, ValueError):
+            continue
+        if ts < cutoff:
+            continue
+        market = str(entry.get("market") or "OTHER").strip().upper()
+        bucket = markets.setdefault(market, {"sum": 0.0, "count": 0, "daily": {}})
+        value = max(-1.0, min(1.0, float(sentiment)))
+        bucket["sum"] += value
+        bucket["count"] += 1
+        day = ts.date().isoformat()
+        daily = bucket["daily"].setdefault(day, {"sum": 0.0, "count": 0})
+        daily["sum"] += value
+        daily["count"] += 1
+
+    for bucket in markets.values():
+        bucket["avg_sentiment"] = bucket["sum"] / bucket["count"]
+        bucket["daily"] = [
+            {"date": day, "avg_sentiment": point["sum"] / point["count"], "count": point["count"]}
+            for day, point in sorted(bucket["daily"].items())
+        ]
+    return markets
+
+
+def market_history_gaps(
+    markets: dict[str, dict[str, Any]],
+    required_markets: set[str],
+    minimum_articles: int,
+    minimum_days: int,
+) -> dict[str, str]:
+    """Return per-market readiness gaps for a chart-worthy sentiment series."""
+    gaps: dict[str, str] = {}
+    for market in sorted(required_markets):
+        stats = markets.get(market)
+        if stats is None:
+            gaps[market] = "no scored articles"
+            continue
+        if stats["count"] < minimum_articles:
+            gaps[market] = f"{stats['count']}/{minimum_articles} scored articles"
+            continue
+        day_count = len(stats["daily"])
+        if day_count < minimum_days:
+            gaps[market] = f"{day_count}/{minimum_days} calendar days"
+    return gaps
