@@ -1,6 +1,7 @@
 import json
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict
 
@@ -43,7 +44,8 @@ class TranslationService:
         prompt_dir: Path,
         num_gpu: int = 0,
         num_predict: int = 512,
-        brief_content_limit: int = 150,
+        brief_content_limit: int = 180,
+        stock_brief_content_limit: int = 150,
     ):
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -52,6 +54,7 @@ class TranslationService:
         self._num_gpu = num_gpu
         self._num_predict = num_predict
         self._brief_content_limit = max(1, brief_content_limit)
+        self._stock_brief_content_limit = max(1, stock_brief_content_limit)
         self._prompts = self._load_prompts(prompt_dir)
 
     def set_num_gpu(self, num_gpu: int) -> None:
@@ -80,17 +83,25 @@ class TranslationService:
         content = (content or "").strip() or title
 
         try:
-            content_limit = (
-                self._brief_content_limit
-                if source in self._BRIEF_SOURCES
-                else None
-            )
+            if source == "stock":
+                content_limit = getattr(
+                    self,
+                    "_stock_brief_content_limit",
+                    self._brief_content_limit,
+                )
+            elif source in self._BRIEF_SOURCES:
+                content_limit = self._brief_content_limit
+            else:
+                content_limit = None
             tolerated_limit = (
                 content_limit + max(10, round(content_limit * 0.1))
                 if content_limit is not None
                 else None
             )
             result: TranslationResult | None = None
+            result_has_untranslated_title = False
+            retry_for_length = False
+            retry_for_translation = False
             for attempt in range(2):
                 try:
                     translated = self._request_translation(
@@ -98,13 +109,31 @@ class TranslationService:
                         title,
                         content,
                         content_limit=content_limit,
-                        retry_for_length=attempt > 0,
+                        retry_for_length=retry_for_length,
+                        retry_for_translation=retry_for_translation,
                     )
                     rewritten = self._parse_translation(
                         translated, title_fallback=attempt == 0
                     )
                 except Exception as rewrite_error:
-                    if attempt > 0 and result is not None:
+                    content_title_result = (
+                        self._use_korean_content_as_title(result)
+                        if attempt > 0 and result is not None
+                        else None
+                    )
+                    if content_title_result is not None:
+                        logger.warning(
+                            "[TRANSLATE] %s title rewrite failed; "
+                            "using the Korean brief as title: %s",
+                            source,
+                            content_title_result.title[:80],
+                        )
+                        return content_title_result
+                    if (
+                        attempt > 0
+                        and result is not None
+                        and not result_has_untranslated_title
+                    ):
                         logger.warning(
                             "[TRANSLATE] %s brief rewrite failed; "
                             "using the first valid result (%d chars): %s",
@@ -116,23 +145,49 @@ class TranslationService:
                     raise
 
                 result = rewritten
-                if (
-                    tolerated_limit is None
-                    or len(result.content) <= tolerated_limit
-                ):
+                retry_for_length = (
+                    tolerated_limit is not None
+                    and len(result.content) > tolerated_limit
+                )
+                retry_for_translation = self._looks_untranslated_chinese(
+                    result.title
+                )
+                result_has_untranslated_title = retry_for_translation
+                if not retry_for_length and not retry_for_translation:
                     return result
                 if attempt == 0:
-                    logger.warning(
-                        "[TRANSLATE] %s brief too long (%d>%d tolerated); "
-                        "requesting rewrite",
-                        source,
-                        len(result.content),
-                        tolerated_limit,
-                    )
+                    if retry_for_length:
+                        logger.warning(
+                            "[TRANSLATE] %s brief too long (%d>%d tolerated); "
+                            "requesting rewrite",
+                            source,
+                            len(result.content),
+                            tolerated_limit,
+                        )
+                    if retry_for_translation:
+                        logger.warning(
+                            "[TRANSLATE] %s title remains Chinese; "
+                            "requesting Korean rewrite: %s",
+                            source,
+                            result.title[:80],
+                        )
 
+            assert result is not None
+            if result_has_untranslated_title:
+                content_title_result = self._use_korean_content_as_title(result)
+                if content_title_result is None:
+                    raise ValueError(
+                        "title remains untranslated Chinese after rewrite"
+                    )
+                logger.warning(
+                    "[TRANSLATE] %s title remains Chinese after rewrite; "
+                    "using the Korean brief as title: %s",
+                    source,
+                    content_title_result.title[:80],
+                )
+                return content_title_result
             # 문장 중간을 기계적으로 자르지 않는다. 재작성 결과가 여전히 길면
             # 완결된 문장을 보존하고 경고를 남긴다.
-            assert result is not None
             logger.warning(
                 "[TRANSLATE] %s brief remains over limit after rewrite: %d chars",
                 source,
@@ -149,6 +204,7 @@ class TranslationService:
         content: str,
         content_limit: int | None = None,
         retry_for_length: bool = False,
+        retry_for_translation: bool = False,
     ) -> str:
         brief_rules = ""
         if content_limit is not None:
@@ -157,12 +213,19 @@ class TranslationService:
                 if retry_for_length
                 else ""
             )
+            translation_retry_rule = (
+                "- Your previous title remained in Chinese. Rewrite the entire "
+                "title in natural Korean; preserve only proper nouns and tickers "
+                "when necessary.\n"
+                if retry_for_translation
+                else ""
+            )
             brief_rules = (
                 f"\n- content must be a complete Korean news brief of at most "
                 f"{content_limit} characters including spaces.\n"
                 "- Summarize the meaning; never copy and cut the first characters.\n"
                 "- End content as a complete phrase or sentence without an ellipsis.\n"
-                f"{retry_rule}"
+                f"{retry_rule}{translation_retry_rule}"
             )
         system_prompt = (
             f"{prompt}\n\n"
@@ -206,6 +269,30 @@ class TranslationService:
             )
             raise ValueError("empty Ollama response content")
         return translated
+
+    @staticmethod
+    def _looks_untranslated_chinese(text: str) -> bool:
+        """한글 없이 중국 한자로만 남은 제목을 미번역 결과로 판정한다."""
+        cjk_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", text))
+        has_hangul = bool(re.search(r"[가-힣]", text))
+        return cjk_count >= 4 and not has_hangul
+
+    @classmethod
+    def _use_korean_content_as_title(
+        cls,
+        result: TranslationResult,
+    ) -> TranslationResult | None:
+        content = re.sub(r"\s+", " ", result.content).strip()
+        if (
+            len(re.findall(r"[가-힣]", content)) < 2
+            or cls._looks_untranslated_chinese(content)
+        ):
+            return None
+        first_sentence = re.split(r"(?<=[.!?])\s+", content, maxsplit=1)[0]
+        title = first_sentence.rstrip(".!? ").strip()
+        if not title:
+            return None
+        return replace(result, title=title)
 
     @staticmethod
     def _parse_sentiment(value: Any) -> float | None:

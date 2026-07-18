@@ -107,9 +107,11 @@ class MarketViewAnalyzer:
         enabled: bool,
         timeout: int | None,
         num_predict: int,
+        num_ctx: int,
         num_thread: int,
         prompt_file: Path,
         num_gpu: int = 0,
+        max_new_actions: int = 4,
         remove_relevance_threshold: float = 0.35,
         verification_enabled: bool = False,
         verification_prompt_file: Path | None = None,
@@ -119,8 +121,10 @@ class MarketViewAnalyzer:
         self._enabled = enabled
         self._timeout = timeout
         self._num_predict = num_predict
+        self._num_ctx = max(4096, num_ctx)
         self._num_thread = max(1, num_thread)
         self._num_gpu = num_gpu
+        self._max_new_actions = max(0, max_new_actions)
         self._remove_relevance_threshold = remove_relevance_threshold
         self._prompt = prompt_file.read_text(encoding="utf-8")
         self._verification_prompt = ""
@@ -155,6 +159,7 @@ class MarketViewAnalyzer:
             "news_items": news_items,
             "candidate_universe": candidate_universe or [],
             "remove_relevance_threshold": self._remove_relevance_threshold,
+            "max_new_actions": self._max_new_actions,
         }
         if quant_context:
             payload["quant_context"] = quant_context
@@ -296,6 +301,7 @@ class MarketViewAnalyzer:
                 "options": {
                     "temperature": 0.2,
                     "num_predict": self._num_predict,
+                    "num_ctx": self._num_ctx,
                     "num_thread": self._num_thread,
                     "num_gpu": self._num_gpu,
                 },
@@ -396,7 +402,7 @@ class MarketViewAnalyzer:
             "actions": [],
             "risks": [
                 "LLM 응답 JSON이 중간에 잘려 요약만 복구했습니다. "
-                "RESEARCH_ANALYSIS_NUM_PREDICT 값을 2048 이상으로 높이면 후보 액션까지 받을 가능성이 커집니다."
+                "후보 수나 출력 항목 수를 더 줄여야 합니다."
             ],
         }
 

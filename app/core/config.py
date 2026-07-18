@@ -70,9 +70,13 @@ TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "2"))
 SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
 TELEGRAM_MESSAGE_LIMIT = 4096
 NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))
-NEWS_TRANSLATED_CONTENT_MAX_CHARS = max(
+NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS = max(
     1,
-    int(os.environ.get("NEWS_TRANSLATED_CONTENT_MAX_CHARS", "150")),
+    int(os.environ.get("NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS", "180")),
+)
+NEWS_STOCK_TRANSLATED_CONTENT_MAX_CHARS = max(
+    1,
+    int(os.environ.get("NEWS_STOCK_TRANSLATED_CONTENT_MAX_CHARS", "150")),
 )
 NEWS_DIGEST_MESSAGE_MAX_CHARS = min(
     TELEGRAM_MESSAGE_LIMIT,
@@ -98,7 +102,7 @@ def _parse_global_source_keys() -> list[str]:
     raw = os.environ.get("NEWS_GLOBAL_SOURCES", "").strip()
     if raw:
         return [key.strip().lower() for key in raw.split(",") if key.strip()]
-    keys = ["futu", "em", "sina", "gnews"]
+    keys = ["futu", "em", "sina", "gnews", "gnews_us"]
     if NEWS_ENABLE_CLS:
         keys.append("cls")
     return keys
@@ -156,13 +160,25 @@ RESEARCH_NEWS_GLOBAL_LIMIT = int(
     os.environ.get("RESEARCH_NEWS_GLOBAL_LIMIT", "3")
 )
 RESEARCH_ANALYSIS_NUM_PREDICT = int(
-    os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
+    os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "1024")
+)
+RESEARCH_ANALYSIS_NUM_CTX = max(
+    4096,
+    int(os.environ.get("RESEARCH_ANALYSIS_NUM_CTX", "16384")),
 )
 RESEARCH_CPU_THREADS = max(
     1,
     int(os.environ.get("RESEARCH_CPU_THREADS", str(max(1, (os.cpu_count() or 4) // 3)))),
 )
-NON_URGENT_WORKER_COUNT = max(1, int(os.environ.get("NON_URGENT_WORKER_COUNT", "1")))
+RESEARCH_MAX_CANDIDATES = max(
+    1,
+    int(os.environ.get("RESEARCH_MAX_CANDIDATES", "10")),
+)
+RESEARCH_MAX_NEW_ACTIONS = max(
+    0,
+    int(os.environ.get("RESEARCH_MAX_NEW_ACTIONS", "4")),
+)
+NON_URGENT_WORKER_COUNT = max(1, int(os.environ.get("NON_URGENT_WORKER_COUNT", "3")))
 RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
     1.0,
     max(
@@ -171,7 +187,7 @@ RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
     ),
 )
 # 시장뷰 분석 강화: bull/bear 검증 패스, 분석 이력 메모리
-RESEARCH_VERIFICATION_ENABLED = _env_bool("RESEARCH_VERIFICATION_ENABLED", "true")
+RESEARCH_VERIFICATION_ENABLED = _env_bool("RESEARCH_VERIFICATION_ENABLED", "false")
 RESEARCH_VERIFICATION_PROMPT_FILE = PROMPT_DIR / "market_research_verify_ko.txt"
 RESEARCH_HISTORY_LIMIT = int(os.environ.get("RESEARCH_HISTORY_LIMIT", "5"))
 # 강세 섹터 구성종목을 리서치 후보군에 추가
@@ -218,6 +234,10 @@ NEWS_SOURCE_MARKETS = _parse_market_map()
 MARKET_CHART_LOOKBACK_DAYS = int(os.environ.get("MARKET_CHART_LOOKBACK_DAYS", "7"))
 MARKET_CHART_MIN_ARTICLES = int(os.environ.get("MARKET_CHART_MIN_ARTICLES", "6"))
 MARKET_CHART_MIN_DAYS = int(os.environ.get("MARKET_CHART_MIN_DAYS", "3"))
+MARKET_CHART_BACKFILL_DAYS_PER_REQUEST = max(
+    1,
+    int(os.environ.get("MARKET_CHART_BACKFILL_DAYS_PER_REQUEST", "7")),
+)
 MARKET_CHART_MARKETS = frozenset(
     market.strip().upper()
     for market in os.environ.get("MARKET_CHART_MARKETS", "CN,HK,US,KR").split(",")

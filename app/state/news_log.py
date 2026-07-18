@@ -6,9 +6,15 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+import re
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+_HISTORY_DAY_RE = re.compile(
+    r"^history:(?P<market>[^:]+):rss:history:[^:]+:"
+    r"(?P<day>\d{4}-\d{2}-\d{2}):"
+)
 
 
 class NewsLog:
@@ -42,7 +48,23 @@ class NewsLog:
             return
         if isinstance(raw, list):
             self._entries = [e for e in raw if isinstance(e, dict)]
+            self._repair_history_timestamps()
             self._evict()
+
+    def _repair_history_timestamps(self) -> None:
+        """과거 검색 결과를 RSS 게시시각이 아닌 검색 대상 날짜에 배치한다."""
+        for entry in self._entries:
+            match = _HISTORY_DAY_RE.match(str(entry.get("article_id") or ""))
+            if match is None:
+                continue
+            entry["ts"] = (
+                datetime.combine(
+                    datetime.fromisoformat(match.group("day")).date(),
+                    datetime.max.time(),
+                )
+                .replace(microsecond=0)
+                .isoformat()
+            )
 
     async def record(
         self,
@@ -96,6 +118,31 @@ class NewsLog:
             return False
         async with self._lock:
             return any(entry.get("article_id") == normalized_id for entry in self._entries)
+
+    async def missing_history_days(
+        self,
+        markets: set[str],
+        lookback_days: int,
+    ) -> dict[str, list[date]]:
+        """요청 기간 중 아직 날짜별 과거 검색을 기록하지 않은 날을 반환한다."""
+        today = datetime.now().date()
+        expected = [
+            today - timedelta(days=offset)
+            for offset in range(1, max(1, lookback_days) + 1)
+        ]
+        async with self._lock:
+            covered: dict[str, set[str]] = {market: set() for market in markets}
+            for entry in self._entries:
+                match = _HISTORY_DAY_RE.match(str(entry.get("article_id") or ""))
+                if match is None:
+                    continue
+                market = match.group("market").upper()
+                if market in covered:
+                    covered[market].add(match.group("day"))
+        return {
+            market: [day for day in expected if day.isoformat() not in covered[market]]
+            for market in sorted(markets)
+        }
 
 
 def aggregate_sentiment_by_code(

@@ -13,11 +13,21 @@ from datetime import date
 from urllib.parse import quote_plus, urlparse
 
 import akshare as ak
+import pandas as pd
 import requests
 import requests.exceptions
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from core.config import NEWS_SOURCE_ARTICLE_LIMIT
+
+_STOCK_NEWS_COLUMNS = [
+    "关键词",
+    "新闻标题",
+    "新闻内容",
+    "发布时间",
+    "文章来源",
+    "新闻链接",
+]
 
 
 def retry_on_network(func):
@@ -71,7 +81,14 @@ def fetch_ths_raw():
 
 @retry_on_network
 def fetch_stock_news_raw(symbol: str):
-    return ak.stock_news_em(symbol=symbol)
+    try:
+        return ak.stock_news_em(symbol=symbol)
+    except KeyError as exc:
+        # AkShare stock_news_em은 검색 결과가 없을 때 빈 DataFrame의
+        # 존재하지 않는 "code" 열을 읽어 KeyError를 발생시킨다.
+        if exc.args != ("code",):
+            raise
+        return pd.DataFrame(columns=_STOCK_NEWS_COLUMNS)
 
 
 def fetch_rss_raw(url: str) -> bytes:
@@ -255,13 +272,17 @@ def fetch_google_news_history(query: str, day: date, market: str) -> list[Global
 
 _REGIONAL_MARKET_QUERIES = {
     "CN": "China stock market economy",
-    "US": "US stock market economy",
     "EU": "European stock market economy",
     "RU": "Russia stock market economy",
     "KR": "Korea stock market economy",
     "JP": "Japan stock market economy",
     "TW": "Taiwan stock market economy",
 }
+_US_STOCK_NEWS_QUERIES = (
+    "US stock market Wall Street when:1d",
+    "S&P 500 Nasdaq stocks earnings when:1d",
+    "US companies stock market news when:1d",
+)
 
 def _interleave(groups: list[list[GlobalArticle]]) -> list[GlobalArticle]:
     result: list[GlobalArticle] = []
@@ -271,6 +292,18 @@ def _interleave(groups: list[list[GlobalArticle]]) -> list[GlobalArticle]:
             if index < len(group):
                 result.append(group[index])
     return result
+
+
+def _deduplicate_articles(articles: list[GlobalArticle]) -> list[GlobalArticle]:
+    unique = []
+    seen = set()
+    for article in articles:
+        identity = article.url or re.sub(r"\s+", " ", article.title).strip().lower()
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(article)
+    return unique
 
 
 def _fetch_google_news_market(market: str) -> list[GlobalArticle]:
@@ -303,4 +336,59 @@ def fetch_google_news_global_articles() -> list[GlobalArticle]:
                 groups.append(futures[market].result())
             except Exception:
                 groups.append([])
-    return _interleave(groups)[:NEWS_SOURCE_ARTICLE_LIMIT]
+    return _deduplicate_articles(_interleave(groups))[:NEWS_SOURCE_ARTICLE_LIMIT]
+
+
+def _fetch_google_news_us_query(
+    query: str,
+    query_index: int,
+    limit: int,
+) -> list[GlobalArticle]:
+    url = (
+        "https://news.google.com/rss/search?q="
+        + quote_plus(query)
+        + "&hl=en-US&gl=US&ceid=US:en"
+    )
+    articles = fetch_rss_articles(
+        url,
+        f"gnews-us:{query_index}",
+        max_articles=limit,
+    )
+    return [
+        GlobalArticle(
+            article_id=f"gnews-us:{article.article_id}",
+            title=article.title,
+            content=article.content,
+            published_at=article.published_at,
+            published_date=article.published_date,
+            url=article.url,
+            extra={"market": "US", "provider": "google-news"},
+        )
+        for article in articles
+    ]
+
+
+def fetch_google_news_us_stock_articles() -> list[GlobalArticle]:
+    """주기 전역 다이제스트용 미국 증시 전용 Google News RSS."""
+    per_query_limit = max(
+        1,
+        (NEWS_SOURCE_ARTICLE_LIMIT + len(_US_STOCK_NEWS_QUERIES) - 1)
+        // len(_US_STOCK_NEWS_QUERIES),
+    )
+    with ThreadPoolExecutor(max_workers=len(_US_STOCK_NEWS_QUERIES)) as executor:
+        futures = [
+            executor.submit(
+                _fetch_google_news_us_query,
+                query,
+                index,
+                per_query_limit,
+            )
+            for index, query in enumerate(_US_STOCK_NEWS_QUERIES)
+        ]
+        groups = []
+        for future in futures:
+            try:
+                groups.append(future.result())
+            except Exception:
+                groups.append([])
+    return _deduplicate_articles(_interleave(groups))[:NEWS_SOURCE_ARTICLE_LIMIT]

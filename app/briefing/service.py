@@ -19,6 +19,7 @@ from core.config import (
     TELEGRAM_MESSAGE_LIMIT,
 )
 from core.workers import run_non_urgent
+from handlers.menu_status import set_menu_button_text
 from research.news import collect_global_market_news_items
 from state.news_log import aggregate_sentiment_by_code
 from stocks.quotes import format_quant_summary
@@ -284,20 +285,32 @@ async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     args = context.args or []
     command = args[0].lower() if args else ""
     app = context.application
-
-    if command == "morning":
-        await message.reply_text("모닝 브리핑 생성 중...")
-        await send_morning_briefing(app, force=True)
-    elif command == "evening":
-        await message.reply_text("마감 브리핑 생성 중...")
-        await send_evening_briefing(app, force=True)
-    elif command == "scorecard":
-        await message.reply_text("성적표 생성 중...")
-        await send_weekly_scorecard(app, notify_empty=True)
-    else:
+    actions = {
+        "morning": ("모닝", send_morning_briefing),
+        "evening": ("마감", send_evening_briefing),
+        "scorecard": ("주간 성적표", send_weekly_scorecard),
+    }
+    selected = actions.get(command)
+    if selected is None:
         await message.reply_text(
             "사용법:\n"
             "/briefing morning — 모닝 브리핑 즉시 실행\n"
             "/briefing evening — 마감 브리핑 즉시 실행\n"
             "/briefing scorecard — 시장뷰 성적표 즉시 실행"
         )
+        return
+
+    query = getattr(update, "callback_query", None)
+    callback_data = str(getattr(query, "data", ""))
+    is_menu = callback_data == f"nav:briefing:{command}"
+    label, action = selected
+    if is_menu:
+        await set_menu_button_text(message, callback_data, "◐ 생성 중")
+    try:
+        if command == "scorecard":
+            await action(app, notify_empty=True)
+        else:
+            await action(app, force=True)
+    finally:
+        if is_menu:
+            await set_menu_button_text(message, callback_data, label)

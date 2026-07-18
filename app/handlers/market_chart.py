@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from io import BytesIO
 
 
@@ -20,6 +21,18 @@ def market_label(market: str) -> str:
     return MARKET_LABELS.get(market, market)
 
 
+def _trend_series(points: list[dict]) -> tuple[list[datetime], list[float]]:
+    """Convert categorical date strings to sorted date coordinates."""
+    parsed = sorted(
+        (
+            datetime.fromisoformat(str(point["date"])),
+            float(point["avg_sentiment"]),
+        )
+        for point in points
+    )
+    return [day for day, _ in parsed], [value for _, value in parsed]
+
+
 def render_market_chart(markets: dict[str, dict], lookback_days: int) -> BytesIO:
     """Return a PNG with latest market mood ranking and daily sentiment trends."""
     # Telegram handlers run outside the process main thread.  A GUI backend
@@ -28,6 +41,7 @@ def render_market_chart(markets: dict[str, dict], lookback_days: int) -> BytesIO
     import matplotlib
 
     matplotlib.use("Agg")
+    import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
 
     ordered = sorted(markets.items(), key=lambda item: item[1]["avg_sentiment"], reverse=True)
@@ -49,12 +63,20 @@ def render_market_chart(markets: dict[str, dict], lookback_days: int) -> BytesIO
         ranking_ax.text(value + (0.03 if value >= 0 else -0.03), index, f"{value:+.2f}", va="center", ha="left" if value >= 0 else "right", fontsize=9)
 
     for market, stats in ordered:
-        points = stats["daily"]
-        trend_ax.plot([point["date"][5:] for point in points], [point["avg_sentiment"] for point in points], marker="o", linewidth=2, label=market_label(market))
+        dates, sentiments = _trend_series(stats["daily"])
+        trend_ax.plot(
+            dates,
+            sentiments,
+            marker="o",
+            linewidth=2,
+            label=market_label(market),
+        )
     trend_ax.axhline(0, color="#94a3b8", linewidth=0.9)
     trend_ax.set_ylim(-1, 1)
     trend_ax.set_title(f"Daily sentiment trend ({lookback_days}d)")
     trend_ax.set_ylabel("Average sentiment")
+    trend_ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    trend_ax.tick_params(axis="x", rotation=45)
     trend_ax.legend(loc="best", frameon=False)
     trend_ax.grid(axis="y", alpha=0.2)
     fig.tight_layout()

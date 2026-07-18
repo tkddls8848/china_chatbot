@@ -6,7 +6,10 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from stocks import StockDatabase
-from watchlist.keyboards import build_add_market_keyboard, build_list_keyboard
+from watchlist.keyboards import (
+    build_add_market_keyboard,
+    build_list_keyboard,
+)
 from watchlist.manager import WatchlistManager
 
 logger = logging.getLogger(__name__)
@@ -44,14 +47,22 @@ def _unsupported_code_message(code: str) -> str:
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     wm: WatchlistManager = context.bot_data["watchlist_manager"]
-    watchlist = await wm.get_all()
-    if not watchlist:
-        await update.message.reply_text(
-            "관심종목이 없습니다.\n/add 종목코드 로 추가하세요."
-        )
+    message = update.effective_message
+    if message is None:
         return
-    await update.message.reply_text(
-        "<b>관심종목 관리</b>\n종목 버튼을 누르면 삭제됩니다.",
+    watchlist = await wm.get_all()
+    text = (
+        "<b>관심종목 관리</b>\n종목 버튼을 누르면 삭제됩니다."
+        if watchlist
+        else "<b>관심종목이 없습니다.</b>\n종목추가 버튼으로 등록하세요."
+    )
+    send = (
+        message.edit_text
+        if getattr(update, "callback_query", None) is not None
+        else message.reply_text
+    )
+    await send(
+        text,
         parse_mode="HTML",
         reply_markup=build_list_keyboard(watchlist),
     )
@@ -100,7 +111,11 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     watchlist = await wm.get_all()
     if not watchlist:
-        await message.reply_text("관심종목이 없습니다.\n/add 종목코드 로 추가하세요.")
+        await message.reply_text(
+            "<b>관심종목이 없습니다.</b>",
+            parse_mode="HTML",
+            reply_markup=build_list_keyboard(watchlist),
+        )
         return
     stock_list = "\n".join(f"  • {name} ({code})" for code, name in watchlist.items())
     await message.reply_text(
@@ -115,11 +130,13 @@ async def handle_watchlist_callback(query, context: ContextTypes.DEFAULT_TYPE, d
         await query.message.delete()
         return True
 
-    if data == "add_help":
-        await query.message.reply_text(
-            "추가할 종목을 입력하세요.\n\n"
-            "형식: /add 종목코드\n"
-            "예시: /add 600519"
+    if data in {"add_stock", "add_help"}:
+        context.user_data.pop("menu_input", None)
+        context.user_data.pop("add_market", None)
+        await query.message.edit_text(
+            "<b>종목추가</b>\n추가할 국가와 시장을 선택하세요.",
+            parse_mode="HTML",
+            reply_markup=build_add_market_keyboard(),
         )
         return True
 
@@ -137,7 +154,11 @@ async def handle_watchlist_callback(query, context: ContextTypes.DEFAULT_TYPE, d
         logger.info("[WATCHLIST] 삭제: %s %s", code, name)
         watchlist = await wm.get_all()
         if not watchlist:
-            await query.message.edit_text("관심종목이 없습니다.\n/add 종목코드 로 추가하세요.")
+            await query.message.edit_text(
+                "<b>관심종목이 없습니다.</b>\n종목추가 버튼으로 등록하세요.",
+                parse_mode="HTML",
+                reply_markup=build_list_keyboard(watchlist),
+            )
             return True
         await query.message.edit_text(
             f"<b>{html.escape(name)} ({code}) 삭제됨</b>\n\n"

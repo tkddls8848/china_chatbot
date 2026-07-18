@@ -22,7 +22,7 @@ def build_list_keyboard(watchlist: Dict[str, str]) -> InlineKeyboardMarkup:
         ]
         for code, name in watchlist.items()
     ]
-    buttons.append([InlineKeyboardButton("종목 추가 방법", callback_data="add_help")])
+    buttons.append([InlineKeyboardButton("종목추가", callback_data="add_stock")])
     buttons.append([InlineKeyboardButton("닫기", callback_data="close")])
     buttons.append([
         InlineKeyboardButton("⬅️ 관심종목", callback_data="nav:watch"),

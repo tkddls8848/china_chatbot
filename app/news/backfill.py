@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
-from email.utils import parsedate_to_datetime
 
 from llm.translator import TranslationService
 from news.sources import GlobalArticle, fetch_google_news_history
@@ -15,16 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 def _article_time(article: GlobalArticle, fallback_day: date) -> datetime:
-    value = article.published_at.strip()
-    try:
-        parsed = parsedate_to_datetime(value)
-        return parsed.replace(tzinfo=None)
-    except (TypeError, ValueError, IndexError):
-        pass
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        return datetime.combine(fallback_day, datetime.min.time())
+    del article
+    return datetime.combine(fallback_day, datetime.max.time()).replace(microsecond=0)
 
 
 async def backfill_market_history(
@@ -35,6 +26,7 @@ async def backfill_market_history(
     queries: dict[str, str],
     lookback_days: int,
     max_articles_per_day: int = 2,
+    days_by_market: dict[str, list[date]] | None = None,
 ) -> dict[str, int]:
     """Collect and score missing historical articles without sending Telegram news.
 
@@ -44,12 +36,20 @@ async def backfill_market_history(
     """
     added = {market: 0 for market in markets}
     today = date.today()
-    days = [today - timedelta(days=offset) for offset in range(1, lookback_days + 1)]
+    default_days = [
+        today - timedelta(days=offset)
+        for offset in range(1, lookback_days + 1)
+    ]
     for market in sorted(markets):
         query = queries.get(market)
         if not query:
             logger.warning("[MARKET] no history query configured for %s", market)
             continue
+        days = (
+            days_by_market.get(market, [])
+            if days_by_market is not None
+            else default_days
+        )
         for day in days:
             try:
                 articles = await asyncio.to_thread(fetch_google_news_history, query, day, market)

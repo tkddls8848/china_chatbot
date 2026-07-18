@@ -24,9 +24,9 @@ def test_build_source_specs_ignores_unknown_and_duplicates():
 
 
 def test_build_source_specs_supports_google_news_provider():
-    specs = build_source_specs(["gnews"], [])
+    specs = build_source_specs(["gnews", "gnews_us"], [])
 
-    assert [spec.key for spec in specs] == ["gnews"]
+    assert [spec.key for spec in specs] == ["gnews", "gnews_us"]
     assert all(spec.prompt_key == "global" for spec in specs)
 
 

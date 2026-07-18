@@ -9,8 +9,9 @@ from typing import Any, Dict
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from core.config import RESEARCH_REMOVE_RELEVANCE_THRESHOLD
+from core.config import RESEARCH_MAX_CANDIDATES, RESEARCH_REMOVE_RELEVANCE_THRESHOLD
 from core.workers import run_non_urgent
+from handlers.menu_status import set_menu_button_text
 from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
 from llm.market_view import MarketViewError, MarketViewManager
@@ -39,8 +40,53 @@ def build_research_result_keyboard(uid: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton("적용", callback_data=f"research_apply:{uid}"),
                 InlineKeyboardButton("취소", callback_data=f"research_cancel:{uid}"),
-            ]
+            ],
+            [InlineKeyboardButton("🏠 처음", callback_data="nav:home")],
         ]
+    )
+
+
+def build_research_done_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🏠 처음", callback_data="nav:home")]]
+    )
+
+
+def _is_menu_research_run(update: Update) -> bool:
+    query = getattr(update, "callback_query", None)
+    return str(getattr(query, "data", "")) == "nav:research:run"
+
+
+async def _show_research_phase(message, icon: str, label: str) -> None:
+    try:
+        await set_menu_button_text(
+            message,
+            "nav:research:run",
+            f"{icon} {label}",
+        )
+    except Exception:
+        logger.warning("[RESEARCH] 진행 상태 메뉴 갱신 실패", exc_info=True)
+
+
+async def _deliver_research_text(
+    request_message,
+    menu_message,
+    text: str,
+    *,
+    parse_mode: str | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    if menu_message is not None:
+        await menu_message.edit_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup or build_research_done_keyboard(),
+        )
+        return
+    await request_message.reply_text(
+        text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
     )
 
 
@@ -346,19 +392,36 @@ async def _handle_research_run(
 
     tasks: set[asyncio.Task] = context.bot_data.setdefault("research_tasks", set())
     active_tasks = {task for task in tasks if not task.done()}
+    context.bot_data["research_tasks"] = active_tasks
+    menu_message = message if _is_menu_research_run(update) else None
     if active_tasks:
-        context.bot_data["research_tasks"] = active_tasks
-        await message.reply_text("⏳ 이미 리서치 분석이 실행 중입니다. 완료 후 다시 요청해 주세요.")
+        if menu_message is not None:
+            await _show_research_phase(
+                menu_message,
+                "◉",
+                "이미 분석 중입니다",
+            )
+        else:
+            await message.reply_text(
+                "이미 리서치 분석이 실행 중입니다. 완료 후 다시 요청해 주세요."
+            )
         return
 
+    if menu_message is not None:
+        await _show_research_phase(menu_message, "◐", "뉴스 수집 중")
     task = asyncio.create_task(
-        _run_research_job(update, context, market_view, temporary),
+        _run_research_job(
+            update,
+            context,
+            market_view,
+            temporary,
+            menu_message=menu_message,
+        ),
         name="research-analysis",
     )
-    tasks.add(task)
-    task.add_done_callback(tasks.discard)
+    active_tasks.add(task)
+    task.add_done_callback(active_tasks.discard)
     task.add_done_callback(_log_research_task_error)
-    await message.reply_text("⏳ 리서치 분석을 백그라운드에서 시작했습니다. 완료되면 결과를 알려드립니다.")
 
 
 async def _run_research_job(
@@ -366,6 +429,7 @@ async def _run_research_job(
     context: ContextTypes.DEFAULT_TYPE,
     market_view: str,
     temporary: bool = False,
+    menu_message=None,
 ) -> None:
     message = update.effective_message
     if message is None:
@@ -385,12 +449,23 @@ async def _run_research_job(
     collect_global_news = context.bot_data["research_news_collector"]
 
     watchlist = await wm.get_all()
-    status_message = await message.reply_text("전체 시장 뉴스 기준으로 리서치 분석 중...")
     news_items = await collect_global_news(translator, translate_semaphore)
     if not news_items:
-        await status_message.edit_text("최근 전체 시장 뉴스가 없어 분석을 실행하지 않았습니다.")
+        await _deliver_research_text(
+            message,
+            menu_message,
+            "최근 전체 시장 뉴스가 없어 분석을 실행하지 않았습니다.",
+        )
         return
-    candidate_universe = build_research_candidate_universe(stock_db, watchlist, news_items, market_view)
+    if menu_message is not None:
+        await _show_research_phase(menu_message, "◓", "후보 구성 중")
+    candidate_universe = build_research_candidate_universe(
+        stock_db,
+        watchlist,
+        news_items,
+        market_view,
+        max_candidates=RESEARCH_MAX_CANDIDATES,
+    )
 
     # 강세 섹터 구성종목·问财 스크리닝 후보를 코드 중복 없이 병합한다.
     quote_service = context.bot_data.get("quote_service")
@@ -399,9 +474,14 @@ async def _run_research_job(
             collect_extra_candidates, quote_service, stock_db, watchlist, market_view
         )
         existing_codes = {c["code"] for c in candidate_universe}
-        candidate_universe.extend(
-            c for c in extra_candidates if c["code"] not in existing_codes
+        remaining_slots = max(
+            0,
+            RESEARCH_MAX_CANDIDATES - len(candidate_universe),
         )
+        new_candidates = [
+            c for c in extra_candidates if c["code"] not in existing_codes
+        ]
+        candidate_universe.extend(new_candidates[:remaining_slots])
     except Exception as e:
         logger.warning("[RESEARCH] 추가 후보 수집 실패: %s", e)
 
@@ -416,6 +496,8 @@ async def _run_research_job(
             logger.warning("[RESEARCH] 정량 컨텍스트 수집 실패: %s", e)
     previous_analyses = mvm.get_history_summaries()
 
+    if menu_message is not None:
+        await _show_research_phase(menu_message, "◑", "AI 분석 중")
     try:
         result = await asyncio.get_running_loop().run_in_executor(
             _RESEARCH_EXECUTOR,
@@ -429,11 +511,21 @@ async def _run_research_job(
         )
     except MarketViewError as e:
         logger.error("[RESEARCH] analysis failed: %s", e)
-        await status_message.edit_text(f"분석 실패: {html.escape(str(e))}", parse_mode="HTML")
+        await _deliver_research_text(
+            message,
+            menu_message,
+            f"분석 실패: {html.escape(str(e))}",
+            parse_mode="HTML",
+        )
         return
     except Exception as e:
         logger.error("[RESEARCH] analysis error: %s", e)
-        await status_message.edit_text(f"분석 실패: {html.escape(str(e))}", parse_mode="HTML")
+        await _deliver_research_text(
+            message,
+            menu_message,
+            f"분석 실패: {html.escape(str(e))}",
+            parse_mode="HTML",
+        )
         return
 
     pending = _collect_research_actions(result, watchlist, stock_db)
@@ -449,7 +541,9 @@ async def _run_research_job(
     )
     has_changes = bool(pending["add"] or pending["remove"])
     if not has_changes:
-        await status_message.edit_text(
+        await _deliver_research_text(
+            message,
+            menu_message,
             text + "\n\n변경 적용 후보가 없습니다.",
             parse_mode="HTML",
         )
@@ -463,7 +557,9 @@ async def _run_research_job(
         "remove": pending["remove"],
         "summary": result.get("summary") or "",
     }
-    await status_message.edit_text(
+    await _deliver_research_text(
+        message,
+        menu_message,
         text,
         parse_mode="HTML",
         reply_markup=build_research_result_keyboard(uid),

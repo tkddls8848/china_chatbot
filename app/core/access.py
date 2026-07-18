@@ -80,7 +80,15 @@ def restricted(handler: Handler, show_status: bool = True) -> Handler:
         label = request_label(update, handler.__name__)
         bot_data = getattr(context, "bot_data", {})
         background_tasks_before = len(bot_data.get("research_tasks", set()))
-        if show_status and message is not None:
+        query = getattr(update, "callback_query", None)
+        callback_data = str(getattr(query, "data", ""))
+        suppress_menu_status = (
+            handler.__name__ == "cmd_research"
+            or callback_data == "nav:research:run"
+            or callback_data.startswith("nav:market:")
+            or callback_data.startswith("nav:briefing:")
+        )
+        if show_status and not suppress_menu_status and message is not None:
             try:
                 status = await message.reply_text(f"⏳ {label} 처리 중...")
             except Exception:

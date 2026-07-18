@@ -54,7 +54,8 @@ from core.config import (
     NEWS_RSS_FEEDS,
     NEWS_SOURCE_COOLDOWN_MINUTES,
     NEWS_SOURCE_FAILURE_THRESHOLD,
-    NEWS_TRANSLATED_CONTENT_MAX_CHARS,
+    NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
+    NEWS_STOCK_TRANSLATED_CONTENT_MAX_CHARS,
     OLLAMA_BASE_URL,
     OLLAMA_GPU_ON_VALUE,
     OLLAMA_NUM_GPU,
@@ -67,11 +68,13 @@ from core.config import (
     QUANT_SECTOR_TOP_N,
     RESEARCH_ANALYSIS_ENABLED,
     RESEARCH_ANALYSIS_MODEL,
+    RESEARCH_ANALYSIS_NUM_CTX,
     RESEARCH_ANALYSIS_NUM_PREDICT,
     RESEARCH_ANALYSIS_PROMPT_FILE,
     RESEARCH_ANALYSIS_TIMEOUT,
     RESEARCH_CPU_THREADS,
     RESEARCH_HISTORY_LIMIT,
+    RESEARCH_MAX_NEW_ACTIONS,
     RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
     RESEARCH_STATE_FILE,
     RESEARCH_VERIFICATION_ENABLED,
@@ -108,14 +111,15 @@ _SINGLE_INSTANCE_LOCK = None
 
 def _acquire_single_instance_lock(lock_file: Path):
     lock_file.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_file.open("a+b")
-    handle.seek(0)
-    if not handle.read(1):
-        handle.write(b"0")
-        handle.flush()
-    handle.seek(0)
-
+    handle = None
     try:
+        handle = lock_file.open("a+b")
+        handle.seek(0)
+        if not handle.read(1):
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+
         if os.name == "nt":
             import msvcrt
 
@@ -125,7 +129,8 @@ def _acquire_single_instance_lock(lock_file: Path):
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        handle.close()
+        if handle is not None:
+            handle.close()
         return None
     return handle
 
@@ -187,7 +192,8 @@ def main() -> None:
         prompt_dir=PROMPT_DIR,
         num_gpu=OLLAMA_NUM_GPU,
         num_predict=TRANSLATION_NUM_PREDICT,
-        brief_content_limit=NEWS_TRANSLATED_CONTENT_MAX_CHARS,
+        brief_content_limit=NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
+        stock_brief_content_limit=NEWS_STOCK_TRANSLATED_CONTENT_MAX_CHARS,
     )
     app.bot_data["market_view_analyzer"] = MarketViewAnalyzer(
         base_url=OLLAMA_BASE_URL,
@@ -195,9 +201,11 @@ def main() -> None:
         enabled=RESEARCH_ANALYSIS_ENABLED,
         timeout=RESEARCH_ANALYSIS_TIMEOUT,
         num_predict=RESEARCH_ANALYSIS_NUM_PREDICT,
+        num_ctx=RESEARCH_ANALYSIS_NUM_CTX,
         num_thread=RESEARCH_CPU_THREADS,
         prompt_file=RESEARCH_ANALYSIS_PROMPT_FILE,
         num_gpu=OLLAMA_NUM_GPU,
+        max_new_actions=RESEARCH_MAX_NEW_ACTIONS,
         remove_relevance_threshold=RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
         verification_enabled=RESEARCH_VERIFICATION_ENABLED,
         verification_prompt_file=RESEARCH_VERIFICATION_PROMPT_FILE,

@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "app"))
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
 os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
-from llm.translator import TranslationService
+from llm.translator import TranslationError, TranslationService
 from news.utils import format_sentiment_line, normalize_stock_code
 
 
@@ -166,6 +166,141 @@ def test_translation_accepts_small_overage_without_rewrite():
 
     assert len(result.content) == 161
     assert len(calls) == 1
+
+
+def test_translation_uses_stock_specific_brief_limit():
+    service = object.__new__(TranslationService)
+    service._enabled = True
+    service._brief_content_limit = 180
+    service._stock_brief_content_limit = 150
+    service._prompts = {"stock": "prompt"}
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "title": "한국어 제목",
+                    "content": "가" * 170,
+                    "mentioned_stocks": [],
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "title": "한국어 제목",
+                    "content": "짧은 개별 종목 단신이다.",
+                    "mentioned_stocks": [],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    service._request_translation = request
+
+    result = service.translate_article("stock", "원문 제목", "원문 전체")
+
+    assert result.content == "짧은 개별 종목 단신이다."
+    assert calls[0]["content_limit"] == 150
+    assert calls[1]["retry_for_length"] is True
+
+
+def test_translation_rewrites_chinese_title_in_korean():
+    service = object.__new__(TranslationService)
+    service._enabled = True
+    service._brief_content_limit = 180
+    service._stock_brief_content_limit = 150
+    service._prompts = {"stock": "prompt"}
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "title": "沪指跌破3800点，光纤板块多只个股跌停",
+                    "content": "상하이종합지수가 하락했다.",
+                    "mentioned_stocks": [],
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "title": "상하이종합지수 3,800선 하회, 광섬유주 다수 하한가",
+                    "content": "상하이종합지수가 하락했다.",
+                    "mentioned_stocks": [],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    service._request_translation = request
+
+    result = service.translate_article("stock", "원문 제목", "원문 전체")
+
+    assert result.title.startswith("상하이종합지수")
+    assert len(calls) == 2
+    assert calls[1]["retry_for_translation"] is True
+
+
+def test_translation_uses_korean_brief_when_title_stays_chinese():
+    service = object.__new__(TranslationService)
+    service._enabled = True
+    service._brief_content_limit = 180
+    service._prompts = {"global": "prompt"}
+    response = json.dumps(
+        {
+            "title": "傲意科技首发具身智能教育产品矩阵",
+            "content": "오의과기가 체화지능 교육제품군을 처음 공개했다.",
+            "mentioned_stocks": [],
+            "sentiment": 0.3,
+            "impact": "medium",
+        },
+        ensure_ascii=False,
+    )
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(kwargs)
+        return response
+
+    service._request_translation = request
+
+    result = service.translate_article("global", "중국어 원문", "중국어 본문")
+
+    assert result.title == "오의과기가 체화지능 교육제품군을 처음 공개했다"
+    assert result.content == "오의과기가 체화지능 교육제품군을 처음 공개했다."
+    assert result.sentiment == 0.3
+    assert len(calls) == 2
+
+
+def test_translation_still_rejects_chinese_title_and_content():
+    service = object.__new__(TranslationService)
+    service._enabled = True
+    service._brief_content_limit = 180
+    service._prompts = {"global": "prompt"}
+    response = json.dumps(
+        {
+            "title": "傲意科技首发具身智能教育产品矩阵",
+            "content": "傲意科技发布智能教育产品矩阵",
+            "mentioned_stocks": [],
+        },
+        ensure_ascii=False,
+    )
+    service._request_translation = lambda *args, **kwargs: response
+
+    with pytest.raises(
+        TranslationError,
+        match="title remains untranslated Chinese",
+    ):
+        service.translate_article("global", "중국어 원문", "중국어 본문")
 
 
 def test_translation_uses_first_valid_result_when_rewrite_is_invalid():

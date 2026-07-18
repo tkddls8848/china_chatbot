@@ -26,15 +26,56 @@ def persistent_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             ["🏠 홈", "📊 감성", "⭐ 관심종목"],
-            ["🔎 리서치", "📰 브리핑", "⚙️ 관리"],
+            ["🔎 리서치", "📰 브리핑", "📈 성과"],
+            ["⚙️ 관리"],
         ],
         resize_keyboard=True,
         is_persistent=True,
     )
 
 
+async def refresh_persistent_menu(message) -> None:
+    await message.reply_text(
+        "⌨️ 하단 메뉴를 최신 상태로 갱신했습니다.",
+        reply_markup=persistent_menu(),
+    )
+
+
 def _back() -> list[list[tuple[str, str]]]:
     return [[("🏠 처음", "nav:home")]]
+
+
+def market_menu() -> InlineKeyboardMarkup:
+    return _keyboard([
+        [("7일", "nav:market:7"), ("14일", "nav:market:14"), ("30일", "nav:market:30")],
+        *_back(),
+    ])
+
+
+def research_menu() -> InlineKeyboardMarkup:
+    return _keyboard([
+        [("주제 보기", "nav:research:show"), ("분석 실행", "nav:research:run")],
+        [("주제 설정", "nav:research:set"), ("주제 삭제", "nav:research:clear")],
+        *_back(),
+    ])
+
+
+def briefing_menu() -> InlineKeyboardMarkup:
+    return _keyboard([
+        [("모닝", "nav:briefing:morning"), ("마감", "nav:briefing:evening")],
+        [("주간 성적표", "nav:briefing:scorecard")],
+        *_back(),
+    ])
+
+
+def score_menu() -> InlineKeyboardMarkup:
+    return _keyboard([
+        [
+            ("운영 신호", "nav:score:live"),
+            ("백테스트", "nav:score:backtest"),
+        ],
+        *_back(),
+    ])
 
 
 def _context(context: ContextTypes.DEFAULT_TYPE, args: list[str]):
@@ -49,29 +90,38 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     message = query.message
     action = data.removeprefix("nav:")
     if action == "home":
+        await refresh_persistent_menu(message)
         await message.edit_text("<b>주식 뉴스 봇</b>\n원하는 기능을 선택하세요.", parse_mode="HTML", reply_markup=main_menu())
     elif action == "market":
-        await message.edit_text("<b>국가별 뉴스 감성</b>\n조회 기간을 선택하세요.", parse_mode="HTML", reply_markup=_keyboard([
-            [("7일", "nav:market:7"), ("14일", "nav:market:14"), ("30일", "nav:market:30")], *_back()
-        ]))
+        await message.edit_text(
+            "<b>국가별 뉴스 감성</b>\n조회 기간을 선택하세요.",
+            parse_mode="HTML",
+            reply_markup=market_menu(),
+        )
     elif action.startswith("market:"):
         from handlers.commands import cmd_market
         await cmd_market(update, _context(context, [action.split(":", 1)[1]]))
     elif action == "watch":
-        await message.edit_text("<b>관심종목</b>", parse_mode="HTML", reply_markup=_keyboard([
-            [("목록·삭제", "nav:watch:list"), ("종목 추가", "nav:watch:add")], *_back()
-        ]))
+        from watchlist import cmd_menu
+        await cmd_menu(update, _context(context, []))
     elif action == "watch:list":
-        from watchlist import cmd_list
-        await cmd_list(update, _context(context, []))
+        from watchlist import cmd_menu
+        await cmd_menu(update, _context(context, []))
     elif action == "watch:add":
-        context.user_data["menu_input"] = "add_stock"
-        await message.edit_text("추가할 종목 코드를 숫자로 입력하세요.\n예: 600519", reply_markup=_keyboard(_back()))
+        from watchlist.keyboards import build_add_market_keyboard
+        context.user_data.pop("menu_input", None)
+        context.user_data.pop("add_market", None)
+        await message.edit_text(
+            "<b>종목추가</b>\n추가할 국가와 시장을 선택하세요.",
+            parse_mode="HTML",
+            reply_markup=build_add_market_keyboard(),
+        )
     elif action == "research":
-        await message.edit_text("<b>리서치</b>", parse_mode="HTML", reply_markup=_keyboard([
-            [("주제 보기", "nav:research:show"), ("분석 실행", "nav:research:run")],
-            [("주제 설정", "nav:research:set"), ("주제 삭제", "nav:research:clear")], *_back()
-        ]))
+        await message.edit_text(
+            "<b>리서치</b>",
+            parse_mode="HTML",
+            reply_markup=research_menu(),
+        )
     elif action.startswith("research:"):
         command = action.split(":", 1)[1]
         if command == "set":
@@ -81,17 +131,20 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             from research import cmd_research
             await cmd_research(update, _context(context, [command]))
     elif action == "briefing":
-        await message.edit_text("<b>브리핑</b>", parse_mode="HTML", reply_markup=_keyboard([
-            [("모닝", "nav:briefing:morning"), ("마감", "nav:briefing:evening")],
-            [("주간 성적표", "nav:briefing:scorecard")], *_back()
-        ]))
+        await message.edit_text(
+            "<b>브리핑</b>",
+            parse_mode="HTML",
+            reply_markup=briefing_menu(),
+        )
     elif action.startswith("briefing:"):
         from briefing import cmd_briefing
         await cmd_briefing(update, _context(context, [action.split(":", 1)[1]]))
     elif action == "score":
-        await message.edit_text("<b>신호 성과</b>", parse_mode="HTML", reply_markup=_keyboard([
-            [("현재 신호", "nav:score:live"), ("백테스트", "nav:score:backtest")], *_back()
-        ]))
+        await message.edit_text(
+            "<b>신호 성과</b>",
+            parse_mode="HTML",
+            reply_markup=score_menu(),
+        )
     elif action.startswith("score:"):
         from handlers.commands import cmd_score
         value = action.split(":", 1)[1]
@@ -118,31 +171,42 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "⭐ 관심종목": "watch",
         "🔎 리서치": "research",
         "📰 브리핑": "briefing",
+        "📈 성과": "score",
         "⚙️ 관리": "system",
     }
     if text == "🏠 홈":
+        await refresh_persistent_menu(message)
         await message.reply_text("<b>주식 뉴스 봇</b>\n원하는 기능을 선택하세요.", parse_mode="HTML", reply_markup=main_menu())
         return
     if text in shortcuts:
         action = shortcuts[text]
         if action == "market":
-            await message.reply_text("<b>국가별 뉴스 감성</b>\n조회 기간을 선택하세요.", parse_mode="HTML", reply_markup=_keyboard([
-                [("7일", "nav:market:7"), ("14일", "nav:market:14"), ("30일", "nav:market:30")], *_back()
-            ]))
+            await message.reply_text(
+                "<b>국가별 뉴스 감성</b>\n조회 기간을 선택하세요.",
+                parse_mode="HTML",
+                reply_markup=market_menu(),
+            )
         elif action == "watch":
-            await message.reply_text("<b>관심종목</b>", parse_mode="HTML", reply_markup=_keyboard([
-                [("목록·삭제", "nav:watch:list"), ("종목 추가", "nav:watch:add")], *_back()
-            ]))
+            from watchlist import cmd_menu
+            await cmd_menu(update, _context(context, []))
         elif action == "research":
-            await message.reply_text("<b>리서치</b>", parse_mode="HTML", reply_markup=_keyboard([
-                [("주제 보기", "nav:research:show"), ("분석 실행", "nav:research:run")],
-                [("주제 설정", "nav:research:set"), ("주제 삭제", "nav:research:clear")], *_back()
-            ]))
+            await message.reply_text(
+                "<b>리서치</b>",
+                parse_mode="HTML",
+                reply_markup=research_menu(),
+            )
         elif action == "briefing":
-            await message.reply_text("<b>브리핑</b>", parse_mode="HTML", reply_markup=_keyboard([
-                [("모닝", "nav:briefing:morning"), ("마감", "nav:briefing:evening")],
-                [("주간 성적표", "nav:briefing:scorecard")], *_back()
-            ]))
+            await message.reply_text(
+                "<b>브리핑</b>",
+                parse_mode="HTML",
+                reply_markup=briefing_menu(),
+            )
+        elif action == "score":
+            await message.reply_text(
+                "<b>신호 성과</b>",
+                parse_mode="HTML",
+                reply_markup=score_menu(),
+            )
         else:
             await message.reply_text("<b>관리</b>", parse_mode="HTML", reply_markup=_keyboard([
                 [("시스템 상태", "nav:system"), ("종목 DB 갱신", "nav:stockdb")], *_back()
