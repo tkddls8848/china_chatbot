@@ -130,17 +130,6 @@ STOCK_NEWS_FETCH_DELAY_SECONDS = float(os.environ.get("STOCK_NEWS_FETCH_DELAY_SE
 GLOBAL_NEWS_BATCH_SIZE = int(os.environ.get("GLOBAL_NEWS_BATCH_SIZE", "2"))
 SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "2"))
 STOCK_DB_ENABLED = _env_bool("STOCK_DB_ENABLED", "true")
-YAHOO_KR_UNIVERSE_ENABLED = _env_bool("YAHOO_KR_UNIVERSE_ENABLED", "true")
-YAHOO_KR_TICKER_SEEDS = tuple(
-    value.strip().upper()
-    for value in os.environ.get(
-        "YAHOO_KR_TICKER_SEEDS",
-        "005930.KS,000660.KS,035420.KS,051910.KS,005380.KS",
-    ).split(",")
-    if value.strip()
-)
-OPENFIGI_API_KEY = os.environ.get("OPENFIGI_API_KEY", "").strip()
-
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
 RESEARCH_ANALYSIS_MODEL = os.environ.get("RESEARCH_ANALYSIS_MODEL", TRANSLATION_MODEL)
@@ -185,6 +174,8 @@ QUANT_CONTEXT_ENABLED = _env_bool("QUANT_CONTEXT_ENABLED", "true")
 QUANT_CACHE_TTL_MINUTES = int(os.environ.get("QUANT_CACHE_TTL_MINUTES", "10"))
 QUANT_SECTOR_TOP_N = int(os.environ.get("QUANT_SECTOR_TOP_N", "5"))
 QUANT_FAILURE_COOLDOWN_MINUTES = int(os.environ.get("QUANT_FAILURE_COOLDOWN_MINUTES", "15"))
+# 동방재부 인기순위 API는 해외 IP에서 차단되므로 기본 비활성.
+QUANT_HOT_RANK_ENABLED = _env_bool("QUANT_HOT_RANK_ENABLED", "false")
 
 # 최근 뉴스 로그(마감 브리핑 요약 입력)
 NEWS_LOG_RETENTION_DAYS = int(os.environ.get("NEWS_LOG_RETENTION_DAYS", "30"))

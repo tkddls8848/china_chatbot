@@ -149,6 +149,11 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             ]))
         return
 
+    if context.user_data.get("add_market"):
+        from watchlist import cmd_add
+        await cmd_add(update, _context(context, [text.strip()]))
+        return
+
     action = context.user_data.pop("menu_input", None)
     if action is None:
         return

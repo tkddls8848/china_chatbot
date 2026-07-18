@@ -62,6 +62,7 @@ from core.config import (
     QUANT_CACHE_TTL_MINUTES,
     QUANT_CONTEXT_ENABLED,
     QUANT_FAILURE_COOLDOWN_MINUTES,
+    QUANT_HOT_RANK_ENABLED,
     QUANT_SECTOR_TOP_N,
     RESEARCH_ANALYSIS_ENABLED,
     RESEARCH_ANALYSIS_MODEL,
@@ -164,6 +165,7 @@ def main() -> None:
         cache_ttl_minutes=QUANT_CACHE_TTL_MINUTES,
         sector_top_n=QUANT_SECTOR_TOP_N,
         failure_cooldown_minutes=QUANT_FAILURE_COOLDOWN_MINUTES,
+        hot_rank_enabled=QUANT_HOT_RANK_ENABLED,
     )
     app.bot_data["market_view_manager"]  = MarketViewManager(RESEARCH_STATE_FILE, history_limit=RESEARCH_HISTORY_LIMIT)
     app.bot_data["research_pending"]     = {}

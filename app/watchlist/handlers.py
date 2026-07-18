@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from stocks import StockDatabase
-from watchlist.keyboards import build_list_keyboard
+from watchlist.keyboards import build_add_market_keyboard, build_list_keyboard
 from watchlist.manager import WatchlistManager
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,21 @@ def _normalize_stock_code(value: str) -> str | None:
     if not re.fullmatch(r"\d{1,6}", code):
         return None
     return code.zfill(5) if len(code) <= 5 else code.zfill(6)
+
+
+def normalize_selected_stock_code(selection: str, value: str) -> str | None:
+    market, exchange = selection.rsplit(":", 1)
+    raw = value.strip().upper()
+    if market in {"KR", "CN", "HK"}:
+        if not raw.isdigit():
+            return None
+        raw = raw.zfill(5 if market == "HK" else 6)
+    elif market == "US":
+        if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,14}", raw) or raw.isdigit():
+            return None
+    else:
+        return None
+    return f"{market}:{exchange}:{raw}"
 
 
 def _unsupported_code_message(code: str) -> str:
@@ -46,13 +61,16 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     wm: WatchlistManager = context.bot_data["watchlist_manager"]
     stock_db: StockDatabase = context.bot_data["stock_db"]
     if len(context.args) < 1:
+        await update.message.reply_text("추가할 국가와 시장을 선택하세요.", reply_markup=build_add_market_keyboard())
+        return
         await update.message.reply_text(
             "사용법: /add 종목코드\n"
             "예: /add 600519"
         )
         return
 
-    code = _normalize_stock_code(context.args[0])
+    selection = context.user_data.pop("add_market", "")
+    code = normalize_selected_stock_code(selection, context.args[0]) if selection else _normalize_stock_code(context.args[0])
     if code is None:
         await update.message.reply_text("종목코드는 숫자 1~6자리로 입력하세요.")
         return
@@ -103,6 +121,13 @@ async def handle_watchlist_callback(query, context: ContextTypes.DEFAULT_TYPE, d
             "형식: /add 종목코드\n"
             "예시: /add 600519"
         )
+        return True
+
+    if data.startswith("add_market:"):
+        selection = data.split(":", 1)[1]
+        context.user_data["add_market"] = selection
+        prompt = "티커" if selection.startswith("US:") else "종목코드"
+        await query.message.reply_text(f"{selection} {prompt}를 입력하세요.")
         return True
 
     if data.startswith("remove:"):

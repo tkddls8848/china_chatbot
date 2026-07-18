@@ -19,6 +19,9 @@ class _StockDatabaseStub:
     def get_display_name(self, code: str) -> str | None:
         return None
 
+    def resolve_code(self, code: str) -> str | None:
+        return None
+
 
 def test_low_relevance_watchlist_item_becomes_remove_candidate(monkeypatch):
     monkeypatch.setattr(handlers, "RESEARCH_REMOVE_RELEVANCE_THRESHOLD", 0.35)

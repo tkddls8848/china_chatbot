@@ -1,15 +1,26 @@
 """종목 DB 구축에 필요한 원본 목록과 이름 정규화 도구."""
 
+import json
 import logging
 import re
 from http.client import RemoteDisconnected
 from typing import Any, Callable
 
 import akshare as ak
+import pandas as pd
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
+
+_SINA_HQ_NODE_URL = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+    "Market_Center.getHQNodeData"
+)
+_SINA_HEADERS = {
+    "Referer": "https://finance.sina.com.cn",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
+}
 
 try:
     import hanja
@@ -39,9 +50,47 @@ def _retry_on_network(func: Callable):
     )(func)
 
 
-@_retry_on_network
+def _fetch_a_code_name_sina() -> pd.DataFrame:
+    """시나 전체 A주 목록(페이지당 100개 고정).
+
+    거래소(SSE/SZSE) 공식 목록이 해외 IP를 차단할 때의 대체 소스.
+    """
+    rows: list[dict[str, str]] = []
+    for page in range(1, 121):
+        response = requests.get(
+            _SINA_HQ_NODE_URL,
+            params={
+                "page": page,
+                "num": 100,
+                "sort": "symbol",
+                "asc": 1,
+                "node": "hs_a",
+                "symbol": "",
+                "_s_r_a": "init",
+            },
+            headers=_SINA_HEADERS,
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = json.loads(response.text)
+        if not data:
+            break
+        for item in data:
+            code = str(item.get("code") or "").strip()
+            name = _clean_stock_name(item.get("name"))
+            if len(code) == 6 and code.isdigit() and name:
+                rows.append({"code": code, "name": name})
+    if not rows:
+        raise RuntimeError("시나 A주 목록이 비어 있습니다")
+    return pd.DataFrame(rows)
+
+
 def _fetch_a_code_name():
-    return ak.stock_info_a_code_name()
+    try:
+        return _retry_on_network(ak.stock_info_a_code_name)()
+    except Exception as exc:
+        logger.warning("[StockDB] 거래소 A주 목록 조회 실패, 시나 목록으로 대체: %s", exc)
+        return _retry_on_network(_fetch_a_code_name_sina)()
 
 
 @_retry_on_network

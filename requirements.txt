@@ -9,4 +9,5 @@ requests
 tenacity
 feedparser
 yfinance
+finance-datareader
 matplotlib

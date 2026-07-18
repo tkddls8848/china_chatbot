@@ -3,6 +3,15 @@ from typing import Dict
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
+def build_add_market_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("중국 상하이", callback_data="add_market:CN:SH"), InlineKeyboardButton("중국 선전", callback_data="add_market:CN:SZ")],
+        [InlineKeyboardButton("홍콩", callback_data="add_market:HK:HKEX"), InlineKeyboardButton("한국 KOSPI", callback_data="add_market:KR:KOSPI")],
+        [InlineKeyboardButton("한국 KOSDAQ", callback_data="add_market:KR:KOSDAQ"), InlineKeyboardButton("미국 NASDAQ", callback_data="add_market:US:NASDAQ")],
+        [InlineKeyboardButton("미국 NYSE", callback_data="add_market:US:NYSE")],
+    ])
+
+
 def build_list_keyboard(watchlist: Dict[str, str]) -> InlineKeyboardMarkup:
     buttons = [
         [

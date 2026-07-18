@@ -1,11 +1,16 @@
 """정량 컨텍스트: 시세·자금흐름·섹터·인기순위·涨停·용호방 스냅샷.
 
-AkShare 원시 지표를 요약해 (a) 브리핑 메시지와 (b) 시장뷰 분석 payload에
+원시 지표를 요약해 (a) 브리핑 메시지와 (b) 시장뷰 분석 payload에
 주입한다. 자체 스코어링·백테스트는 하지 않는다(원시 지표 요약까지만).
 모든 조회는 블로킹이므로 asyncio.to_thread로 호출해야 하며, 시장 전체
 테이블은 TTL 캐시로 재사용한다.
+
+데이터소스: 동방재부 push2* 시세 API는 해외 IP를 차단하므로
+시세·자금흐름·섹터는 텐센트(qt.gtimg.cn)·시나 API를 쓰고,
+해외에서도 열려 있는 涨停(push2ex)·용호방(datacenter-web)만 AkShare를 유지한다.
 """
 
+import json
 import logging
 import time
 from datetime import datetime, timedelta
@@ -17,6 +22,17 @@ import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
+
+_TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q="
+_SINA_MONEYFLOW_URL = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+    "MoneyFlow.ssi_ssfx_flzjtj"
+)
+_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
+    "Referer": "https://finance.sina.com.cn",
+}
+_TENCENT_BATCH_SIZE = 60
 
 
 def _akshare_retry(func):
@@ -38,6 +54,72 @@ def _safe_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return None if pd.isna(result) else result
+
+
+# ── 텐센트/시나 응답 파싱(순수 함수) ─────────────────
+
+def tencent_symbol(code: str) -> str | None:
+    """관심종목 코드 → 텐센트 심볼(sh600519/sz000001/hk00700). 미지원은 None."""
+    if len(code) == 6 and code.isdigit():
+        if code[0] in ("6", "9"):
+            return f"sh{code}"
+        if code[0] in ("0", "3"):
+            return f"sz{code}"
+        return f"bj{code}"
+    if len(code) == 5 and code.isdigit():
+        return f"hk{code}"
+    return None
+
+
+def parse_tencent_quotes(text: str) -> dict[str, dict[str, Any]]:
+    """`v_sh600519="1~贵州茅台~600519~..."` 응답 → 코드별 {price, pct_change, amount}.
+
+    필드: [3] 최신가, [32] 등락률(%), [37] 거래대금(A주는 만위안, HK는 원 단위).
+    """
+    quotes: dict[str, dict[str, Any]] = {}
+    for chunk in text.split(";"):
+        chunk = chunk.strip()
+        if "=" not in chunk:
+            continue
+        key, _, value = chunk.partition("=")
+        key = key.strip().removeprefix("v_")
+        market, code = key[:2], key[2:]
+        if market not in ("sh", "sz", "bj", "hk") or not code.isdigit():
+            continue
+        fields = value.strip().strip('"').split("~")
+        if len(fields) < 38:
+            continue
+        price = _safe_float(fields[3])
+        amount = _safe_float(fields[37])
+        if amount is not None and market != "hk":
+            amount *= 1e4  # A주 거래대금은 만위안 → 위안
+        quotes[code] = {
+            "price": price if price else None,  # 거래정지 등 0은 값 없음으로
+            "pct_change": _safe_float(fields[32]),
+            "amount": amount,
+        }
+    return quotes
+
+
+def parse_sina_moneyflow(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """시나 MoneyFlow 응답 → {main_net_inflow, main_net_inflow_pct}.
+
+    r0=초대단, r1=대단, r2=중단, r3=소단(_in/_out은 매수/매도 주도 금액).
+    주력 순유입 = (r0_in+r1_in) - (r0_out+r1_out), 점유율은 전체 유출입 대비.
+    """
+    values: dict[str, float] = {}
+    for name in ("r0_in", "r0_out", "r1_in", "r1_out", "r2_in", "r2_out", "r3_in", "r3_out"):
+        number = _safe_float(payload.get(name))
+        if number is None:
+            return None
+        values[name] = number
+    main_net = (values["r0_in"] + values["r1_in"]) - (values["r0_out"] + values["r1_out"])
+    turnover = sum(values.values())
+    return {
+        "date": "",
+        "main_net_inflow": main_net,
+        "main_net_inflow_pct": (main_net / turnover * 100) if turnover > 0 else None,
+    }
 
 
 class _TTLCache:
@@ -78,13 +160,16 @@ class QuoteService:
         cache_ttl_minutes: int = 10,
         sector_top_n: int = 5,
         failure_cooldown_minutes: int = 15,
+        hot_rank_enabled: bool = False,
     ):
         self._enabled = enabled
+        self._hot_rank_enabled = hot_rank_enabled
         self._cache = _TTLCache(
             ttl_seconds=max(1, cache_ttl_minutes) * 60,
             failure_cooldown_seconds=max(1, failure_cooldown_minutes) * 60,
         )
         self._sector_top_n = max(1, sector_top_n)
+        self._sector_labels: dict[str, str] = {}  # 시나 업종명 → label(구성종목 조회용)
 
     @property
     def enabled(self) -> bool:
@@ -92,47 +177,40 @@ class QuoteService:
 
     # ── 시세 ─────────────────────────────────────────
 
-    def _a_spot(self) -> pd.DataFrame:
-        return self._cache.get_or_fetch("a_spot", _akshare_retry(ak.stock_zh_a_spot_em))
+    def _fetch_tencent_quotes(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """텐센트 배치 시세. 심볼 목록 단위로 TTL 캐시."""
 
-    def _hk_spot(self) -> pd.DataFrame:
-        return self._cache.get_or_fetch("hk_spot", _akshare_retry(ak.stock_hk_spot_em))
+        @_akshare_retry
+        def fetch() -> dict[str, dict[str, Any]]:
+            merged: dict[str, dict[str, Any]] = {}
+            for i in range(0, len(symbols), _TENCENT_BATCH_SIZE):
+                batch = symbols[i : i + _TENCENT_BATCH_SIZE]
+                r = requests.get(
+                    _TENCENT_QUOTE_URL + ",".join(batch),
+                    headers=_HTTP_HEADERS,
+                    timeout=10,
+                )
+                r.raise_for_status()
+                r.encoding = "gbk"
+                merged.update(parse_tencent_quotes(r.text))
+            return merged
+
+        key = "tencent_quotes:" + ",".join(sorted(symbols))
+        return self._cache.get_or_fetch(key, fetch)
 
     def get_watchlist_quotes(self, codes: list[str]) -> dict[str, dict[str, Any]]:
-        """코드별 {price, pct_change, amount}. 실패한 시장은 조용히 비운다."""
+        """코드별 {price, pct_change, amount}. 실패하면 조용히 비운다."""
         if not self._enabled or not codes:
             return {}
-        a_codes = [c for c in codes if len(c) == 6]
-        hk_codes = [c for c in codes if len(c) == 5]
-        quotes: dict[str, dict[str, Any]] = {}
-
-        if a_codes:
-            try:
-                df = self._a_spot()
-                rows = df[df["代码"].astype(str).isin(a_codes)]
-                for _, row in rows.iterrows():
-                    quotes[str(row["代码"])] = {
-                        "price": _safe_float(row.get("最新价")),
-                        "pct_change": _safe_float(row.get("涨跌幅")),
-                        "amount": _safe_float(row.get("成交额")),
-                    }
-            except Exception as e:
-                logger.warning("[QUANT] A주 시세 조회 실패: %s", e)
-
-        if hk_codes:
-            try:
-                df = self._hk_spot()
-                rows = df[df["代码"].astype(str).str.zfill(5).isin(hk_codes)]
-                for _, row in rows.iterrows():
-                    quotes[str(row["代码"]).zfill(5)] = {
-                        "price": _safe_float(row.get("最新价")),
-                        "pct_change": _safe_float(row.get("涨跌幅")),
-                        "amount": _safe_float(row.get("成交额")),
-                    }
-            except Exception as e:
-                logger.warning("[QUANT] HK 시세 조회 실패: %s", e)
-
-        return quotes
+        symbols = [s for s in (tencent_symbol(c) for c in codes) if s]
+        if not symbols:
+            return {}
+        try:
+            fetched = self._fetch_tencent_quotes(symbols)
+        except Exception as e:
+            logger.warning("[QUANT] 시세 조회 실패: %s", e)
+            return {}
+        return {code: fetched[code] for code in codes if code in fetched}
 
     def get_price(self, code: str) -> float | None:
         """관심리스트 이벤트 기록용 현재가(최선 노력)."""
@@ -144,23 +222,29 @@ class QuoteService:
     # ── 자금 흐름 ────────────────────────────────────
 
     def get_fund_flow(self, code: str) -> dict[str, Any] | None:
-        """A주 개별 종목 최근 거래일 주력 자금 순유입. HK는 미지원(None)."""
+        """A주 개별 종목 최근 거래일 주력 자금 순유입(시나). HK는 미지원(None)."""
         if not self._enabled or len(code) != 6:
             return None
-        market = "sh" if code.startswith("6") else "sz"
-        try:
-            df = self._cache.get_or_fetch(
-                f"fund_flow:{code}",
-                _akshare_retry(lambda: ak.stock_individual_fund_flow(stock=code, market=market)),
+        symbol = tencent_symbol(code)
+        if not symbol or symbol.startswith("bj"):
+            return None
+
+        @_akshare_retry
+        def fetch() -> dict[str, Any] | None:
+            r = requests.get(
+                _SINA_MONEYFLOW_URL,
+                params={"daima": symbol},
+                headers=_HTTP_HEADERS,
+                timeout=10,
             )
-            if df is None or df.empty:
-                return None
-            row = df.iloc[-1]
-            return {
-                "date": str(row.get("日期") or ""),
-                "main_net_inflow": _safe_float(row.get("主力净流入-净额")),
-                "main_net_inflow_pct": _safe_float(row.get("主力净流入-净占比")),
-            }
+            r.raise_for_status()
+            payload = json.loads(r.text)
+            if not isinstance(payload, dict):
+                raise ValueError(f"unexpected moneyflow payload for {code}")
+            return parse_sina_moneyflow(payload)
+
+        try:
+            return self._cache.get_or_fetch(f"fund_flow:{code}", fetch)
         except Exception as e:
             logger.warning("[QUANT] %s 자금흐름 조회 실패: %s", code, e)
             return None
@@ -168,21 +252,27 @@ class QuoteService:
     # ── 섹터/시장 온도 ───────────────────────────────
 
     def get_sector_rankings(self) -> dict[str, list[dict[str, Any]]]:
-        """동방재부 업종 보드 등락률 상·하위 N개."""
+        """시나 업종 보드 등락률 상·하위 N개."""
         if not self._enabled:
             return {"top": [], "bottom": []}
         try:
-            df = self._cache.get_or_fetch("industry_boards", _akshare_retry(ak.stock_board_industry_name_em))
+            df = self._cache.get_or_fetch(
+                "industry_boards",
+                _akshare_retry(lambda: ak.stock_sector_spot(indicator="新浪行业")),
+            )
             df = df.copy()
             df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
             df = df.dropna(subset=["涨跌幅"]).sort_values("涨跌幅", ascending=False)
+            self._sector_labels = {
+                str(row["板块"]): str(row["label"]) for _, row in df.iterrows()
+            }
 
             def rows_to_list(rows) -> list[dict[str, Any]]:
                 return [
                     {
-                        "name": str(row["板块名称"]),
+                        "name": str(row["板块"]),
                         "pct_change": _safe_float(row["涨跌幅"]),
-                        "leader": str(row.get("领涨股票") or ""),
+                        "leader": str(row.get("股票名称") or ""),
                     }
                     for _, row in rows.iterrows()
                 ]
@@ -196,16 +286,22 @@ class QuoteService:
             return {"top": [], "bottom": []}
 
     def get_sector_constituents(self, board_name: str) -> list[dict[str, str]]:
-        """업종 보드 구성종목(리서치 후보군 발굴용)."""
+        """업종 보드 구성종목(리서치 후보군 발굴용). board_name은 시나 업종명."""
         if not self._enabled:
+            return []
+        if board_name not in self._sector_labels:
+            self.get_sector_rankings()  # 라벨 매핑 채우기(최선 노력)
+        label = self._sector_labels.get(board_name)
+        if not label:
+            logger.warning("[QUANT] %s 업종 라벨을 찾지 못해 구성종목 조회 생략", board_name)
             return []
         try:
             df = self._cache.get_or_fetch(
                 f"board_cons:{board_name}",
-                _akshare_retry(lambda: ak.stock_board_industry_cons_em(symbol=board_name)),
+                _akshare_retry(lambda: ak.stock_sector_detail(sector=label)),
             )
             return [
-                {"code": str(row["代码"]).zfill(6), "name": str(row["名称"])}
+                {"code": str(row["code"]).zfill(6), "name": str(row["name"])}
                 for _, row in df.iterrows()
             ]
         except Exception as e:
@@ -213,8 +309,8 @@ class QuoteService:
             return []
 
     def get_hot_rank_hits(self, codes: list[str]) -> list[dict[str, Any]]:
-        """동방재부 인기순위에 든 관심종목."""
-        if not self._enabled or not codes:
+        """동방재부 인기순위에 든 관심종목(해외 IP 차단으로 기본 비활성)."""
+        if not self._enabled or not self._hot_rank_enabled or not codes:
             return []
         try:
             df = self._cache.get_or_fetch("hot_rank", _akshare_retry(ak.stock_hot_rank_em))

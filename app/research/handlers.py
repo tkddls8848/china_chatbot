@@ -46,6 +46,9 @@ def build_research_result_keyboard(uid: str) -> InlineKeyboardMarkup:
 
 def _normalize_code(code: str) -> str:
     raw = str(code).strip()
+    # US:NASDAQ:AAPL 같은 universe 키와 미국 티커는 대문자 그대로 유지한다.
+    if ":" in raw or any(ch.isalpha() for ch in raw):
+        return raw.upper()
     value = "".join(ch for ch in raw if ch.isdigit())
     if not value:
         return raw
@@ -82,6 +85,8 @@ def _collect_research_actions(
         code = _normalize_code(str(item.get("ticker") or ""))
         if not code:
             continue
+        # LLM이 티커만 답한 경우(AAPL, 005930 등) universe 키로 승격한다.
+        code = stock_db.resolve_code(code) or code
 
         # 현재 관심종목은 LLM이 keep/watch로 응답하더라도 마켓 뷰 관련도가
         # 기준 미만이면 삭제 후보로 승격한다. 실제 삭제는 사용자의 적용 승인 후 수행한다.

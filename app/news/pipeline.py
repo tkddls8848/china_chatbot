@@ -176,6 +176,7 @@ async def process_global_source(
         else:
             metrics["duplicate"] += 1
 
+
     prepared_rows = []
     for article in selected_articles[::-1]:
         try:
