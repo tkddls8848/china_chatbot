@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
@@ -69,3 +71,133 @@ def test_normalize_stock_code():
     assert normalize_stock_code("600519") == "600519"
     assert normalize_stock_code("SZ000665") == "000665"
     assert normalize_stock_code("") == ""
+
+
+@pytest.mark.parametrize("source", ["global", "stock"])
+def test_translation_rewrites_overlong_brief_instead_of_cutting(source):
+    service = object.__new__(TranslationService)
+    service._enabled = True
+    service._brief_content_limit = 150
+    service._prompts = {source: "prompt"}
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "title": "제목",
+                    "content": "가" * 170,
+                    "mentioned_stocks": [],
+                    "sentiment": 0.2,
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "title": "제목",
+                    "content": "핵심 내용을 완결된 단신으로 요약했다.",
+                    "mentioned_stocks": [],
+                    "sentiment": 0.2,
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    service._request_translation = request
+
+    result = service.translate_article(source, "원문 제목", "원문 전체")
+
+    assert result.content == "핵심 내용을 완결된 단신으로 요약했다."
+    assert len(calls) == 2
+    assert calls[1]["retry_for_length"] is True
+
+
+def test_translation_preserves_complete_rewrite_if_limit_still_missed():
+    service = object.__new__(TranslationService)
+    service._enabled = True
+    service._brief_content_limit = 150
+    service._prompts = {"global": "prompt"}
+    complete_long_brief = "완결된 장문을 기계적으로 자르지 않고 보존한다. " * 6
+    response = json.dumps(
+        {
+            "title": "제목",
+            "content": complete_long_brief,
+            "mentioned_stocks": [],
+            "sentiment": -0.2,
+        },
+        ensure_ascii=False,
+    )
+    service._request_translation = lambda *args, **kwargs: response
+
+    result = service.translate_article("global", "원문 제목", "원문 전체")
+
+    assert len(complete_long_brief) > 150
+    assert result.content == complete_long_brief.strip()
+    assert not result.content.endswith("...")
+
+
+def test_translation_accepts_small_overage_without_rewrite():
+    service = object.__new__(TranslationService)
+    service._enabled = True
+    service._brief_content_limit = 150
+    service._prompts = {"global": "prompt"}
+    response = json.dumps(
+        {
+            "title": "제목",
+            "content": "가" * 161,
+            "mentioned_stocks": [],
+            "sentiment": 0.1,
+        },
+        ensure_ascii=False,
+    )
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(kwargs)
+        return response
+
+    service._request_translation = request
+
+    result = service.translate_article("global", "원문 제목", "원문 전체")
+
+    assert len(result.content) == 161
+    assert len(calls) == 1
+
+
+def test_translation_uses_first_valid_result_when_rewrite_is_invalid():
+    service = object.__new__(TranslationService)
+    service._enabled = True
+    service._brief_content_limit = 150
+    service._prompts = {"global": "prompt"}
+    first_content = "가" * 170
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "title": "제목",
+                    "content": first_content,
+                    "mentioned_stocks": [],
+                    "sentiment": -0.4,
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "title": "제목",
+                    "mentioned_stocks": [],
+                    "sentiment": -0.4,
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    service._request_translation = lambda *args, **kwargs: next(responses)
+
+    result = service.translate_article("global", "원문 제목", "원문 전체")
+
+    assert result.content == first_content
+    assert result.sentiment == -0.4

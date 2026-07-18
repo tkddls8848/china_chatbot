@@ -63,14 +63,22 @@ OLLAMA_NUM_GPU = int(os.environ.get("OLLAMA_NUM_GPU", "0"))
 OLLAMA_GPU_ON_VALUE = int(os.environ.get("OLLAMA_GPU_ON_VALUE", "-1"))
 TRANSLATION_ENABLED = _env_bool("TRANSLATION_ENABLED", "true")
 TRANSLATION_MODEL = os.environ.get("TRANSLATION_MODEL", "gemma4:e4b")
-TRANSLATION_TIMEOUT = int(os.environ.get("TRANSLATION_TIMEOUT", "60"))
+TRANSLATION_TIMEOUT = int(os.environ.get("TRANSLATION_TIMEOUT", "120"))
 TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "4096"))
 TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "2"))
 
 SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
 TELEGRAM_MESSAGE_LIMIT = 4096
 NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))
-NEWS_STOCK_LIMIT_PER_SYMBOL = int(os.environ.get("NEWS_STOCK_LIMIT_PER_SYMBOL", "1"))
+NEWS_TRANSLATED_CONTENT_MAX_CHARS = max(
+    1,
+    int(os.environ.get("NEWS_TRANSLATED_CONTENT_MAX_CHARS", "150")),
+)
+NEWS_DIGEST_MESSAGE_MAX_CHARS = min(
+    TELEGRAM_MESSAGE_LIMIT,
+    max(2000, int(os.environ.get("NEWS_DIGEST_MESSAGE_MAX_CHARS", "3500"))),
+)
+NEWS_STOCK_LIMIT_PER_SYMBOL = int(os.environ.get("NEWS_STOCK_LIMIT_PER_SYMBOL", "3"))
 NEWS_ENABLE_CLS = _env_bool("NEWS_ENABLE_CLS", "false")
 NEWS_SOURCE_FETCH_TIMEOUT_SECONDS = float(
     os.environ.get("NEWS_SOURCE_FETCH_TIMEOUT_SECONDS", "45")
@@ -120,20 +128,24 @@ NEWS_SENTIMENT_ENABLED = _env_bool("NEWS_SENTIMENT_ENABLED", "true")
 NEWS_NEGATIVE_ALERT_THRESHOLD = float(os.environ.get("NEWS_NEGATIVE_ALERT_THRESHOLD", "-0.6"))
 # /view 감성 뷰 집계에 사용할 최근 신호 일수.
 VIEW_LOOKBACK_DAYS = int(os.environ.get("VIEW_LOOKBACK_DAYS", "3"))
-# 한 주기에 처리할 관심종목 수. 0 이하면 전체를 한 번에 처리(기존 동작).
-# 전체 종목을 매 주기 일괄 요청/번역하지 않고 여러 주기에 나눠 회전 처리해 부하를 분산한다.
-STOCK_NEWS_BATCH_SIZE = int(os.environ.get("STOCK_NEWS_BATCH_SIZE", "3"))
+# 한 주기에 처리할 관심종목 수. 기본값 0은 전체 종목을 조회해 한 묶음으로 보낸다.
+# 양수로 지정하면 해당 개수만큼 여러 주기에 나눠 회전 처리한다.
+STOCK_NEWS_BATCH_SIZE = int(os.environ.get("STOCK_NEWS_BATCH_SIZE", "0"))
 # 배치 내 종목 간 외부 API 호출 사이에 둘 지연(초). 0이면 지연 없음.
 STOCK_NEWS_FETCH_DELAY_SECONDS = float(os.environ.get("STOCK_NEWS_FETCH_DELAY_SECONDS", "0"))
-# 한 주기에 처리할 전역 속보 소스(CLS/Futu) 수. 1이면 매 주기 한 소스씩 번갈아 처리.
-# 0 이하이면 매 주기 전체(CLS+Futu)를 처리(기존 동작).
-GLOBAL_NEWS_BATCH_SIZE = int(os.environ.get("GLOBAL_NEWS_BATCH_SIZE", "2"))
-SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "2"))
+# 한 주기에 처리할 전역 속보 소스 수. 기본값 0은 활성 소스 전체를 처리한다.
+# 양수로 지정하면 해당 개수만큼 소스를 회전 처리할 수 있다.
+GLOBAL_NEWS_BATCH_SIZE = int(os.environ.get("GLOBAL_NEWS_BATCH_SIZE", "0"))
+SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5"))
 STOCK_DB_ENABLED = _env_bool("STOCK_DB_ENABLED", "true")
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
 RESEARCH_ANALYSIS_MODEL = os.environ.get("RESEARCH_ANALYSIS_MODEL", TRANSLATION_MODEL)
 RESEARCH_ANALYSIS_ENABLED = _env_bool("RESEARCH_ANALYSIS_ENABLED", "true")
+RESEARCH_ANALYSIS_TIMEOUT = max(
+    30,
+    int(os.environ.get("RESEARCH_ANALYSIS_TIMEOUT", "600")),
+)
 RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL = int(
     os.environ.get("RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL", "3")
 )

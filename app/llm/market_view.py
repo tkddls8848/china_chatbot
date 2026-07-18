@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,11 @@ class MarketViewAnalyzer:
         if not self._enabled:
             raise MarketViewError("market view analysis is disabled")
 
+        deadline = (
+            time.monotonic() + self._timeout
+            if self._timeout is not None
+            else None
+        )
         payload = {
             "market_view": market_view,
             "current_watchlist": watchlist,
@@ -154,10 +160,19 @@ class MarketViewAnalyzer:
             payload["quant_context"] = quant_context
         if previous_analyses:
             payload["previous_analyses"] = previous_analyses
-        raw = self._request_analysis(payload)
+        raw = self._request_analysis(
+            payload,
+            timeout=self._remaining_timeout(deadline),
+        )
         result = self._parse_analysis(raw)
         if self._verification_enabled:
-            result = self._verify_actions(market_view, result, news_items, quant_context)
+            result = self._verify_actions(
+                market_view,
+                result,
+                news_items,
+                quant_context,
+                deadline,
+            )
         return result
 
     def _verify_actions(
@@ -166,6 +181,7 @@ class MarketViewAnalyzer:
         result: dict[str, Any],
         news_items: list[dict[str, Any]],
         quant_context: dict[str, Any] | None,
+        deadline: float | None,
     ) -> dict[str, Any]:
         """추가/삭제 후보에 bull/bear 근거를 붙이고 기각(drop) 후보를 걸러낸다.
 
@@ -197,7 +213,11 @@ class MarketViewAnalyzer:
             payload["quant_context"] = quant_context
 
         try:
-            raw = self._request_analysis(payload, prompt=self._verification_prompt)
+            raw = self._request_analysis(
+                payload,
+                prompt=self._verification_prompt,
+                timeout=self._remaining_timeout(deadline),
+            )
             data = json.loads(self._extract_json_object(raw))
             verdicts = data.get("verdicts")
             if not isinstance(verdicts, list):
@@ -247,7 +267,20 @@ class MarketViewAnalyzer:
         result["verified"] = True
         return result
 
-    def _request_analysis(self, payload: dict[str, Any], prompt: str | None = None) -> str:
+    def _remaining_timeout(self, deadline: float | None) -> float | None:
+        if deadline is None:
+            return self._timeout
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise MarketViewError("research analysis timed out")
+        return remaining
+
+    def _request_analysis(
+        self,
+        payload: dict[str, Any],
+        prompt: str | None = None,
+        timeout: float | None = None,
+    ) -> str:
         response = requests.post(
             f"{self._base_url}/api/chat",
             json={
@@ -267,7 +300,7 @@ class MarketViewAnalyzer:
                     "num_gpu": self._num_gpu,
                 },
             },
-            timeout=self._timeout,
+            timeout=timeout,
         )
         response.raise_for_status()
 

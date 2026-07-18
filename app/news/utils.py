@@ -8,12 +8,14 @@ import asyncio
 import html
 import re
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import pandas as pd
 
 from core.config import TELEGRAM_MESSAGE_LIMIT
 from llm.translator import TranslationResult, TranslationService
+
+T = TypeVar("T")
 
 
 def format_china_time_as_kst(
@@ -75,6 +77,43 @@ def build_news_message(
             text = f"{header}{title_part}{mentioned_line}{footer}"
             return text[: TELEGRAM_MESSAGE_LIMIT - len(truncation)] + truncation
         raw_content = next_content
+
+
+def truncate_text(text: str, max_chars: int) -> str:
+    """텍스트를 문자 수 상한 안에 두고, 잘린 경우 말줄임표를 붙인다."""
+    normalized = str(text or "").strip()
+    if len(normalized) <= max_chars:
+        return normalized
+    if max_chars <= 3:
+        return normalized[:max_chars]
+    return normalized[: max_chars - 3].rstrip() + "..."
+
+
+def chunk_message_items(
+    items: list[T],
+    text_getter: Callable[[T], str],
+    max_body_length: int,
+    separator: str,
+) -> list[list[T]]:
+    """기사 내부를 자르지 않고 지정된 본문 길이 이하의 묶음으로 나눈다."""
+    chunks: list[list[T]] = []
+    current: list[T] = []
+    current_length = 0
+
+    for item in items:
+        item_length = len(text_getter(item))
+        added_length = item_length + (len(separator) if current else 0)
+        if current and current_length + added_length > max_body_length:
+            chunks.append(current)
+            current = [item]
+            current_length = item_length
+        else:
+            current.append(item)
+            current_length += added_length
+
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 async def translate_article(
