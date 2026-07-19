@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 import time
 from datetime import datetime
@@ -149,7 +150,9 @@ class MarketViewAnalyzer:
         enabled: bool,
         timeout: int | None,
         num_predict: int,
-        num_ctx: int,
+        min_ctx: int,
+        max_ctx: int,
+        ctx_safety_ratio: float,
         num_thread: int,
         prompt_file: Path,
         num_gpu: int = 0,
@@ -163,7 +166,9 @@ class MarketViewAnalyzer:
         self._enabled = enabled
         self._timeout = timeout
         self._num_predict = num_predict
-        self._num_ctx = max(4096, num_ctx)
+        self._min_ctx = max(4096, min_ctx)
+        self._max_ctx = max(self._min_ctx, max_ctx)
+        self._ctx_safety_ratio = max(1.0, ctx_safety_ratio)
         self._num_thread = max(1, num_thread)
         self._num_gpu = num_gpu
         self._max_new_actions = max(0, max_new_actions)
@@ -328,13 +333,35 @@ class MarketViewAnalyzer:
         prompt: str | None = None,
         timeout: float | None = None,
     ) -> str:
+        system_prompt = prompt or self._prompt
+        payload_text = json.dumps(payload, ensure_ascii=False)
+        num_ctx, estimated_input_tokens, required_tokens = self._select_context_size(
+            system_prompt,
+            payload_text,
+        )
+        article_count = len(
+            payload.get("news_items")
+            or payload.get("news_titles")
+            or []
+        )
+        log = logger.warning if required_tokens > self._max_ctx else logger.info
+        log(
+            "[MarketView] 동적 컨텍스트: 기사=%d, 문자=%d, 입력≈%d토큰, "
+            "출력예약=%d, 필요≈%d, num_ctx=%d",
+            article_count,
+            len(system_prompt) + len(payload_text),
+            estimated_input_tokens,
+            self._num_predict,
+            required_tokens,
+            num_ctx,
+        )
         response = requests.post(
             f"{self._base_url}/api/chat",
             json={
                 "model": self._model,
                 "messages": [
-                    {"role": "system", "content": prompt or self._prompt},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": payload_text},
                     {"role": "assistant", "content": "{"},
                 ],
                 "stream": False,
@@ -343,7 +370,7 @@ class MarketViewAnalyzer:
                 "options": {
                     "temperature": 0.2,
                     "num_predict": self._num_predict,
-                    "num_ctx": self._num_ctx,
+                    "num_ctx": num_ctx,
                     "num_thread": self._num_thread,
                     "num_gpu": self._num_gpu,
                 },
@@ -360,6 +387,47 @@ class MarketViewAnalyzer:
         if not content.lstrip().startswith("{"):
             content = "{" + content
         return content
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Qwen 계열용 보수적 토큰 근사치.
+
+        한중일 문자는 글자당 약 1.5토큰, 나머지는 약 3문자당
+        1토큰으로 계산한다. 실제 토크나이저 오차는 안전 비율로 흡수한다.
+        """
+        cjk_chars = sum(
+            1
+            for char in text
+            if (
+                "\u1100" <= char <= "\u11ff"
+                or "\u3040" <= char <= "\u30ff"
+                or "\u3130" <= char <= "\u318f"
+                or "\u3400" <= char <= "\u9fff"
+                or "\uac00" <= char <= "\ud7af"
+                or "\uf900" <= char <= "\ufaff"
+            )
+        )
+        other_chars = len(text) - cjk_chars
+        return max(1, math.ceil((cjk_chars * 1.5) + (other_chars / 3)))
+
+    def _select_context_size(
+        self,
+        system_prompt: str,
+        payload_text: str,
+    ) -> tuple[int, int, int]:
+        estimated_input = (
+            self._estimate_tokens(system_prompt)
+            + self._estimate_tokens(payload_text)
+            + 64
+        )
+        required = math.ceil(
+            estimated_input * self._ctx_safety_ratio
+            + self._num_predict
+            + 256
+        )
+        bucket = math.ceil(required / 8192) * 8192
+        selected = min(self._max_ctx, max(self._min_ctx, bucket))
+        return selected, estimated_input, required
 
     def _parse_analysis(self, raw: str) -> dict[str, Any]:
         payload = self._extract_json_object(raw)

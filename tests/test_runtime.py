@@ -106,13 +106,15 @@ def test_remaining_timeout_rejects_expired_budget(monkeypatch):
         analyzer._remaining_timeout(300.0)
 
 
-def test_analysis_request_uses_bounded_context_and_output(monkeypatch):
+def test_analysis_request_uses_dynamic_context_and_bounded_output(monkeypatch):
     analyzer = object.__new__(MarketViewAnalyzer)
     analyzer._base_url = "http://localhost:11434"
     analyzer._model = "model"
     analyzer._prompt = "prompt"
     analyzer._num_predict = 1024
-    analyzer._num_ctx = 16384
+    analyzer._min_ctx = 8192
+    analyzer._max_ctx = 24576
+    analyzer._ctx_safety_ratio = 1.2
     analyzer._num_thread = 6
     analyzer._num_gpu = 0
     captured = {}
@@ -134,8 +136,34 @@ def test_analysis_request_uses_bounded_context_and_output(monkeypatch):
 
     options = captured["json"]["options"]
     assert options["num_predict"] == 1024
-    assert options["num_ctx"] == 16384
+    assert options["num_ctx"] == 8192
     assert options["num_thread"] == 6
+
+
+@pytest.mark.parametrize(
+    ("cjk_chars", "expected_ctx"),
+    [
+        (1_000, 8_192),
+        (6_000, 16_384),
+        (12_000, 24_576),
+        (30_000, 24_576),
+    ],
+)
+def test_dynamic_research_context_uses_8k_to_24k_buckets(cjk_chars, expected_ctx):
+    analyzer = object.__new__(MarketViewAnalyzer)
+    analyzer._num_predict = 1024
+    analyzer._min_ctx = 8192
+    analyzer._max_ctx = 24576
+    analyzer._ctx_safety_ratio = 1.2
+
+    selected, estimated_input, required = analyzer._select_context_size(
+        "리서치 시스템 프롬프트",
+        "가" * cjk_chars,
+    )
+
+    assert estimated_input > 0
+    assert required > estimated_input
+    assert selected == expected_ctx
 
 
 def test_analysis_payload_includes_new_action_cap():

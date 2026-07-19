@@ -162,9 +162,17 @@ RESEARCH_NEWS_GLOBAL_LIMIT = int(
 RESEARCH_ANALYSIS_NUM_PREDICT = int(
     os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "1024")
 )
-RESEARCH_ANALYSIS_NUM_CTX = max(
+RESEARCH_CTX_MIN = max(
     4096,
-    int(os.environ.get("RESEARCH_ANALYSIS_NUM_CTX", "16384")),
+    int(os.environ.get("RESEARCH_CTX_MIN", "8192")),
+)
+RESEARCH_CTX_MAX = max(
+    RESEARCH_CTX_MIN,
+    int(os.environ.get("RESEARCH_CTX_MAX", "24576")),
+)
+RESEARCH_CTX_SAFETY_RATIO = max(
+    1.0,
+    float(os.environ.get("RESEARCH_CTX_SAFETY_RATIO", "1.20")),
 )
 RESEARCH_CPU_THREADS = max(
     1,
