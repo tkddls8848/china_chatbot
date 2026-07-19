@@ -59,10 +59,10 @@ def test_sentiment_clamped_to_range():
 
 
 def test_format_sentiment_line_markers():
-    assert "🟢" in format_sentiment_line(0.5)
-    assert "🔴" in format_sentiment_line(-0.5, "high")
+    assert "긍정" in format_sentiment_line(0.5)
+    assert "부정" in format_sentiment_line(-0.5, "high")
     assert "높음" in format_sentiment_line(-0.5, "high")
-    assert "⚪" in format_sentiment_line(0.0)
+    assert "중립" in format_sentiment_line(0.0)
     assert format_sentiment_line(None) == ""
 
 
@@ -73,12 +73,11 @@ def test_normalize_stock_code():
     assert normalize_stock_code("") == ""
 
 
-@pytest.mark.parametrize("source", ["global", "stock"])
-def test_translation_rewrites_overlong_brief_instead_of_cutting(source):
+def test_translation_rewrites_overlong_brief_instead_of_cutting():
     service = object.__new__(TranslationService)
     service._enabled = True
     service._brief_content_limit = 150
-    service._prompts = {source: "prompt"}
+    service._prompts = {"global": "prompt"}
     responses = iter(
         [
             json.dumps(
@@ -109,7 +108,7 @@ def test_translation_rewrites_overlong_brief_instead_of_cutting(source):
 
     service._request_translation = request
 
-    result = service.translate_article(source, "원문 제목", "원문 전체")
+    result = service.translate_article("global", "원문 제목", "원문 전체")
 
     assert result.content == "핵심 내용을 완결된 단신으로 요약했다."
     assert len(calls) == 2
@@ -168,53 +167,11 @@ def test_translation_accepts_small_overage_without_rewrite():
     assert len(calls) == 1
 
 
-def test_translation_uses_stock_specific_brief_limit():
-    service = object.__new__(TranslationService)
-    service._enabled = True
-    service._brief_content_limit = 180
-    service._stock_brief_content_limit = 150
-    service._prompts = {"stock": "prompt"}
-    responses = iter(
-        [
-            json.dumps(
-                {
-                    "title": "한국어 제목",
-                    "content": "가" * 170,
-                    "mentioned_stocks": [],
-                },
-                ensure_ascii=False,
-            ),
-            json.dumps(
-                {
-                    "title": "한국어 제목",
-                    "content": "짧은 개별 종목 단신이다.",
-                    "mentioned_stocks": [],
-                },
-                ensure_ascii=False,
-            ),
-        ]
-    )
-    calls = []
-
-    def request(*args, **kwargs):
-        calls.append(kwargs)
-        return next(responses)
-
-    service._request_translation = request
-
-    result = service.translate_article("stock", "원문 제목", "원문 전체")
-
-    assert result.content == "짧은 개별 종목 단신이다."
-    assert calls[0]["content_limit"] == 150
-    assert calls[1]["retry_for_length"] is True
-
-
 def test_translation_rewrites_chinese_title_in_korean():
     service = object.__new__(TranslationService)
     service._enabled = True
     service._brief_content_limit = 180
-    service._stock_brief_content_limit = 150
-    service._prompts = {"stock": "prompt"}
+    service._prompts = {"global": "prompt"}
     responses = iter(
         [
             json.dumps(
@@ -243,7 +200,7 @@ def test_translation_rewrites_chinese_title_in_korean():
 
     service._request_translation = request
 
-    result = service.translate_article("stock", "원문 제목", "원문 전체")
+    result = service.translate_article("global", "원문 제목", "원문 전체")
 
     assert result.title.startswith("상하이종합지수")
     assert len(calls) == 2

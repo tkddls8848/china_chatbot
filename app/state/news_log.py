@@ -47,24 +47,22 @@ class NewsLog:
         except Exception:
             return
         if isinstance(raw, list):
-            self._entries = [e for e in raw if isinstance(e, dict)]
-            self._repair_history_timestamps()
+            valid_entries = [
+                entry
+                for entry in raw
+                if isinstance(entry, dict)
+                and entry.get("timestamp_source") == "published"
+            ]
+            self._entries = valid_entries
             self._evict()
-
-    def _repair_history_timestamps(self) -> None:
-        """과거 검색 결과를 RSS 게시시각이 아닌 검색 대상 날짜에 배치한다."""
-        for entry in self._entries:
-            match = _HISTORY_DAY_RE.match(str(entry.get("article_id") or ""))
-            if match is None:
-                continue
-            entry["ts"] = (
-                datetime.combine(
-                    datetime.fromisoformat(match.group("day")).date(),
-                    datetime.max.time(),
-                )
-                .replace(microsecond=0)
-                .isoformat()
-            )
+            if len(valid_entries) != len(raw):
+                try:
+                    self._file_path.write_text(
+                        json.dumps(self._entries, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
 
     async def record(
         self,
@@ -84,6 +82,9 @@ class NewsLog:
             self._entries.append(
                 {
                     "ts": (occurred_at or datetime.now()).isoformat(timespec="seconds"),
+                    "timestamp_source": (
+                        "published" if occurred_at is not None else "received"
+                    ),
                     "source": source,
                     "article_id": normalized_id,
                     "title": title[:120],
@@ -111,6 +112,25 @@ class NewsLog:
                     continue
             return result
 
+    async def snapshot_since_date(
+        self,
+        start_date: date,
+    ) -> list[dict[str, Any]]:
+        """Return entries in an exact KST calendar range through today."""
+        today = datetime.now().date()
+        async with self._lock:
+            result = []
+            for entry in self._entries:
+                if entry.get("timestamp_source") != "published":
+                    continue
+                try:
+                    entry_day = datetime.fromisoformat(str(entry.get("ts"))).date()
+                except (TypeError, ValueError):
+                    continue
+                if start_date <= entry_day <= today:
+                    result.append(dict(entry))
+            return result
+
     async def contains_article(self, article_id: str) -> bool:
         """Check a persistent article ID so on-demand backfills are idempotent."""
         normalized_id = str(article_id).strip()
@@ -128,7 +148,7 @@ class NewsLog:
         today = datetime.now().date()
         expected = [
             today - timedelta(days=offset)
-            for offset in range(1, max(1, lookback_days) + 1)
+            for offset in range(max(1, lookback_days))
         ]
         async with self._lock:
             covered: dict[str, set[str]] = {market: set() for market in markets}
@@ -176,7 +196,8 @@ def aggregate_sentiment_by_code(
 
 def aggregate_market_sentiment(
     entries: list[dict[str, Any]],
-    since_hours: int,
+    since_hours: int | None = 24,
+    start_date: date | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Aggregate scored news into market-level daily trend data.
 
@@ -184,7 +205,12 @@ def aggregate_market_sentiment(
     watchlist symbols it mentions.  This makes the market view a news-mood
     indicator rather than a watchlist-size indicator.
     """
-    cutoff = datetime.now() - timedelta(hours=max(1, since_hours))
+    now = datetime.now()
+    cutoff = (
+        datetime.combine(start_date, datetime.min.time())
+        if start_date is not None
+        else now - timedelta(hours=max(1, since_hours or 24))
+    )
     markets: dict[str, dict[str, Any]] = {}
     for entry in entries:
         sentiment = entry.get("sentiment")
@@ -194,7 +220,7 @@ def aggregate_market_sentiment(
             ts = datetime.fromisoformat(str(entry.get("ts")))
         except (TypeError, ValueError):
             continue
-        if ts < cutoff:
+        if ts < cutoff or ts > now + timedelta(hours=1):
             continue
         market = str(entry.get("market") or "OTHER").strip().upper()
         bucket = markets.setdefault(market, {"sum": 0.0, "count": 0, "daily": {}})

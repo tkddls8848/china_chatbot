@@ -3,10 +3,7 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 
-DEFAULT_WATCHLIST: Dict[str, str] = {
-    "09988": "알리바바",
-    "300750": "CATL",
-}
+DEFAULT_WATCHLIST: Dict[str, str] = {}
 
 
 class WatchlistManager:

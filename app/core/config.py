@@ -17,9 +17,8 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 
-# pandas 3.0부터 future.infer_string 기본값이 True라 문자열이 pyarrow(RE2) 백엔드로
-# 처리되는데, akshare 일부 함수(stock_news_em 등)가 쓰는 r"　" 정규식을 RE2가
-# 거부해 ArrowInvalid가 발생한다. 레거시 object 문자열(파이썬 re)로 되돌려 회피한다.
+# pandas 3.0부터 문자열 추론 방식이 바뀌어 일부 AkShare 응답의 정규식 처리가
+# 실패할 수 있으므로 레거시 object 문자열 방식으로 고정한다.
 pd.set_option("future.infer_string", False)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -29,6 +28,17 @@ load_dotenv(BASE_DIR / ".env")
 
 def _env_bool(name: str, default: str = "false") -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+_DEFAULT_FEATURES = (
+    "instruments,quant,watchlist,news,market_sentiment,"
+    "research,briefing,signal_scoring,system_admin"
+)
+FEATURES_ENABLED = frozenset(
+    key.strip()
+    for key in os.environ.get("FEATURES_ENABLED", _DEFAULT_FEATURES).split(",")
+    if key.strip()
+)
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
@@ -46,7 +56,6 @@ SENT_IDS_FILE     = BASE_DIR / "data" / "sent_ids.json"
 WATCHLIST_FILE    = BASE_DIR / "data" / "watchlist.json"
 STOCK_DB_FILE     = BASE_DIR / "data" / "stock_db.json"
 PREDICTION_LOG_FILE = BASE_DIR / "data" / "prediction_log.jsonl"
-BACKTEST_LOG_FILE = BASE_DIR / "data" / "backtest_log.jsonl"
 RESEARCH_STATE_FILE = BASE_DIR / "data" / "market_research.json"
 WATCHLIST_EVENTS_FILE = BASE_DIR / "data" / "watchlist_events.json"
 NEWS_LOG_FILE     = BASE_DIR / "data" / "news_log.json"
@@ -74,18 +83,17 @@ NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS = max(
     1,
     int(os.environ.get("NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS", "180")),
 )
-NEWS_STOCK_TRANSLATED_CONTENT_MAX_CHARS = max(
-    1,
-    int(os.environ.get("NEWS_STOCK_TRANSLATED_CONTENT_MAX_CHARS", "150")),
-)
 NEWS_DIGEST_MESSAGE_MAX_CHARS = min(
     TELEGRAM_MESSAGE_LIMIT,
     max(2000, int(os.environ.get("NEWS_DIGEST_MESSAGE_MAX_CHARS", "3500"))),
 )
-NEWS_STOCK_LIMIT_PER_SYMBOL = int(os.environ.get("NEWS_STOCK_LIMIT_PER_SYMBOL", "3"))
 NEWS_ENABLE_CLS = _env_bool("NEWS_ENABLE_CLS", "false")
 NEWS_SOURCE_FETCH_TIMEOUT_SECONDS = float(
     os.environ.get("NEWS_SOURCE_FETCH_TIMEOUT_SECONDS", "45")
+)
+NEWS_LIVE_MAX_AGE_HOURS = max(
+    1,
+    int(os.environ.get("NEWS_LIVE_MAX_AGE_HOURS", "48")),
 )
 NEWS_SOURCE_ARTICLE_LIMIT = max(
     1,
@@ -102,7 +110,7 @@ def _parse_global_source_keys() -> list[str]:
     raw = os.environ.get("NEWS_GLOBAL_SOURCES", "").strip()
     if raw:
         return [key.strip().lower() for key in raw.split(",") if key.strip()]
-    keys = ["futu", "em", "sina", "gnews", "gnews_us"]
+    keys = ["futu", "sina", "gnews", "gnews_us"]
     if NEWS_ENABLE_CLS:
         keys.append("cls")
     return keys
@@ -132,11 +140,6 @@ NEWS_SENTIMENT_ENABLED = _env_bool("NEWS_SENTIMENT_ENABLED", "true")
 NEWS_NEGATIVE_ALERT_THRESHOLD = float(os.environ.get("NEWS_NEGATIVE_ALERT_THRESHOLD", "-0.6"))
 # /view 감성 뷰 집계에 사용할 최근 신호 일수.
 VIEW_LOOKBACK_DAYS = int(os.environ.get("VIEW_LOOKBACK_DAYS", "3"))
-# 한 주기에 처리할 관심종목 수. 기본값 0은 전체 종목을 조회해 한 묶음으로 보낸다.
-# 양수로 지정하면 해당 개수만큼 여러 주기에 나눠 회전 처리한다.
-STOCK_NEWS_BATCH_SIZE = int(os.environ.get("STOCK_NEWS_BATCH_SIZE", "0"))
-# 배치 내 종목 간 외부 API 호출 사이에 둘 지연(초). 0이면 지연 없음.
-STOCK_NEWS_FETCH_DELAY_SECONDS = float(os.environ.get("STOCK_NEWS_FETCH_DELAY_SECONDS", "0"))
 # 한 주기에 처리할 전역 속보 소스 수. 기본값 0은 활성 소스 전체를 처리한다.
 # 양수로 지정하면 해당 개수만큼 소스를 회전 처리할 수 있다.
 GLOBAL_NEWS_BATCH_SIZE = int(os.environ.get("GLOBAL_NEWS_BATCH_SIZE", "0"))
@@ -149,9 +152,6 @@ RESEARCH_ANALYSIS_ENABLED = _env_bool("RESEARCH_ANALYSIS_ENABLED", "true")
 RESEARCH_ANALYSIS_TIMEOUT = max(
     30,
     int(os.environ.get("RESEARCH_ANALYSIS_TIMEOUT", "600")),
-)
-RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL = int(
-    os.environ.get("RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL", "3")
 )
 RESEARCH_NEWS_MAX_ITEMS = int(
     os.environ.get("RESEARCH_NEWS_MAX_ITEMS", "3")
@@ -189,7 +189,7 @@ RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
 # 시장뷰 분석 강화: bull/bear 검증 패스, 분석 이력 메모리
 RESEARCH_VERIFICATION_ENABLED = _env_bool("RESEARCH_VERIFICATION_ENABLED", "false")
 RESEARCH_VERIFICATION_PROMPT_FILE = PROMPT_DIR / "market_research_verify_ko.txt"
-RESEARCH_HISTORY_LIMIT = int(os.environ.get("RESEARCH_HISTORY_LIMIT", "5"))
+RESEARCH_HISTORY_LIMIT = int(os.environ.get("RESEARCH_HISTORY_LIMIT", "3"))
 # 강세 섹터 구성종목을 리서치 후보군에 추가
 RESEARCH_SECTOR_CANDIDATES_ENABLED = _env_bool("RESEARCH_SECTOR_CANDIDATES_ENABLED", "true")
 RESEARCH_SECTOR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_SECTOR_CANDIDATE_LIMIT", "10"))
@@ -218,7 +218,6 @@ def _parse_market_map() -> dict[str, str]:
         "sina": "CN",
         "ths": "CN",
         "cls": "CN",
-        "stock": "CN",
     }
     for item in raw.split(","):
         source, separator, market = item.rpartition(":")
@@ -313,7 +312,7 @@ HELP_TEXT = (
     "/menu · /list — 관심종목 관리·목록\n"
     "/add 종목코드 — 관심종목 추가\n"
     "/view [종목코드] — 종목 감성\n"
-    "/score [backtest] — 신호 성과\n"
+    "/score — 운영 신호 성과\n"
     "/research show|set|run|clear — 리서치\n"
     "/briefing morning|evening|scorecard — 브리핑\n"
     "/stockdb build · /system — 관리\n\n"

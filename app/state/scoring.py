@@ -19,7 +19,6 @@ from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 
-import akshare as ak
 import pandas as pd
 
 from stocks.market_data import fetch_closes as fetch_market_closes
@@ -66,57 +65,6 @@ def load_signals(log_path: Path, threshold: float) -> tuple[list[dict], int]:
             continue
         signals.append({"code": code, "market": market, "date": day, "avg": avg, "up": avg > 0})
     return signals, neutral
-
-
-def _closes_from_df(df, date_col: str, close_col: str) -> "pd.Series | None":
-    if df is None or df.empty or date_col not in df.columns or close_col not in df.columns:
-        return None
-    closes = pd.Series(
-        pd.to_numeric(df[close_col], errors="coerce").values,
-        index=pd.to_datetime(df[date_col], errors="coerce"),
-    ).dropna().sort_index()
-    return closes if not closes.empty else None
-
-
-def fetch_closes(code: str, start: date, end: date) -> "pd.Series | None":
-    """AkShare 일봉 종가 시계열(날짜 오름차순). 실패하면 None.
-
-    1차 동방재부(east) → 2차 신랑(sina) 순으로 페일오버한다(뉴스 소스 레지스트리와 같은 패턴).
-    """
-    return fetch_market_closes(code, None, start, end)
-    start_s, end_s = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
-    if len(code) == 5:  # 홍콩
-        attempts = [
-            ("east", lambda: ak.stock_hk_hist(
-                symbol=code, period="daily",
-                start_date=start_s, end_date=end_s, adjust="",
-            ), "日期", "收盘"),
-            ("sina", lambda: ak.stock_hk_daily(symbol=code, adjust=""), "date", "close"),
-        ]
-    else:  # A주
-        sina_symbol = ("sh" if code.startswith("6") else "sz") + code
-        attempts = [
-            ("east", lambda: ak.stock_zh_a_hist(
-                symbol=code, period="daily",
-                start_date=start_s, end_date=end_s, adjust="qfq",
-            ), "日期", "收盘"),
-            ("sina", lambda: ak.stock_zh_a_daily(
-                symbol=sina_symbol, start_date=start_s, end_date=end_s, adjust="qfq",
-            ), "date", "close"),
-        ]
-
-    last_error: Exception | None = None
-    for source, fetch, date_col, close_col in attempts:
-        try:
-            closes = _closes_from_df(fetch(), date_col, close_col)
-        except Exception as e:
-            last_error = e
-            continue
-        if closes is not None:
-            # sina 홍콩은 전체 이력을 반환하므로 필요한 구간만 남긴다.
-            return closes.loc[pd.Timestamp(start):]
-    logger.warning("[SCORE] %s 시세 조회 실패(east/sina 모두): %s", code, last_error)
-    return None
 
 
 def score_signals(signals: list[dict], horizons: list[int]) -> dict[int, dict]:

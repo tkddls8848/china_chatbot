@@ -70,8 +70,9 @@ def test_history_coverage_extends_beyond_existing_seven_days(tmp_path):
         for offset in range(1, 8):
             day = today - timedelta(days=offset)
             rows.append(
-                {
-                    "ts": datetime.now().isoformat(),
+                    {
+                        "ts": datetime.now().isoformat(),
+                        "timestamp_source": "published",
                     "source": f"history:{market}",
                     "article_id": (
                         f"history:{market}:rss:history:{market}:"
@@ -91,7 +92,7 @@ def test_history_coverage_extends_beyond_existing_seven_days(tmp_path):
 
     expected = [
         today - timedelta(days=offset)
-        for offset in range(8, 15)
+        for offset in (0, *range(8, 14))
     ]
     assert all(days == expected for days in missing.values())
 
@@ -102,10 +103,75 @@ def test_history_timestamp_uses_requested_calendar_day():
         article_id="test",
         title="title",
         content="content",
+        published_at="Fri, 03 Jul 2026 15:30:00 GMT",
+    )
+
+    assert _article_time(article, target) == datetime(2026, 7, 4, 0, 30)
+
+
+def test_history_timestamp_rejects_article_from_another_kst_day():
+    article = GlobalArticle(
+        article_id="test",
+        title="title",
+        content="content",
         published_at="Fri, 17 Jul 2026 14:30:00 GMT",
     )
 
-    assert _article_time(article, target) == datetime(2026, 7, 4, 23, 59, 59)
+    assert _article_time(article, date(2026, 7, 4)) is None
+
+
+def test_calendar_snapshot_uses_only_verified_publication_times(tmp_path):
+    log = NewsLog(tmp_path / "news_log.json", retention_days=30)
+    published_at = datetime.now().replace(microsecond=0)
+
+    async def exercise():
+        await log.record(
+            source="gnews",
+            title="verified",
+            sentiment=0.2,
+            impact="low",
+            codes=[],
+            market="US",
+            article_id="verified",
+            occurred_at=published_at,
+        )
+        await log.record(
+            source="gnews",
+            title="collection time only",
+            sentiment=0.2,
+            impact="low",
+            codes=[],
+            market="US",
+            article_id="unverified",
+        )
+        return await log.snapshot_since_date(published_at.date())
+
+    rows = asyncio.run(exercise())
+
+    assert [row["article_id"] for row in rows] == ["verified"]
+    assert rows[0]["ts"] == published_at.isoformat(timespec="seconds")
+
+
+def test_news_log_discards_legacy_inaccurate_timestamps(tmp_path):
+    path = tmp_path / "news_log.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "ts": datetime.now().isoformat(),
+                    "source": "gnews",
+                    "article_id": "legacy",
+                    "sentiment": 0.2,
+                    "market": "US",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    NewsLog(path, retention_days=30)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == []
 
 
 def test_backfill_day_limit_spreads_across_full_window():
@@ -127,8 +193,8 @@ def test_market_command_backfills_longer_window_even_when_chart_is_ready(monkeyp
     backfill_calls = []
 
     class NewsLogStub:
-        async def snapshot(self, since_hours):
-            assert since_hours == 14 * 24
+        async def snapshot_since_date(self, start_date):
+            assert start_date == datetime.now().date() - timedelta(days=13)
             return []
 
         async def missing_history_days(self, markets, lookback_days):
@@ -210,8 +276,8 @@ def test_thirty_day_backfill_targets_all_markets_and_full_range(monkeypatch):
     captured = {}
 
     class NewsLogStub:
-        async def snapshot(self, since_hours):
-            assert since_hours == 30 * 24
+        async def snapshot_since_date(self, start_date):
+            assert start_date == datetime.now().date() - timedelta(days=29)
             return []
 
         async def missing_history_days(self, markets, lookback_days):

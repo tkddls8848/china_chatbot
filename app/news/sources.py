@@ -13,28 +13,25 @@ from datetime import date
 from urllib.parse import quote_plus, urlparse
 
 import akshare as ak
-import pandas as pd
+import curl_cffi
 import requests
 import requests.exceptions
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from core.config import NEWS_SOURCE_ARTICLE_LIMIT
 
-_STOCK_NEWS_COLUMNS = [
-    "关键词",
-    "新闻标题",
-    "新闻内容",
-    "发布时间",
-    "文章来源",
-    "新闻链接",
-]
-
-
 def retry_on_network(func):
+    # AkShare 1.18+는 curl_cffi로 요청을 보내므로 curl_cffi 예외도 재시도 대상에
+    # 포함해야 한다(requests.RequestException만 잡으면 재시도가 동작하지 않는다).
     return retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type(requests.exceptions.RequestException),
+        retry=retry_if_exception_type(
+            (
+                requests.exceptions.RequestException,
+                curl_cffi.CurlError,
+            )
+        ),
         reraise=True,
     )(func)
 
@@ -65,11 +62,6 @@ def fetch_futu_raw():
 
 
 @retry_on_network
-def fetch_em_raw():
-    return ak.stock_info_global_em()
-
-
-@retry_on_network
 def fetch_sina_raw():
     return ak.stock_info_global_sina()
 
@@ -77,18 +69,6 @@ def fetch_sina_raw():
 @retry_on_network
 def fetch_ths_raw():
     return ak.stock_info_global_ths()
-
-
-@retry_on_network
-def fetch_stock_news_raw(symbol: str):
-    try:
-        return ak.stock_news_em(symbol=symbol)
-    except KeyError as exc:
-        # AkShare stock_news_em은 검색 결과가 없을 때 빈 DataFrame의
-        # 존재하지 않는 "code" 열을 읽어 KeyError를 발생시킨다.
-        if exc.args != ("code",):
-            raise
-        return pd.DataFrame(columns=_STOCK_NEWS_COLUMNS)
 
 
 def fetch_rss_raw(url: str) -> bytes:
@@ -151,27 +131,6 @@ def fetch_futu_articles() -> list[GlobalArticle]:
             GlobalArticle(
                 # 레거시 ID 포맷 유지(sent_ids 호환)
                 article_id=f"{published_at}{content[:20]}",
-                title=title,
-                content=content,
-                published_at=published_at,
-                url=_cell(row, "链接"),
-            )
-        )
-    return articles[:NEWS_SOURCE_ARTICLE_LIMIT]
-
-
-def fetch_em_articles() -> list[GlobalArticle]:
-    df = fetch_em_raw()
-    articles = []
-    for _, row in df.iterrows():
-        title = _cell(row, "标题")
-        content = _cell(row, "摘要") or _cell(row, "内容")
-        published_at = _cell(row, "发布时间")
-        if not (title or content):
-            continue
-        articles.append(
-            GlobalArticle(
-                article_id=f"em:{published_at}:{(title or content)[:20]}",
                 title=title,
                 content=content,
                 published_at=published_at,
@@ -264,8 +223,11 @@ def fetch_google_news_history(query: str, day: date, market: str) -> list[Global
     date-bounded so it cannot silently substitute today's headlines for a
     historical point.
     """
+    previous_day = date.fromordinal(day.toordinal() - 1)
     next_day = date.fromordinal(day.toordinal() + 1)
-    bounded_query = f"{query} after:{day.isoformat()} before:{next_day.isoformat()}"
+    bounded_query = (
+        f"{query} after:{previous_day.isoformat()} before:{next_day.isoformat()}"
+    )
     url = "https://news.google.com/rss/search?q=" + quote_plus(bounded_query) + "&hl=en-US&gl=US&ceid=US:en"
     return fetch_rss_articles(url, f"history:{market}:{day.isoformat()}", max_articles=None)
 

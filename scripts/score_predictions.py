@@ -6,7 +6,7 @@
 사용법(venv에서):
     python scripts/score_predictions.py
     python scripts/score_predictions.py --horizons 1,3,5 --threshold 0.2
-    python scripts/score_predictions.py --log data/backtest_log.jsonl
+    python scripts/score_predictions.py --log data/another_prediction_log.jsonl
 """
 
 import argparse
@@ -47,7 +47,7 @@ def main() -> None:
 
     print(f"채점 대상 신호 {len(signals)}건 (중립 제외 {neutral}건, threshold={args.threshold})")
     if not signals:
-        print("채점할 신호가 없습니다. 봇을 며칠 운영하거나 backfill_predictions.py로 신호를 만든 뒤 다시 실행하세요.")
+        print("채점할 신호가 없습니다. 봇을 며칠 운영해 신호를 쌓은 뒤 다시 실행하세요.")
         return
 
     up_count = sum(1 for s in signals if s["up"])

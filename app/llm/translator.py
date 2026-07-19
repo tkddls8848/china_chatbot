@@ -27,11 +27,9 @@ class TranslationResult:
 class TranslationService:
     """Translate Chinese financial news to Korean with Ollama."""
 
-    _BRIEF_SOURCES = {"cls", "futu", "global", "stock"}
     _PROMPT_FILES = {
         "cls": "cls_ko.txt",
         "futu": "futu_ko.txt",
-        "stock": "stock_ko.txt",
         "global": "global_ko.txt",
     }
 
@@ -45,7 +43,6 @@ class TranslationService:
         num_gpu: int = 0,
         num_predict: int = 512,
         brief_content_limit: int = 180,
-        stock_brief_content_limit: int = 150,
     ):
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -54,7 +51,6 @@ class TranslationService:
         self._num_gpu = num_gpu
         self._num_predict = num_predict
         self._brief_content_limit = max(1, brief_content_limit)
-        self._stock_brief_content_limit = max(1, stock_brief_content_limit)
         self._prompts = self._load_prompts(prompt_dir)
 
     def set_num_gpu(self, num_gpu: int) -> None:
@@ -83,21 +79,8 @@ class TranslationService:
         content = (content or "").strip() or title
 
         try:
-            if source == "stock":
-                content_limit = getattr(
-                    self,
-                    "_stock_brief_content_limit",
-                    self._brief_content_limit,
-                )
-            elif source in self._BRIEF_SOURCES:
-                content_limit = self._brief_content_limit
-            else:
-                content_limit = None
-            tolerated_limit = (
-                content_limit + max(10, round(content_limit * 0.1))
-                if content_limit is not None
-                else None
-            )
+            content_limit = self._brief_content_limit
+            tolerated_limit = content_limit + max(10, round(content_limit * 0.1))
             result: TranslationResult | None = None
             result_has_untranslated_title = False
             retry_for_length = False
@@ -145,10 +128,7 @@ class TranslationService:
                     raise
 
                 result = rewritten
-                retry_for_length = (
-                    tolerated_limit is not None
-                    and len(result.content) > tolerated_limit
-                )
+                retry_for_length = len(result.content) > tolerated_limit
                 retry_for_translation = self._looks_untranslated_chinese(
                     result.title
                 )

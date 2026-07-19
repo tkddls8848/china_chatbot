@@ -4,7 +4,6 @@ from news.sources import (
     GlobalArticle,
     fetch_cls_raw,
     fetch_futu_raw,
-    fetch_stock_news_raw,
 )
 
 __all__ = [
@@ -15,5 +14,4 @@ __all__ = [
     "backfill_market_history",
     "fetch_cls_raw",
     "fetch_futu_raw",
-    "fetch_stock_news_raw",
 ]

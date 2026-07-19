@@ -1,54 +1,10 @@
 import sys
 from pathlib import Path
 
-import pandas as pd
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
 
 from news import sources
-
-
-def test_empty_stock_search_is_returned_as_empty_dataframe(monkeypatch):
-    def missing_search_result(*, symbol):
-        assert symbol == "09518"
-        raise KeyError("code")
-
-    monkeypatch.setattr(sources.ak, "stock_news_em", missing_search_result)
-
-    result = sources.fetch_stock_news_raw("09518")
-
-    assert result.empty
-    assert list(result.columns) == [
-        "关键词",
-        "新闻标题",
-        "新闻内容",
-        "发布时间",
-        "文章来源",
-        "新闻链接",
-    ]
-
-
-def test_unexpected_stock_news_key_error_is_not_hidden(monkeypatch):
-    def broken_response(*, symbol):
-        raise KeyError("result")
-
-    monkeypatch.setattr(sources.ak, "stock_news_em", broken_response)
-
-    with pytest.raises(KeyError, match="result"):
-        sources.fetch_stock_news_raw("09518")
-
-
-def test_stock_news_dataframe_passes_through(monkeypatch):
-    expected = pd.DataFrame([{"新闻标题": "뉴스"}])
-    monkeypatch.setattr(
-        sources.ak,
-        "stock_news_em",
-        lambda *, symbol: expected,
-    )
-
-    assert sources.fetch_stock_news_raw("600519") is expected
 
 
 def test_periodic_us_market_source_interleaves_queries(monkeypatch):

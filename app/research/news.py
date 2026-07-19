@@ -1,26 +1,25 @@
 """리서치(시황 분석)용 뉴스 수집기.
 
-관심종목 및 전역 속보에서 분석 입력용 뉴스 아이템을 모은다. 전역 속보는
-뉴스 파이프라인과 동일한 NewsSourceRegistry를 공유해 소스 페일오버를
-그대로 따른다.
+전역 속보에서 분석 입력용 뉴스 아이템을 모은다. 뉴스 파이프라인과 동일한
+NewsSourceRegistry를 공유해 소스 페일오버를 그대로 따른다.
 """
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Dict
-
-import pandas as pd
+from typing import Any
 
 from core.config import (
+    NEWS_LIVE_MAX_AGE_HOURS,
     NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
     RESEARCH_NEWS_GLOBAL_LIMIT,
     RESEARCH_NEWS_MAX_ITEMS,
-    RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL,
 )
 from news.registry import NewsSourceRegistry
-from news.sources import fetch_stock_news_raw as _fetch_stock_news_raw
-from news.utils import is_timeout_error, translate_article
+from news.utils import (
+    filter_recent_articles,
+    is_timeout_error,
+    translate_article,
+)
 from llm.translator import TranslationService
 
 logger = logging.getLogger(__name__)
@@ -31,68 +30,6 @@ async def _fetch_source(func, *args):
         asyncio.to_thread(func, *args),
         timeout=NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
     )
-
-
-def _row_value(row, candidates: list[str], fallback_index: int | None = None) -> str:
-    for key in candidates:
-        if key in row.index:
-            value = row[key]
-            return "" if pd.isna(value) else str(value)
-    if fallback_index is not None and fallback_index < len(row.index):
-        value = row.iloc[fallback_index]
-        return "" if pd.isna(value) else str(value)
-    return ""
-
-
-async def collect_watchlist_news_items(
-    watchlist: Dict[str, str],
-    limit_per_stock: int = RESEARCH_NEWS_STOCK_LIMIT_PER_SYMBOL,
-) -> list[dict[str, str]]:
-    news_items: list[dict[str, str]] = []
-    cutoff = datetime.now() - timedelta(days=7)
-
-    for code, name in watchlist.items():
-        try:
-            df = await _fetch_source(_fetch_stock_news_raw, code)
-            if df.empty:
-                continue
-
-            published_raw = (
-                df["发布时间"]
-                if "发布时间" in df.columns
-                else df.iloc[:, 3]
-            )
-            published_series = pd.to_datetime(published_raw, errors="coerce")
-            df = df[published_series >= cutoff]
-            if df.empty:
-                continue
-
-            for _, row in df.head(limit_per_stock).iterrows():
-                published_at = _row_value(row, ["发布时间"], 3)
-                title = _row_value(row, ["新闻标题"], 1)
-                content = _row_value(row, ["新闻内容"], 2)
-                source = _row_value(row, ["文章来源"], 4) or "Stock"
-                url = _row_value(row, ["新闻链接"], 5)
-                if not title and not content:
-                    continue
-                news_items.append(
-                    {
-                        "id": f"stock:{code}:{published_at}:{title[:20]}",
-                        "source": source,
-                        "ticker": code,
-                        "name": name,
-                        "title": title,
-                        "content": content[:700],
-                        "published_at": published_at,
-                        "url": url,
-                    }
-                )
-                if len(news_items) >= RESEARCH_NEWS_MAX_ITEMS:
-                    return news_items
-        except Exception as e:
-            logger.error("[RESEARCH] %s news collection failed: %s", name, e)
-
-    return news_items
 
 
 def _make_news_item(
@@ -151,6 +88,7 @@ async def collect_global_market_news_items(
             logger.error("[RESEARCH] %s news collection failed: %s", spec.key, e)
             continue
 
+        articles = filter_recent_articles(articles, NEWS_LIVE_MAX_AGE_HOURS)
         source_limit = min(RESEARCH_NEWS_GLOBAL_LIMIT, max_items - len(news_items))
         for article in articles[:source_limit]:
             title = article.title

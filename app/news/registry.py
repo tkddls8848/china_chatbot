@@ -15,7 +15,6 @@ from typing import Callable
 from news.sources import (
     GlobalArticle,
     fetch_cls_articles,
-    fetch_em_articles,
     fetch_futu_articles,
     fetch_google_news_global_articles,
     fetch_google_news_us_stock_articles,
@@ -46,7 +45,6 @@ class _SourceHealth:
 _BUILTIN_SPECS: dict[str, tuple[str, str, Callable[[], list[GlobalArticle]]]] = {
     "futu": ("푸투니우니우(富途牛牛)", "futu", fetch_futu_articles),
     "cls": ("재련사(財联社)", "cls", fetch_cls_articles),
-    "em": ("동방재부(东方财富)", "global", fetch_em_articles),
     "sina": ("신랑재경(新浪财经)", "global", fetch_sina_articles),
     "ths": ("동화순(同花顺)", "global", fetch_ths_articles),
 }

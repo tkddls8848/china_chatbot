@@ -7,15 +7,116 @@
 import asyncio
 import html
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, TypeVar
 
 import pandas as pd
 
-from core.config import TELEGRAM_MESSAGE_LIMIT
 from llm.translator import TranslationResult, TranslationService
 
 T = TypeVar("T")
+_CHINA_TZ = timezone(timedelta(hours=8))
+_KST = timezone(timedelta(hours=9), name="KST")
+
+
+def parse_news_datetime(
+    published_at: Any,
+    published_date: Any | None = None,
+) -> datetime | None:
+    """Parse a source publication timestamp and normalize it to KST.
+
+    RFC/RSS timestamps keep their declared timezone. Timestamps without a
+    timezone are treated as China Standard Time because the stock and Chinese
+    news providers return local China time.
+    """
+    raw_time = str(published_at or "").strip()
+    raw_date = str(published_date or "").strip()
+    raw = f"{raw_date} {raw_time}".strip() if raw_date else raw_time
+    if not raw or (not raw_date and re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", raw)):
+        return None
+
+    if isinstance(published_at, datetime) and not raw_date:
+        parsed_datetime = published_at
+    else:
+        try:
+            parsed_datetime = parsedate_to_datetime(raw)
+        except (TypeError, ValueError, OverflowError):
+            parsed = pd.to_datetime(raw, errors="coerce")
+            if pd.isna(parsed):
+                return None
+            parsed_datetime = parsed.to_pydatetime()
+
+    if parsed_datetime.tzinfo is None:
+        parsed_datetime = parsed_datetime.replace(tzinfo=_CHINA_TZ)
+    return parsed_datetime.astimezone(_KST)
+
+
+def publication_time_naive(
+    published_at: Any,
+    published_date: Any | None = None,
+) -> datetime | None:
+    """Return a KST publication timestamp in the log's naive ISO format."""
+    parsed = parse_news_datetime(published_at, published_date)
+    return parsed.replace(tzinfo=None) if parsed is not None else None
+
+
+def recent_publication_time(
+    published_at: Any,
+    published_date: Any | None = None,
+    max_age_hours: int = 48,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Return the KST publication time only when it is inside the live window."""
+    published = parse_news_datetime(published_at, published_date)
+    if published is None:
+        return None
+    current = now or datetime.now(_KST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_KST)
+    else:
+        current = current.astimezone(_KST)
+    cutoff = current - timedelta(hours=max(1, max_age_hours))
+    if cutoff <= published <= current + timedelta(hours=1):
+        return published
+    return None
+
+
+def filter_recent_articles(
+    articles: list[T],
+    max_age_hours: int,
+    now: datetime | None = None,
+) -> list[T]:
+    """Keep articles inside one shared live-news window, newest first."""
+    dated: list[tuple[datetime, T]] = []
+    for article in articles:
+        published = recent_publication_time(
+            getattr(article, "published_at", None),
+            getattr(article, "published_date", None),
+            max_age_hours,
+            now,
+        )
+        if published is not None:
+            dated.append((published, article))
+    dated.sort(key=lambda item: item[0], reverse=True)
+    return [article for _, article in dated]
+
+
+def filter_articles_for_kst_day(
+    articles: list[T],
+    target_day: date,
+) -> list[T]:
+    """Keep only articles whose actual publication date is the requested KST day."""
+    dated: list[tuple[datetime, T]] = []
+    for article in articles:
+        published = parse_news_datetime(
+            getattr(article, "published_at", None),
+            getattr(article, "published_date", None),
+        )
+        if published is not None and published.date() == target_day:
+            dated.append((published, article))
+    dated.sort(key=lambda item: item[0], reverse=True)
+    return [article for _, article in dated]
 
 
 def format_china_time_as_kst(
@@ -34,49 +135,41 @@ def format_china_time_as_kst(
             converted = datetime.strptime(raw, fmt) + timedelta(hours=1)
             return f"{converted.strftime(fmt)} KST"
 
-        parsed = pd.to_datetime(raw, errors="coerce")
-        if pd.isna(parsed):
+        converted = parse_news_datetime(published_at, published_date)
+        if converted is None:
             return f"{raw} KST"
-
-        converted = parsed.to_pydatetime() + timedelta(hours=1)
         fmt = "%Y-%m-%d %H:%M:%S" if re.search(r":\d{2}:\d{2}", raw) else "%Y-%m-%d %H:%M"
         return f"{converted.strftime(fmt)} KST"
     except Exception:
         return f"{raw} KST"
 
 
-def build_news_message(
-    header: str,
+def compact_kst_time(formatted_time: str) -> str:
+    """날짜가 포함된 KST 문자열에서 기사 표시용 시간만 남긴다."""
+    match = re.search(r"(\d{1,2}:\d{2}(?::\d{2})?\s+KST)$", formatted_time)
+    return match.group(1) if match else formatted_time
+
+
+def format_digest_article(
     title: str,
     content: str,
-    footer: str = "",
-    mentioned_stocks: list[tuple[str, str]] | None = None,
+    published_time: str,
+    sentiment_line: str = "",
+    alert: str = "",
+    url: str = "",
 ) -> str:
-    truncation = "..."
-    safe_title = html.escape(title)
-    raw_content = content
+    """요청한 기사 3줄 형식으로 텔레그램 HTML을 만든다."""
+    safe_title = html.escape(truncate_text(title, 120))
+    if url:
+        safe_title = f'<a href="{html.escape(url)}">{safe_title}</a>'
 
-    if mentioned_stocks:
-        items = ", ".join(f"{code}({html.escape(name)})" for code, name in mentioned_stocks)
-        mentioned_line = f"\n\n관련종목: {items}"
-    else:
-        mentioned_line = ""
-
-    while True:
-        safe_content = html.escape(raw_content)
-        title_part = f"<b>{safe_title}</b>\n\n" if safe_title else ""
-        text = f"{header}{title_part}{safe_content}{mentioned_line}{footer}"
-        if len(text) <= TELEGRAM_MESSAGE_LIMIT:
-            return text
-
-        overflow = len(text) - TELEGRAM_MESSAGE_LIMIT
-        keep = max(0, len(raw_content) - overflow - len(truncation) - 20)
-        next_content = raw_content[:keep].rstrip() + truncation
-        if next_content == raw_content:
-            safe_content = ""
-            text = f"{header}{title_part}{mentioned_line}{footer}"
-            return text[: TELEGRAM_MESSAGE_LIMIT - len(truncation)] + truncation
-        raw_content = next_content
+    text = (
+        f"• {alert}{safe_title} ({html.escape(published_time)})\n"
+        f"- {html.escape(content)}"
+    )
+    if sentiment_line:
+        text += f"\n{sentiment_line}"
+    return text
 
 
 def truncate_text(text: str, max_chars: int) -> str:
@@ -177,11 +270,11 @@ def format_sentiment_line(sentiment: float | None, impact: str = "") -> str:
     if not NEWS_SENTIMENT_ENABLED or sentiment is None:
         return ""
     if sentiment >= 0.15:
-        marker = "🟢"
+        marker = "긍정"
     elif sentiment <= -0.15:
-        marker = "🔴"
+        marker = "부정"
     else:
-        marker = "⚪"
+        marker = "중립"
     impact_labels = {"high": "높음", "medium": "중간", "low": "낮음"}
     impact_part = f" · 영향 {impact_labels[impact]}" if impact in impact_labels else ""
     return f"감성: {marker} {sentiment:+.2f}{impact_part}\n"

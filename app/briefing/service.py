@@ -4,7 +4,6 @@
 가능하다. LLM 코멘트 생성이 실패하면 데이터 전용 브리핑으로 대체한다.
 """
 
-import asyncio
 import html
 import logging
 from datetime import datetime

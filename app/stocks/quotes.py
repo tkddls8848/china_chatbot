@@ -463,7 +463,7 @@ def format_quant_summary(context: dict[str, Any], watchlist: dict[str, str]) -> 
     sector_bottom = context.get("sector_bottom") or []
     if sector_top or sector_bottom:
         lines.append("")
-        lines.append("<b>섹터 온도(동방재부 업종)</b>")
+        lines.append("<b>섹터 온도</b>")
         if sector_top:
             tops = ", ".join(
                 f"{_html.escape(s['name'])} {_fmt_pct(s.get('pct_change'))}" for s in sector_top

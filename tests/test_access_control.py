@@ -10,6 +10,7 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
 os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from core import access
+import handlers.commands as commands
 from handlers.menu_status import set_menu_button_text
 from handlers.navigation import (
     handle_menu_callback,
@@ -140,14 +141,14 @@ def test_persistent_menu_exposes_score_button():
     assert "📈 성과" in labels
 
 
-def test_score_menu_exposes_live_and_backtest_actions():
+def test_score_menu_exposes_only_live_action():
     buttons = {
         button.callback_data: button.text
         for row in score_menu().inline_keyboard
         for button in row
     }
     assert buttons["nav:score:live"] == "운영 신호"
-    assert buttons["nav:score:backtest"] == "백테스트"
+    assert "nav:score:backtest" not in buttons
 
 
 def test_home_text_refreshes_persistent_menu_before_inline_home():
@@ -190,7 +191,23 @@ def test_bot_startup_pushes_latest_persistent_menu(monkeypatch):
         async def send_message(self, **kwargs):
             sent.append(kwargs)
 
-    app = SimpleNamespace(bot=Bot())
+    registry = SimpleNamespace(
+        telegram_commands=lambda: [],
+        enabled_keys=frozenset(
+            {
+                "market_sentiment",
+                "watchlist",
+                "research",
+                "briefing",
+                "signal_scoring",
+                "system_admin",
+            }
+        ),
+    )
+    app = SimpleNamespace(
+        bot=Bot(),
+        bot_data={"feature_registry": registry},
+    )
     monkeypatch.setattr("handlers.commands.TELEGRAM_CHAT_ID", "chat")
 
     asyncio.run(configure_telegram_menu(app))
@@ -202,6 +219,33 @@ def test_bot_startup_pushes_latest_persistent_menu(monkeypatch):
         for button in row
     }
     assert "📈 성과" in labels
+
+
+def test_callback_timeout_does_not_abort_button_action(monkeypatch, caplog):
+    from telegram.error import TimedOut
+
+    action_handled = False
+
+    class Query:
+        data = "test_action"
+
+        async def answer(self):
+            raise TimedOut
+
+    async def handle_menu(_update, _context, data):
+        nonlocal action_handled
+        action_handled = data == "test_action"
+        return True
+
+    monkeypatch.setattr(commands, "handle_menu_callback", handle_menu)
+    update = SimpleNamespace(callback_query=Query())
+    context = SimpleNamespace(bot_data={})
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(commands.callback_handler(update, context))
+
+    assert action_handled
+    assert "동작은 계속" in caplog.text
 
 
 def test_menu_command_opens_delete_list_directly():

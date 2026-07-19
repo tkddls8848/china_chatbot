@@ -1,15 +1,15 @@
 """텔레그램 명령어/콜백 핸들러와 메뉴 구성."""
 
-import asyncio
 import html
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from telegram import BotCommand, MenuButtonCommands, Update
+from telegram import MenuButtonCommands, Update
+from telegram.error import NetworkError
 from telegram.ext import Application, ContextTypes
 
 from core.config import (
-    BACKTEST_LOG_FILE,
     HELP_TEXT,
     MARKET_CHART_BACKFILL_DAYS_PER_REQUEST,
     MARKET_CHART_MARKETS,
@@ -95,8 +95,9 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await message.reply_text("시장 감성 로그를 아직 준비하지 못했습니다.")
         return
     required_markets = set(MARKET_CHART_MARKETS)
-    entries = await news_log.snapshot(since_hours=days * 24)
-    markets = aggregate_market_sentiment(entries, since_hours=days * 24)
+    start_date = datetime.now().date() - timedelta(days=days - 1)
+    entries = await news_log.snapshot_since_date(start_date)
+    markets = aggregate_market_sentiment(entries, start_date=start_date)
     gaps = market_history_gaps(
         markets, required_markets, MARKET_CHART_MIN_ARTICLES, min(days, MARKET_CHART_MIN_DAYS)
     )
@@ -154,8 +155,8 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 max_articles_per_day=1,
                 days_by_market=backfill_days,
             )
-            entries = await news_log.snapshot(since_hours=days * 24)
-            markets = aggregate_market_sentiment(entries, since_hours=days * 24)
+            entries = await news_log.snapshot_since_date(start_date)
+            markets = aggregate_market_sentiment(entries, start_date=start_date)
             gaps = market_history_gaps(
                 markets, required_markets, MARKET_CHART_MIN_ARTICLES, min(days, MARKET_CHART_MIN_DAYS)
             )
@@ -273,6 +274,19 @@ async def cmd_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     system: SystemControlManager = context.bot_data["system_control"]
     args = context.args or []
     command = args[0].lower() if args else ""
+    feature_registry = context.bot_data.get("feature_registry")
+
+    if command == "features":
+        lines = (
+            feature_registry.catalog_lines()
+            if feature_registry is not None
+            else ["기능 레지스트리가 준비되지 않았습니다."]
+        )
+        await message.reply_text(
+            "<b>기능 카탈로그</b>\n" + "\n".join(f"  {line}" for line in lines),
+            parse_mode="HTML",
+        )
+        return
 
     if command == "gpu":
         value = args[1].lower() if len(args) > 1 else ""
@@ -293,7 +307,7 @@ async def cmd_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         logger.info("[System] GPU 설정 변경: num_gpu=%d", system.num_gpu)
     elif command:
         await message.reply_text(
-            "알 수 없는 항목입니다. 사용법: /system [gpu on|off|<레이어수>]",
+            "알 수 없는 항목입니다. 사용법: /system [features|gpu on|off|<레이어수>]",
             parse_mode="HTML",
         )
         return
@@ -381,12 +395,6 @@ async def cmd_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
-_SCORE_LOGS = {
-    "": ("운영", PREDICTION_LOG_FILE),
-    "backtest": ("백테스트", BACKTEST_LOG_FILE),
-}
-
-
 def _score_report(log_path: Path, label: str) -> str:
     """신호 로드 → 시세 대조 채점 → HTML 리포트(블로킹, to_thread에서 실행)."""
     signals, neutral = load_signals(log_path, DEFAULT_THRESHOLD)
@@ -409,28 +417,18 @@ def _score_report(log_path: Path, label: str) -> str:
 
 
 async def cmd_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """감성 신호를 실제 주가 방향과 대조해 적중률을 표시한다.
-
-    /score — 운영 로그(prediction_log.jsonl)
-    /score backtest — 백필 로그(backtest_log.jsonl, scripts/backfill_predictions.py 산출물)
-    """
+    """운영 감성 신호를 실제 주가 방향과 대조해 적중률을 표시한다."""
     message = update.effective_message
     if message is None:
         return
     args = context.args or []
-    command = args[0].lower() if args else ""
-    if command not in _SCORE_LOGS:
-        await message.reply_text("사용법: /score [backtest]")
+    if args:
+        await message.reply_text("사용법: /score")
         return
-    label, log_path = _SCORE_LOGS[command]
+    label, log_path = "운영", PREDICTION_LOG_FILE
 
     if not log_path.exists():
-        hint = (
-            "scripts/backfill_predictions.py 를 먼저 실행하세요."
-            if command == "backtest"
-            else "봇을 운영해 신호를 쌓거나 /score backtest 를 사용하세요."
-        )
-        await message.reply_text(f"{label} 신호 로그가 없습니다.\n{hint}")
+        await message.reply_text("운영 신호 로그가 없습니다.\n봇을 운영해 신호를 먼저 쌓아 주세요.")
         return
 
     status = await message.reply_text(f"{label} 신호 채점 중... (시세 조회)")
@@ -443,19 +441,47 @@ async def cmd_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="HTML", reply_markup=persistent_menu())
-    await update.message.reply_text("원하는 기능을 선택하세요.", reply_markup=main_menu())
+    registry = context.bot_data.get("feature_registry")
+    help_text = registry.help_text() if registry is not None else HELP_TEXT
+    await update.message.reply_text(
+        help_text,
+        parse_mode="HTML",
+        reply_markup=persistent_menu(registry),
+    )
+    await update.message.reply_text(
+        "원하는 기능을 선택하세요.",
+        reply_markup=main_menu(registry),
+    )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="HTML", reply_markup=persistent_menu())
-    await update.message.reply_text("원하는 기능을 선택하세요.", reply_markup=main_menu())
+    await cmd_start(update, context)
+
+
+async def _answer_callback_safely(query) -> None:
+    try:
+        await query.answer()
+    except NetworkError as exc:
+        # A callback acknowledgement is best-effort. Telegram may have accepted
+        # it even when the response times out, so keep processing the action.
+        logger.warning("[TELEGRAM] 버튼 응답 확인 실패(동작은 계속): %s", exc)
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    await _answer_callback_safely(query)
     data = query.data
+    registry = context.bot_data.get("feature_registry")
+    if registry is not None:
+        if data.startswith("research_") and not registry.is_enabled("research"):
+            await query.edit_message_text("리서치 기능이 비활성화되어 있습니다.")
+            return
+        if (
+            data.startswith(("add_", "remove:", "close"))
+            and not registry.is_enabled("watchlist")
+        ):
+            await query.edit_message_text("관심종목 기능이 비활성화되어 있습니다.")
+            return
 
     if await handle_menu_callback(update, context, data):
         return
@@ -468,27 +494,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def configure_telegram_menu(app: Application) -> None:
-    commands = [
-        BotCommand("market", "국가별 뉴스 감성"),
-        BotCommand("start", "사용 안내"),
-        BotCommand("menu", "관심종목 관리"),
-        BotCommand("add", "관심종목 추가"),
-        BotCommand("list", "관심종목 목록"),
-        BotCommand("view", "종목 감성 보기"),
-        BotCommand("score", "신호 성과 채점"),
-        BotCommand("research", "리서치 실행"),
-        BotCommand("briefing", "브리핑 생성"),
-        BotCommand("stockdb", "종목 DB 갱신"),
-        BotCommand("system", "시스템 상태"),
-        BotCommand("help", "명령어 안내"),
-    ]
+    registry = app.bot_data.get("feature_registry")
+    commands = registry.telegram_commands() if registry is not None else []
     await app.bot.set_my_commands(commands)
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     try:
         await app.bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
             text="⌨️ 봇 재시작에 맞춰 하단 메뉴를 갱신했습니다.",
-            reply_markup=persistent_menu(),
+            reply_markup=persistent_menu(registry),
         )
     except Exception:
         logger.warning("Telegram 하단 메뉴 자동 갱신 실패", exc_info=True)

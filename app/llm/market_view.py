@@ -33,13 +33,17 @@ class MarketViewManager:
 
         try:
             self._data = json.loads(self._file_path.read_text(encoding="utf-8"))
+            if not isinstance(self._data, dict):
+                raise ValueError("market view state must be an object")
+            if self._normalize_loaded_data():
+                self._persist()
         except Exception as e:
             logger.warning("[MarketView] failed to load state, resetting: %s", e)
             self._data = self._default_data()
             self._persist()
 
     def _default_data(self) -> dict[str, Any]:
-        return {SIGHT_KEY: None, "updated_at": None, "last_result": None, "history": []}
+        return {SIGHT_KEY: None, "updated_at": None, "history": []}
 
     def _persist(self) -> None:
         self._file_path.write_text(
@@ -52,26 +56,28 @@ class MarketViewManager:
         return sight if isinstance(sight, str) and sight.strip() else None
 
     def set_sight(self, text: str) -> None:
-        self._data[SIGHT_KEY] = text.strip()
+        normalized = text.strip()
+        if normalized != self.get_sight():
+            self._data["history"] = []
+        self._data[SIGHT_KEY] = normalized
         self._data["updated_at"] = datetime.now().isoformat(timespec="seconds")
         self._persist()
 
     def clear_sight(self) -> None:
         self._data[SIGHT_KEY] = None
         self._data["updated_at"] = None
-        self._data["last_result"] = None
+        self._data["history"] = []
         self._persist()
 
     def get_last_result(self) -> dict[str, Any] | None:
-        result = self._data.get("last_result")
-        return result if isinstance(result, dict) else None
+        history = self.get_history_summaries()
+        return history[-1] if history else None
 
     def save_result(self, result: dict[str, Any]) -> None:
-        self._data["last_result"] = result
         history = self._data.get("history")
         if not isinstance(history, list):
             history = []
-        history.append(result)
+        history.append(self._summarize_result(result))
         self._data["history"] = history[-self._history_limit :]
         self._persist()
 
@@ -80,23 +86,59 @@ class MarketViewManager:
         history = self._data.get("history")
         if not isinstance(history, list):
             return []
-        summaries: list[dict[str, Any]] = []
-        for result in history:
-            if not isinstance(result, dict):
-                continue
-            actions = [
-                {"ticker": item.get("ticker"), "action": item.get("action")}
-                for item in result.get("actions", [])
-                if isinstance(item, dict) and item.get("action") in ("add", "remove")
-            ]
-            summaries.append(
-                {
-                    "generated_at": result.get("generated_at"),
-                    "summary": str(result.get("summary") or "")[:300],
-                    "actions": actions,
-                }
+        return [
+            self._summarize_result(result)
+            for result in history[-self._history_limit :]
+            if isinstance(result, dict)
+        ]
+
+    @staticmethod
+    def _summarize_result(result: dict[str, Any]) -> dict[str, Any]:
+        actions = [
+            {
+                "ticker": str(item.get("ticker") or "").strip(),
+                "action": item.get("action"),
+            }
+            for item in result.get("actions", [])
+            if (
+                isinstance(item, dict)
+                and item.get("action") in ("add", "remove")
+                and str(item.get("ticker") or "").strip()
             )
-        return summaries
+        ]
+        return {
+            "generated_at": result.get("generated_at"),
+            "summary": str(result.get("summary") or "")[:300],
+            "actions": actions,
+        }
+
+    def _normalize_loaded_data(self) -> bool:
+        changed = False
+        defaults = self._default_data()
+        for key, value in defaults.items():
+            if key not in self._data:
+                self._data[key] = value
+                changed = True
+
+        raw_history = self._data.get("history")
+        if not isinstance(raw_history, list):
+            raw_history = []
+            changed = True
+        had_legacy_last_result = "last_result" in self._data
+        legacy_last_result = self._data.pop("last_result", None)
+        if isinstance(legacy_last_result, dict) and not raw_history:
+            raw_history = [legacy_last_result]
+        if had_legacy_last_result:
+            changed = True
+        compact_history = [
+            self._summarize_result(result)
+            for result in raw_history[-self._history_limit :]
+            if isinstance(result, dict)
+        ]
+        if compact_history != self._data.get("history"):
+            self._data["history"] = compact_history
+            changed = True
+        return changed
 
 
 class MarketViewAnalyzer:

@@ -1,0 +1,25 @@
+# 기능 카탈로그
+
+각 하위 디렉터리의 `feature.py`가 해당 기능의 단일 조립 지점이다. 여기에는
+기능 키, 의존 기능, 텔레그램 명령어, 스케줄, 데이터 파일과 프롬프트가
+선언된다. 실제 활성 목록은 `.env`의 `FEATURES_ENABLED`가 결정한다.
+
+| 기능 키 | 역할 |
+|---|---|
+| `instruments` | 종목 데이터베이스와 일별 갱신 |
+| `quant` | 시세·자금흐름·섹터 정량 데이터 |
+| `watchlist` | 관심종목 추가·삭제·목록 |
+| `news` | Futu·Sina·Google News·RSS 수집과 다이제스트 |
+| `market_sentiment` | 날짜별 시장 감성 백필·집계·차트 |
+| `research` | 뉴스·정량 데이터 기반 시장 리서치 |
+| `briefing` | 모닝·마감 브리핑과 주간 성적표 |
+| `signal_scoring` | 종목 감성 뷰와 신호 성과 채점 |
+| `system_admin` | 도움말·기능 상태·GPU와 소스 상태 |
+
+기능을 비활성화할 때는 `FEATURES_ENABLED`에서 키를 제거한다. 의존 기능이
+빠지면 시작 단계에서 오류가 발생하므로 불완전한 조합으로 실행되지 않는다.
+비활성화는 데이터 파일을 삭제하지 않는다.
+
+텔레그램 `/system features`에서 같은 카탈로그의 현재 활성 상태를 확인할 수
+있다. 새 기능은 `FeatureSpec`을 선언하고 `features/__init__.py`의
+`ALL_FEATURES`에 추가한다.

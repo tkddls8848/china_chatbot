@@ -8,14 +8,20 @@ from datetime import date, datetime, timedelta
 
 from llm.translator import TranslationService
 from news.sources import GlobalArticle, fetch_google_news_history
+from news.utils import filter_articles_for_kst_day, publication_time_naive
 from state import NewsLog
 
 logger = logging.getLogger(__name__)
 
 
-def _article_time(article: GlobalArticle, fallback_day: date) -> datetime:
-    del article
-    return datetime.combine(fallback_day, datetime.max.time()).replace(microsecond=0)
+def _article_time(article: GlobalArticle, target_day: date) -> datetime | None:
+    published_at = publication_time_naive(
+        article.published_at,
+        article.published_date or None,
+    )
+    if published_at is None or published_at.date() != target_day:
+        return None
+    return published_at
 
 
 async def backfill_market_history(
@@ -38,7 +44,7 @@ async def backfill_market_history(
     today = date.today()
     default_days = [
         today - timedelta(days=offset)
-        for offset in range(1, lookback_days + 1)
+        for offset in range(max(1, lookback_days))
     ]
     for market in sorted(markets):
         query = queries.get(market)
@@ -56,10 +62,14 @@ async def backfill_market_history(
             except Exception as exc:
                 logger.warning("[MARKET] historical fetch failed for %s %s: %s", market, day, exc)
                 continue
+            articles = filter_articles_for_kst_day(articles, day)
             for article in articles[:max_articles_per_day]:
                 source = f"history:{market}"
                 article_id = f"history:{market}:{article.article_id}"
                 if await news_log.contains_article(article_id):
+                    continue
+                occurred_at = _article_time(article, day)
+                if occurred_at is None:
                     continue
                 try:
                     async with translate_semaphore:
@@ -79,7 +89,7 @@ async def backfill_market_history(
                         codes=[],
                         market=market,
                         article_id=article_id,
-                        occurred_at=_article_time(article, day),
+                        occurred_at=occurred_at,
                     ):
                         added[market] += 1
                 except Exception as exc:

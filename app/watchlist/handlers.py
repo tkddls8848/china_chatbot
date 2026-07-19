@@ -74,11 +74,6 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) < 1:
         await update.message.reply_text("추가할 국가와 시장을 선택하세요.", reply_markup=build_add_market_keyboard())
         return
-        await update.message.reply_text(
-            "사용법: /add 종목코드\n"
-            "예: /add 600519"
-        )
-        return
 
     selection = context.user_data.pop("add_market", "")
     code = normalize_selected_stock_code(selection, context.args[0]) if selection else _normalize_stock_code(context.args[0])
