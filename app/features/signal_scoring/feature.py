@@ -21,6 +21,6 @@ FEATURE = FeatureSpec(
         MenuSpec("📈 신호 성과", "nav:score", 2, "📈 성과", 1),
     ),
     install_services=_install_services,
-    data_files=("data/prediction_log.jsonl",),
+    data_files=("data/signal_scoring/prediction_log.jsonl",),
     summary="뉴스 감성의 종목별 집계와 실제 가격 방향 채점",
 )

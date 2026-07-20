@@ -80,7 +80,7 @@ FEATURE = FeatureSpec(
         CallbackSpec(("research_",), handle_research_callback),
     ),
     install_services=_install_services,
-    data_files=("data/market_research.json",),
+    data_files=("data/research/market_research.json",),
     prompts=(
         "prompts/market_research_ko.txt",
         "prompts/market_research_verify_ko.txt",

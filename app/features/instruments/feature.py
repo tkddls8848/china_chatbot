@@ -33,6 +33,6 @@ FEATURE = FeatureSpec(
     ),
     install_services=_install_services,
     install_jobs=_install_jobs,
-    data_files=("data/stock_db.json",),
+    data_files=("data/instruments/stock_db.json",),
     summary="국가별 종목 코드·종목명·검색 후보군",
 )

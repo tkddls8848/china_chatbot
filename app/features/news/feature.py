@@ -79,7 +79,7 @@ FEATURE = FeatureSpec(
     requires=frozenset({"watchlist"}),
     install_services=_install_services,
     install_jobs=_install_jobs,
-    data_files=("data/sent_ids.json", "data/news_log.json"),
+    data_files=("data/news/sent_ids.json", "data/news/news_log.json"),
     prompts=("prompts/futu_ko.txt", "prompts/global_ko.txt"),
     summary="Futu·Sina·Google News·RSS 수집, 번역, 날짜 필터와 전송",
 )

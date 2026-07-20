@@ -1,4 +1,4 @@
-"""data/prediction_log.jsonl의 감성 신호를 실제 주가 방향과 대조해 채점한다.
+"""data/signal_scoring/prediction_log.jsonl의 감성 신호를 실제 주가 방향과 대조해 채점한다.
 
 봇 런타임과 완전히 분리된 오프라인 스크립트(docs/plan.md §5 1단계 C).
 채점 로직은 app/state/scoring.py를 사용한다(/score 텔레그램 명령과 동일).
@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
 
-DEFAULT_LOG = ROOT / "data" / "prediction_log.jsonl"
+DEFAULT_LOG = ROOT / "data" / "signal_scoring" / "prediction_log.jsonl"
 
 # Windows 콘솔(cp949)에서 한글 출력이 깨지지 않도록.
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")

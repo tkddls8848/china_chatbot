@@ -67,11 +67,11 @@ WEB_ADMIN_PASSWORD=<반드시 지정>
 
 `/stockdb build`는 AkShare에서 중국·홍콩 종목을, FinanceDataReader와 Nasdaq Trader에서 각각 한국·미국 전체 상장종목을 수집합니다.
 
-종목 DB는 `data/stock_db.json`에 캐시됩니다. FIGI·ISIN 같은 식별자 필드는 기존 데이터 구조 호환성을 위해 빈 값으로 남아 있으며, 외부 식별자 매핑 API는 사용하지 않습니다.
+종목 DB는 `data/instruments/stock_db.json`에 캐시됩니다. FIGI·ISIN 같은 식별자 필드는 기존 데이터 구조 호환성을 위해 빈 값으로 남아 있으며, 외부 식별자 매핑 API는 사용하지 않습니다.
 
 ## 데이터와 접근 제어
 
-- `data/`에는 관심 종목, 발송 이력, 뉴스·신호 로그, 종목 DB, 시세 캐시가 저장됩니다.
+- `data/`에는 관심 종목, 발송 이력, 뉴스·신호 로그, 종목 DB가 코드와 같은 기준으로 **소유 기능별 하위 디렉토리**(`news/`, `watchlist/`, `instruments/`, `signal_scoring/`, `research/`, `runtime/`)에 저장됩니다. 이전 버전의 평면 배치(`data/*.json`) 파일은 봇 시작 시 자동으로 새 위치로 이동합니다.
 - `ALLOWED_CHAT_IDS`에 쉼표로 구분한 채팅 ID를 설정하면 해당 채팅에서만 명령을 처리합니다.
 - 뉴스·시세 제공처가 일시적으로 실패해도 다른 기능은 계속 동작하며, 다음 주기에 다시 수집합니다.
 
@@ -83,5 +83,5 @@ prompts/    번역·리서치·브리핑 프롬프트
 scripts/    백테스트와 신호 성과 보조 스크립트
 tests/      자동화 테스트
 docs/       설계와 작업 문서
-data/       실행 중 생성되는 상태·캐시 데이터 (Git 제외)
+data/       실행 중 생성되는 상태·캐시 데이터, 소유 기능별 하위 디렉토리 (Git 제외)
 ```

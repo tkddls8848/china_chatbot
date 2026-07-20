@@ -32,6 +32,6 @@ FEATURE = FeatureSpec(
         CallbackSpec(("add_", "remove:", "close"), handle_watchlist_callback),
     ),
     install_services=_install_services,
-    data_files=("data/watchlist.json", "data/watchlist_events.json"),
+    data_files=("data/watchlist/watchlist.json", "data/watchlist/watchlist_events.json"),
     summary="관심종목 추가·삭제·목록과 변경 이벤트",
 )
