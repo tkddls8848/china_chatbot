@@ -9,10 +9,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-data/*.json
-data/*.jsonl
+data/*/*.json
+data/*/*.jsonl
 !data/.gitkeep
-data/bot.lock
+data/runtime/bot.lock
 data/yfinance_cache/
 
 *.log
