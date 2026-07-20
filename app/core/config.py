@@ -76,6 +76,15 @@ TRANSLATION_TIMEOUT = int(os.environ.get("TRANSLATION_TIMEOUT", "120"))
 TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "4096"))
 TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "2"))
 
+# ── 관리 웹(선택) ─────────────────────────────────────
+# 봇 프로세스에 내장되는 관리용 웹 대시보드. 봇을 제어하므로 기본 꺼짐이며,
+# 켜려면 사용자/비밀번호를 반드시 지정해야 한다(미지정 시 자동 비활성).
+WEB_ADMIN_ENABLED = _env_bool("WEB_ADMIN_ENABLED", "false")
+WEB_ADMIN_HOST = os.environ.get("WEB_ADMIN_HOST", "127.0.0.1")
+WEB_ADMIN_PORT = int(os.environ.get("WEB_ADMIN_PORT", "8787"))
+WEB_ADMIN_USER = os.environ.get("WEB_ADMIN_USER", "admin")
+WEB_ADMIN_PASSWORD = os.environ.get("WEB_ADMIN_PASSWORD", "")
+
 SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
 TELEGRAM_MESSAGE_LIMIT = 4096
 NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))

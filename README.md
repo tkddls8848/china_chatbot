@@ -45,6 +45,24 @@ OLLAMA_BASE_URL=http://localhost:11434
 | `/stockdb build` | 종목 DB 갱신 |
 | `/system` | 시스템 상태 확인 |
 
+## 관리 웹 (선택)
+
+봇 프로세스에 내장되는 관리용 웹 대시보드로, 관심 종목·뉴스·리서치·시스템 상태를 브라우저에서 확인·관리합니다. 봇을 제어하므로 기본은 꺼져 있으며, `.env`에서 켤 수 있습니다.
+
+```env
+WEB_ADMIN_ENABLED=true
+WEB_ADMIN_HOST=127.0.0.1
+WEB_ADMIN_PORT=8787
+WEB_ADMIN_USER=admin
+WEB_ADMIN_PASSWORD=<반드시 지정>
+```
+
+- `WEB_ADMIN_PASSWORD`를 지정하지 않으면 켜져 있어도 자동으로 비활성화됩니다.
+- 모든 요청은 HTTP Basic 인증 뒤에 있으며, 봇과 같은 이벤트 루프에서 동작해 텔레그램과 상태를 공유합니다.
+- 외부에 노출할 때는 HTTPS 역방향 프록시(예: Nginx/Caddy/Cloudflare) 뒤에 두는 것을 권장합니다.
+
+접속 후 `http://<호스트>:<포트>/`에서 시스템 상태, 관심 종목 추가·삭제, 최근 뉴스, 리서치 후보를 확인할 수 있습니다.
+
 ## 종목 DB
 
 `/stockdb build`는 AkShare에서 중국·홍콩 종목을, FinanceDataReader와 Nasdaq Trader에서 각각 한국·미국 전체 상장종목을 수집합니다.

@@ -15,6 +15,7 @@ from core.config import (
     TELEGRAM_BOT_TOKEN,
 )
 from features import build_feature_registry
+from webadmin import start_web_admin, stop_web_admin
 
 logger = logging.getLogger(__name__)
 _SINGLE_INSTANCE_LOCK = None
@@ -56,9 +57,11 @@ async def _start_application(app: Application) -> None:
     await configure_telegram_menu(app)
     scheduler = app.bot_data["scheduler"]
     scheduler.start()
+    await start_web_admin(app)
 
 
 async def _stop_scheduler(app: Application) -> None:
+    await stop_web_admin(app)
     scheduler = app.bot_data.get("scheduler")
     if scheduler is None or not scheduler.running:
         return

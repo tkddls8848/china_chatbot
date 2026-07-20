@@ -11,3 +11,5 @@ feedparser
 yfinance
 finance-datareader
 matplotlib
+fastapi
+uvicorn
