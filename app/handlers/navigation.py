@@ -166,7 +166,14 @@ def score_menu() -> InlineKeyboardMarkup:
 
 
 def _context(context: ContextTypes.DEFAULT_TYPE, args: list[str]):
-    return SimpleNamespace(bot_data=context.bot_data, application=context.application, args=args)
+    # user_data를 그대로 전달해야 프록시로 호출되는 핸들러(cmd_add 등)가
+    # add_market 같은 대화 상태에 접근할 수 있다(SimpleNamespace에는 기본으로 없음).
+    return SimpleNamespace(
+        bot_data=context.bot_data,
+        user_data=context.user_data,
+        application=context.application,
+        args=args,
+    )
 
 
 async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str) -> bool:

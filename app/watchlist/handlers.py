@@ -3,6 +3,7 @@ import logging
 import re
 
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from stocks import StockDatabase
@@ -61,11 +62,17 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if getattr(update, "callback_query", None) is not None
         else message.reply_text
     )
-    await send(
-        text,
-        parse_mode="HTML",
-        reply_markup=build_list_keyboard(watchlist),
-    )
+    try:
+        await send(
+            text,
+            parse_mode="HTML",
+            reply_markup=build_list_keyboard(watchlist),
+        )
+    except BadRequest as exc:
+        # 이미 같은 관심종목 화면을 보고 있을 때 버튼을 다시 누르면 편집 내용이
+        # 동일해 "Message is not modified"가 난다. 사용자에겐 정상 상태이므로 무시.
+        if "not modified" not in str(exc).lower():
+            raise
 
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
