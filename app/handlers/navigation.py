@@ -201,7 +201,7 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=market_menu(),
         )
     elif action.startswith("market:"):
-        from handlers.commands import cmd_market
+        from features.market_sentiment.handlers import cmd_market
         await cmd_market(update, _context(context, [action.split(":", 1)[1]]))
     elif action == "watch":
         from watchlist import cmd_menu
@@ -248,13 +248,13 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=score_menu(),
         )
     elif action.startswith("score:"):
-        from handlers.commands import cmd_score
+        from features.signal_scoring.handlers import cmd_score
         await cmd_score(update, _context(context, []))
     elif action == "system":
-        from handlers.commands import cmd_system
+        from features.system_admin.handlers import cmd_system
         await cmd_system(update, _context(context, []))
     elif action == "stockdb":
-        from handlers.commands import cmd_stockdb
+        from features.instruments.handlers import cmd_stockdb
         await cmd_stockdb(update, _context(context, ["build"]))
     elif action == "help":
         await message.edit_text("버튼을 눌러 기능을 실행하세요.\n종목 코드와 리서치 주제만 일반 텍스트로 입력합니다.", reply_markup=main_menu(menu_source))

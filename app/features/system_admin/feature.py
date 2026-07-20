@@ -5,7 +5,7 @@ import logging
 from core.config import OLLAMA_GPU_ON_VALUE, OLLAMA_NUM_GPU
 from core.system_control import SystemControlManager
 from features.base import CommandSpec, FeatureSpec, MenuSpec
-from handlers.commands import cmd_help, cmd_start, cmd_system
+from features.system_admin.handlers import cmd_help, cmd_start, cmd_system
 
 logger = logging.getLogger(__name__)
 

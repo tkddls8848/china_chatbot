@@ -32,7 +32,7 @@ def _env_bool(name: str, default: str = "false") -> bool:
 
 _DEFAULT_FEATURES = (
     "instruments,quant,watchlist,news,market_sentiment,"
-    "research,briefing,signal_scoring,system_admin"
+    "research,briefing,signal_scoring,system_admin,web_admin"
 )
 FEATURES_ENABLED = frozenset(
     key.strip()
@@ -76,10 +76,9 @@ TRANSLATION_TIMEOUT = int(os.environ.get("TRANSLATION_TIMEOUT", "120"))
 TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "4096"))
 TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "2"))
 
-# ── 관리 웹(선택) ─────────────────────────────────────
-# 봇 프로세스에 내장되는 관리용 웹 대시보드. 봇을 제어하므로 기본 꺼짐이며,
-# 켜려면 사용자/비밀번호를 반드시 지정해야 한다(미지정 시 자동 비활성).
-WEB_ADMIN_ENABLED = _env_bool("WEB_ADMIN_ENABLED", "false")
+# ── 관리 웹(web_admin 기능) ───────────────────────────
+# 봇 프로세스에 내장되는 관리용 웹 대시보드. FEATURES_ENABLED의 web_admin
+# 키로 켜고 끄며, 봇을 제어하므로 WEB_ADMIN_PASSWORD를 지정해야만 기동한다.
 WEB_ADMIN_HOST = os.environ.get("WEB_ADMIN_HOST", "127.0.0.1")
 WEB_ADMIN_PORT = int(os.environ.get("WEB_ADMIN_PORT", "8787"))
 WEB_ADMIN_USER = os.environ.get("WEB_ADMIN_USER", "admin")

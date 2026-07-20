@@ -2,7 +2,12 @@
 
 `start_web_admin(app)`은 uvicorn 서버를 현재 이벤트 루프의 백그라운드
 태스크로 띄우고, `stop_web_admin(app)`은 이를 정리한다. 두 함수는 봇
-진입점(`bot.py`)의 post_init / post_shutdown 훅에서 호출된다.
+진입점(`bot.py`)이 web_admin 기능 활성 시 post_init / post_shutdown
+훅에서 호출한다.
+
+데이터 접근 방침: 다른 기능이 소유한 데이터는 bot_data에 설치된 매니저를
+통해 읽는다. 파일 직접 읽기(_read_json/_tail_jsonl)는 해당 기능이 꺼져
+매니저가 없을 때의 읽기 전용 폴백이다.
 """
 
 import asyncio
@@ -166,12 +171,21 @@ def build_app(bot_app):
     # ── 리서치 후보 ───────────────────────────────────
     @api.get("/api/research")
     async def research_view(_: str = Depends(require_auth)):
+        manager = _bot_data().get("market_view_manager")
+        if manager is not None:
+            return {
+                "sight": manager.get_sight(),
+                "history": manager.get_history_summaries(),
+            }
         return _read_json(RESEARCH_STATE_FILE, {})
 
     # ── 신호 성과 로그 ────────────────────────────────
     @api.get("/api/predictions")
-    async def predictions_view(limit: int = 100, _: str = Depends(require_auth)):
-        return _tail_jsonl(PREDICTION_LOG_FILE, max(1, min(limit, 1000)))
+    async def predictions_view(days: int = 7, _: str = Depends(require_auth)):
+        prediction_log = _bot_data().get("prediction_log")
+        if prediction_log is not None:
+            return await prediction_log.snapshot(max(1, min(days, 90)))
+        return _tail_jsonl(PREDICTION_LOG_FILE, 500)
 
     return api
 

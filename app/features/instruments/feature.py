@@ -2,7 +2,7 @@
 
 from core.config import STOCK_DB_ENABLED, STOCK_DB_FILE
 from features.base import CommandSpec, FeatureSpec, MenuSpec
-from handlers.commands import cmd_stockdb
+from features.instruments.handlers import cmd_stockdb
 from news.pipeline import refresh_stock_db
 from stocks import StockDatabase
 

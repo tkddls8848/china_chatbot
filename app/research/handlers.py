@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 
 from core.config import RESEARCH_MAX_CANDIDATES, RESEARCH_REMOVE_RELEVANCE_THRESHOLD
 from core.workers import run_non_urgent
-from handlers.menu_status import set_menu_button_text
+from core.menu_status import set_menu_button_text
 from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
 from llm.market_view import MarketViewError, MarketViewManager

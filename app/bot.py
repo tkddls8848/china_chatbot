@@ -57,7 +57,11 @@ async def _start_application(app: Application) -> None:
     await configure_telegram_menu(app)
     scheduler = app.bot_data["scheduler"]
     scheduler.start()
-    await start_web_admin(app)
+    # 웹 서버는 Application 기동 후에만 시작할 수 있어 install_services가
+    # 아닌 여기서 기능 활성 여부를 보고 띄운다.
+    registry = app.bot_data.get("feature_registry")
+    if registry is not None and registry.is_enabled("web_admin"):
+        await start_web_admin(app)
 
 
 async def _stop_scheduler(app: Application) -> None:

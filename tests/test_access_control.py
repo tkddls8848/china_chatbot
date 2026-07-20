@@ -11,7 +11,7 @@ os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from core import access
 import handlers.commands as commands
-from handlers.menu_status import set_menu_button_text
+from core.menu_status import set_menu_button_text
 from handlers.navigation import (
     handle_menu_callback,
     handle_menu_text,

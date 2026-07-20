@@ -10,6 +10,7 @@ from features.research.feature import FEATURE as RESEARCH
 from features.signal_scoring.feature import FEATURE as SIGNAL_SCORING
 from features.system_admin.feature import FEATURE as SYSTEM_ADMIN
 from features.watchlist.feature import FEATURE as WATCHLIST
+from features.web_admin.feature import FEATURE as WEB_ADMIN
 
 ALL_FEATURES = (
     INSTRUMENTS,
@@ -21,6 +22,7 @@ ALL_FEATURES = (
     BRIEFING,
     SIGNAL_SCORING,
     SYSTEM_ADMIN,
+    WEB_ADMIN,
 )
 
 

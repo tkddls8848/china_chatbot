@@ -19,9 +19,13 @@ from core.config import (
     RESEARCH_VERIFICATION_ENABLED,
     RESEARCH_VERIFICATION_PROMPT_FILE,
 )
-from features.base import CommandSpec, FeatureSpec, MenuSpec
+from features.base import CallbackSpec, CommandSpec, FeatureSpec, MenuSpec
 from llm import MarketViewAnalyzer, MarketViewManager
-from research import cmd_research, collect_global_market_news_items
+from research import (
+    cmd_research,
+    collect_global_market_news_items,
+    handle_research_callback,
+)
 
 
 def _install_services(app) -> None:
@@ -71,6 +75,9 @@ FEATURE = FeatureSpec(
     commands=(CommandSpec("research", "리서치 실행", cmd_research),),
     menus=(
         MenuSpec("🔎 리서치", "nav:research", 1, "🔎 리서치", 1),
+    ),
+    callbacks=(
+        CallbackSpec(("research_",), handle_research_callback),
     ),
     install_services=_install_services,
     data_files=("data/market_research.json",),

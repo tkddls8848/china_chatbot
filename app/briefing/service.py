@@ -18,7 +18,7 @@ from core.config import (
     TELEGRAM_MESSAGE_LIMIT,
 )
 from core.workers import run_non_urgent
-from handlers.menu_status import set_menu_button_text
+from core.menu_status import set_menu_button_text
 from research.news import collect_global_market_news_items
 from state.news_log import aggregate_sentiment_by_code
 from stocks.quotes import format_quant_summary

@@ -141,6 +141,25 @@ class FeatureRegistry:
             )
         )
 
+    async def dispatch_callback(self, query, context, data: str) -> bool:
+        """callback_data를 접두사가 일치하는 기능의 핸들러에 위임한다.
+
+        비활성 기능의 접두사에 해당하면 안내 메시지로 응답한다. 핸들러가
+        False를 반환하면 다음 일치 후보를 계속 시도한다.
+        """
+        for spec in self._all_specs:
+            for callback in spec.callbacks:
+                if not data.startswith(callback.prefixes):
+                    continue
+                if spec.key not in self._enabled_keys:
+                    await query.edit_message_text(
+                        f"{spec.label} 기능이 비활성화되어 있습니다."
+                    )
+                    return True
+                if await callback.handler(query, context, data):
+                    return True
+        return False
+
     def install_services(self, app: Application) -> None:
         for feature in self._enabled_specs:
             if feature.install_services is not None:

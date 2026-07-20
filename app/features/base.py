@@ -12,6 +12,10 @@ CommandHandlerFunc = Callable[
     [Update, ContextTypes.DEFAULT_TYPE],
     Awaitable[None],
 ]
+CallbackHandlerFunc = Callable[
+    [Any, ContextTypes.DEFAULT_TYPE, str],
+    Awaitable[bool],
+]
 JobInstaller = Callable[[Any, Any], None]
 ServiceInstaller = Callable[[Any], None]
 
@@ -21,6 +25,18 @@ class CommandSpec:
     name: str
     description: str
     handler: CommandHandlerFunc
+
+
+@dataclass(frozen=True)
+class CallbackSpec:
+    """인라인 버튼 callback_data 접두사와 처리 함수의 연결.
+
+    handler는 처리했으면 True를 반환한다. 접두사가 겹치는 다른 기능이
+    있으면 False 반환 시 다음 후보로 넘어간다.
+    """
+
+    prefixes: tuple[str, ...]
+    handler: CallbackHandlerFunc
 
 
 @dataclass(frozen=True)
@@ -41,6 +57,7 @@ class FeatureSpec:
     requires: frozenset[str] = frozenset()
     commands: tuple[CommandSpec, ...] = ()
     menus: tuple[MenuSpec, ...] = ()
+    callbacks: tuple[CallbackSpec, ...] = ()
     install_services: ServiceInstaller | None = None
     install_jobs: JobInstaller | None = None
     data_files: tuple[str, ...] = ()

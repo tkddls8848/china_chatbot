@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,6 +7,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
+os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from features import ALL_FEATURES, build_feature_registry
 from features.registry import FeatureConfigurationError
@@ -22,6 +25,7 @@ EXPECTED_FEATURES = {
     "briefing",
     "signal_scoring",
     "system_admin",
+    "web_admin",
 }
 
 

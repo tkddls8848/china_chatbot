@@ -1,7 +1,7 @@
 """국가별 뉴스 감성 기능 선언."""
 
 from features.base import CommandSpec, FeatureSpec, MenuSpec
-from handlers.commands import cmd_market
+from features.market_sentiment.handlers import cmd_market
 
 FEATURE = FeatureSpec(
     key="market_sentiment",

@@ -2,7 +2,7 @@
 
 from core.config import PREDICTION_LOG_FILE
 from features.base import CommandSpec, FeatureSpec, MenuSpec
-from handlers.commands import cmd_score, cmd_view
+from features.signal_scoring.handlers import cmd_score, cmd_view
 from state import PredictionLog
 
 
