@@ -98,7 +98,7 @@ async def cmd_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
-def _score_report(log_path: Path, label: str) -> str:
+def _score_report(log_path: Path, label: str, stock_db: StockDatabase) -> str:
     """신호 로드 → 시세 대조 채점 → HTML 리포트(블로킹, to_thread에서 실행)."""
     signals, neutral = load_signals(log_path, DEFAULT_THRESHOLD)
     if not signals:
@@ -107,7 +107,7 @@ def _score_report(log_path: Path, label: str) -> str:
             f"(중립 제외 {neutral}건, threshold={DEFAULT_THRESHOLD})."
         )
     up_count = sum(1 for s in signals if s["up"])
-    results = score_signals(signals, DEFAULT_HORIZONS)
+    results = score_signals(signals, DEFAULT_HORIZONS, stock_db=stock_db)
     table = "\n".join(format_result_lines(results, DEFAULT_HORIZONS))
     return (
         f"<b>감성 신호 적중률 ({label} 로그)</b>\n\n"
@@ -136,7 +136,8 @@ async def cmd_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     status = await message.reply_text(f"{label} 신호 채점 중... (시세 조회)")
     try:
-        report = await run_non_urgent(_score_report, log_path, label)
+        stock_db: StockDatabase = context.bot_data["stock_db"]
+        report = await run_non_urgent(_score_report, log_path, label, stock_db)
         await status.edit_text(report, parse_mode="HTML")
     except Exception as e:
         logger.exception("[SCORE] 채점 실패")

@@ -205,6 +205,13 @@ class StockDatabase:
         entry = self._db.get(code)
         return entry["display_name"] if entry else None
 
+    def get_market(self, code: str) -> str | None:
+        """코드가 실제 속한 시장(권위 있는 값)을 DB에서 조회. 뉴스 로그의 출처 기반
+        market 태그(기사 단위)와 달리 종목별로 정확하다."""
+        resolved = self.resolve_code(code)
+        entry = self._db.get(resolved) if resolved else None
+        return str(entry["market"]) if entry and entry.get("market") else None
+
     def is_valid_code(self, code: str) -> bool:
         return code in self._db
 

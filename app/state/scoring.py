@@ -67,8 +67,17 @@ def load_signals(log_path: Path, threshold: float) -> tuple[list[dict], int]:
     return signals, neutral
 
 
-def score_signals(signals: list[dict], horizons: list[int]) -> dict[int, dict]:
-    """수평별 채점 결과: {수평: {n, hit, up_real, pending}}."""
+def score_signals(signals: list[dict], horizons: list[int], stock_db=None) -> dict[int, dict]:
+    """수평별 채점 결과: {수평: {n, hit, up_real, pending}}.
+
+    stock_db가 주어지면 로그의 기사 단위 market 태그 대신 StockDB의 종목별
+    권위 있는 market으로 덮어써 시세 조회에 쓴다(뉴스 출처 기반 오태깅 보정).
+    """
+    if stock_db is not None:
+        for s in signals:
+            resolved = stock_db.get_market(s["code"])
+            if resolved:
+                s["market"] = resolved
     codes = sorted({(str(s.get("market") or ""), s["code"]) for s in signals})
     start = min(s["date"] for s in signals)
     end = date.today()
