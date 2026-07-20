@@ -44,7 +44,9 @@ from state.scoring import (
     load_signals,
     score_signals,
 )
-from research import handle_research_callback
+# research는 이 모듈을 역방향(research.handlers → handlers.menu_status →
+# handlers/__init__ → 이 모듈)으로 임포트하므로, 순환을 피해 사용 지점에서
+# 지연 임포트한다.
 from stocks import StockDatabase
 from core.system_control import SystemControlManager
 from core.workers import run_non_urgent
@@ -485,6 +487,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if await handle_menu_callback(update, context, data):
         return
+
+    from research import handle_research_callback
 
     if await handle_research_callback(query, context, data):
         return

@@ -262,11 +262,34 @@ def _format_research_result_message(
 
     risks = result.get("risks") or []
     risk_lines = "\n".join(f"- {html.escape(str(r))}" for r in risks[:5]) or "- 없음"
+
+    critique_lines = []
+    for item in result.get("view_critique") or []:
+        if not isinstance(item, dict):
+            continue
+        point = html.escape(str(item.get("point") or "").strip())
+        if not point:
+            continue
+        severity = item.get("severity")
+        prefix = f"[{float(severity):.0%}] " if severity is not None else ""
+        critique_lines.append(f"- {prefix}{point}")
+        evidence = item.get("evidence")
+        if isinstance(evidence, dict):
+            ev_title = str(evidence.get("title") or "").strip()
+            if ev_title:
+                ev_source = str(evidence.get("source") or "").strip()
+                source_part = f" ({html.escape(ev_source)})" if ev_source else ""
+                critique_lines.append(
+                    f"  ↳ {html.escape(ev_title[:80])}{source_part}"
+                )
+    critique_text = "\n".join(critique_lines) or "- 상충하는 근거 없음"
+
     verified_mark = " ✅검증됨" if result.get("verified") else ""
     text = (
         f"<b>{html.escape(title)}</b>{verified_mark}\n"
         f"분석 뉴스: {news_count}건 / 후보 universe: {candidate_count}개\n\n"
         f"<b>요약</b>\n{summary}\n\n"
+        f"<b>🗣 내 뷰 반론</b>\n{critique_text}\n\n"
         f"<b>추가 후보</b>\n{add_lines}\n\n"
         f"<b>제외 후보</b>\n{remove_lines}\n\n"
         f"<b>주목 종목</b>\n{chr(10).join(watch_lines[:5]) or '- 없음'}\n\n"

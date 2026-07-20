@@ -496,7 +496,44 @@ class MarketViewAnalyzer:
             "summary": summary.strip(),
             "actions": normalized_actions,
             "risks": [str(r).strip() for r in risks if str(r).strip()],
+            "view_critique": self._normalize_view_critique(data.get("view_critique")),
         }
+
+    @staticmethod
+    def _normalize_view_critique(raw: Any) -> list[dict[str, Any]]:
+        """마켓 뷰 반론 항목을 정규화한다.
+
+        보조 출력이므로 형식 오류는 예외 대신 항목 제외로 처리한다(fail-soft).
+        소형 모델이 문자열 배열로 답하는 경우도 수용한다.
+        """
+        if not isinstance(raw, list):
+            return []
+        normalized: list[dict[str, Any]] = []
+        for item in raw:
+            if len(normalized) >= 3:
+                break
+            if isinstance(item, str):
+                point = item.strip()
+                if point:
+                    normalized.append({"point": point, "severity": None, "evidence": None})
+                continue
+            if not isinstance(item, dict):
+                continue
+            point = str(item.get("point") or "").strip()
+            if not point:
+                continue
+            severity = item.get("severity")
+            try:
+                severity = min(1.0, max(0.0, float(severity)))
+            except (TypeError, ValueError):
+                severity = None
+            evidence = item.get("evidence")
+            if not isinstance(evidence, dict):
+                evidence = None
+            normalized.append(
+                {"point": point, "severity": severity, "evidence": evidence}
+            )
+        return normalized
 
     def _fallback_partial_analysis(
         self,
@@ -514,6 +551,7 @@ class MarketViewAnalyzer:
                 "LLM 응답 JSON이 중간에 잘려 요약만 복구했습니다. "
                 "후보 수나 출력 항목 수를 더 줄여야 합니다."
             ],
+            "view_critique": [],
         }
 
     @staticmethod
