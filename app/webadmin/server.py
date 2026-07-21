@@ -7,7 +7,9 @@
 
 데이터 접근 방침: 다른 기능이 소유한 데이터는 bot_data에 설치된 매니저를
 통해 읽는다. 파일 직접 읽기(_read_json/_tail_jsonl)는 해당 기능이 꺼져
-매니저가 없을 때의 읽기 전용 폴백이다.
+매니저가 없을 때의 읽기 전용 폴백이다. 봇과 이벤트 루프를 공유하므로
+이 동기 읽기는 반드시 asyncio.to_thread로 넘긴다(루프를 막으면 텔레그램
+폴링까지 함께 멈춘다).
 """
 
 import asyncio
@@ -158,7 +160,7 @@ def build_app(bot_app):
         news_log = _bot_data().get("news_log")
         if news_log is not None:
             return await news_log.snapshot(since_hours=hours)
-        return _read_json(NEWS_LOG_FILE, [])
+        return await asyncio.to_thread(_read_json, NEWS_LOG_FILE, [])
 
     # ── 관심종목 이벤트 ───────────────────────────────
     @api.get("/api/events")
@@ -166,7 +168,7 @@ def build_app(bot_app):
         events = _bot_data().get("watchlist_events")
         if events is not None:
             return await events.snapshot(lookback_days=days)
-        return _read_json(WATCHLIST_EVENTS_FILE, [])
+        return await asyncio.to_thread(_read_json, WATCHLIST_EVENTS_FILE, [])
 
     # ── 리서치 후보 ───────────────────────────────────
     @api.get("/api/research")
@@ -177,7 +179,7 @@ def build_app(bot_app):
                 "sight": manager.get_sight(),
                 "history": manager.get_history_summaries(),
             }
-        return _read_json(RESEARCH_STATE_FILE, {})
+        return await asyncio.to_thread(_read_json, RESEARCH_STATE_FILE, {})
 
     # ── 신호 성과 로그 ────────────────────────────────
     @api.get("/api/predictions")
@@ -185,7 +187,7 @@ def build_app(bot_app):
         prediction_log = _bot_data().get("prediction_log")
         if prediction_log is not None:
             return await prediction_log.snapshot(max(1, min(days, 90)))
-        return _tail_jsonl(PREDICTION_LOG_FILE, 500)
+        return await asyncio.to_thread(_tail_jsonl, PREDICTION_LOG_FILE, 500)
 
     return api
 

@@ -76,10 +76,12 @@ OLLAMA_NUM_GPU = int(os.environ.get("OLLAMA_NUM_GPU", "0"))
 # /system gpu on 으로 켤 때 적용할 값(-1=자동 권장).
 OLLAMA_GPU_ON_VALUE = int(os.environ.get("OLLAMA_GPU_ON_VALUE", "-1"))
 TRANSLATION_ENABLED = _env_bool("TRANSLATION_ENABLED", "true")
-TRANSLATION_MODEL = os.environ.get("TRANSLATION_MODEL", "gemma4:e4b")
+TRANSLATION_MODEL = os.environ.get("TRANSLATION_MODEL", "qwen3.5:4b")
 TRANSLATION_TIMEOUT = int(os.environ.get("TRANSLATION_TIMEOUT", "120"))
-TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "4096"))
-TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "2"))
+TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "1024"))
+# Ollama는 기본적으로 모델당 요청을 직렬 처리하므로 동시 요청을 늘려도
+# 큐만 깊어진다. 늘리려면 Ollama의 OLLAMA_NUM_PARALLEL을 함께 올린다.
+TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "1"))
 
 # ── 관리 웹(web_admin 기능) ───────────────────────────
 # 봇 프로세스에 내장되는 관리용 웹 대시보드. FEATURES_ENABLED의 web_admin
