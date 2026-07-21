@@ -17,7 +17,7 @@ from core.config import (
     TELEGRAM_CHAT_ID,
     TELEGRAM_MESSAGE_LIMIT,
 )
-from core.workers import run_non_urgent
+from core.workers import run_non_urgent, wait_for_urgent_idle
 from core.menu_status import set_menu_button_text
 from research.news import collect_global_market_news_items
 from state.news_log import aggregate_sentiment_by_code
@@ -101,6 +101,7 @@ async def _write_llm_comment(app: Application, payload: dict) -> str:
     writer = app.bot_data.get("briefing_writer")
     if writer is None or not writer.enabled:
         return ""
+    await wait_for_urgent_idle("브리핑 LLM 코멘트")
     try:
         return await run_non_urgent(writer.write, payload)
     except Exception as e:

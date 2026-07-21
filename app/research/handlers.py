@@ -10,7 +10,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from core.config import RESEARCH_MAX_CANDIDATES, RESEARCH_REMOVE_RELEVANCE_THRESHOLD
-from core.workers import run_non_urgent
+from core.workers import run_non_urgent, wait_for_urgent_idle
 from core.menu_status import set_menu_button_text
 from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
@@ -518,6 +518,10 @@ async def _run_research_job(
         except Exception as e:
             logger.warning("[RESEARCH] 정량 컨텍스트 수집 실패: %s", e)
     previous_analyses = mvm.get_history_summaries()
+
+    # 분석은 중간에 양보할 수 없는 단일 LLM 호출이므로, 뉴스 주기가 도는
+    # 동안에는 시작을 미뤄 번역이 뒤에서 대기하지 않게 한다.
+    await wait_for_urgent_idle("리서치 분석")
 
     if menu_message is not None:
         await _show_research_phase(menu_message, "◑", "AI 분석 중")

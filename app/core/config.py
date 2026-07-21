@@ -72,7 +72,7 @@ if not PROMPT_DIR.is_absolute():
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 # num_gpu 설정(-1=자동, 0=CPU 전용, N=오프로딩 레이어 수).
 # 런타임 변경(/system gpu ...)은 세션 한정이며 재시작하면 이 값으로 되돌아간다.
-OLLAMA_NUM_GPU = int(os.environ.get("OLLAMA_NUM_GPU", "0"))
+OLLAMA_NUM_GPU = int(os.environ.get("OLLAMA_NUM_GPU", "-1"))
 # /system gpu on 으로 켤 때 적용할 값(-1=자동 권장).
 OLLAMA_GPU_ON_VALUE = int(os.environ.get("OLLAMA_GPU_ON_VALUE", "-1"))
 TRANSLATION_ENABLED = _env_bool("TRANSLATION_ENABLED", "true")
@@ -162,7 +162,11 @@ SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5
 STOCK_DB_ENABLED = _env_bool("STOCK_DB_ENABLED", "true")
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
-RESEARCH_ANALYSIS_MODEL = os.environ.get("RESEARCH_ANALYSIS_MODEL", TRANSLATION_MODEL)
+# 번역과 같은 모델을 쓴다. 다른 모델로 나눠 러너를 분리하는 방식은 시도했다가
+# 되돌렸다. 두 러너가 메모리 때문에 공존하지 못하고 번갈아 축출되면서, 전환
+# 때마다 러너를 재적재해 오히려 느려졌다. 경합은 core.workers의 긴급 구간
+# 게이트로 막는다(뉴스 주기 중에는 리서치 분석 시작을 보류).
+RESEARCH_ANALYSIS_MODEL = os.environ.get("RESEARCH_ANALYSIS_MODEL", "qwen3.5:4b")
 RESEARCH_ANALYSIS_ENABLED = _env_bool("RESEARCH_ANALYSIS_ENABLED", "true")
 RESEARCH_ANALYSIS_TIMEOUT = max(
     30,
@@ -174,8 +178,10 @@ RESEARCH_NEWS_MAX_ITEMS = int(
 RESEARCH_NEWS_GLOBAL_LIMIT = int(
     os.environ.get("RESEARCH_NEWS_GLOBAL_LIMIT", "3")
 )
+# 분석 결과는 JSON 한 덩어리로 오므로 상한에 걸리면 문자열 중간에서 잘려
+# 파싱이 실패한다. 후보 수(RESEARCH_MAX_CANDIDATES)를 늘리면 함께 올린다.
 RESEARCH_ANALYSIS_NUM_PREDICT = int(
-    os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "1024")
+    os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
 )
 RESEARCH_CTX_MIN = max(
     4096,
@@ -202,6 +208,12 @@ RESEARCH_MAX_NEW_ACTIONS = max(
     int(os.environ.get("RESEARCH_MAX_NEW_ACTIONS", "4")),
 )
 NON_URGENT_WORKER_COUNT = max(1, int(os.environ.get("NON_URGENT_WORKER_COUNT", "3")))
+# 뉴스 주기가 도는 동안 비긴급 LLM 작업을 보류할 최대 시간(초). 한도를 넘으면
+# 굶지 않도록 그대로 진행한다. 0이면 보류하지 않는다.
+NON_URGENT_DEFER_TIMEOUT_SECONDS = max(
+    0,
+    int(os.environ.get("NON_URGENT_DEFER_TIMEOUT_SECONDS", "180")),
+)
 RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
     1.0,
     max(

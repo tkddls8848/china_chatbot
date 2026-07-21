@@ -24,7 +24,7 @@ from core.config import (
     NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
     TELEGRAM_CHAT_ID,
 )
-from core.workers import run_non_urgent
+from core.workers import run_non_urgent, urgent_phase
 from news.registry import NewsSourceRegistry, SourceSpec
 from news.sources import GlobalArticle
 from news.utils import (
@@ -363,6 +363,16 @@ async def refresh_stock_db(stock_db: StockDatabase) -> None:
 
 
 async def fetch_all(app: Application) -> None:
+    """뉴스 수집·번역 주기(긴급 경로).
+
+    이 구간이 도는 동안 리서치·브리핑 등 비긴급 LLM 작업은 시작을 보류해,
+    번역이 그 뒤에서 대기하지 않도록 한다.
+    """
+    async with urgent_phase():
+        await _fetch_all(app)
+
+
+async def _fetch_all(app: Application) -> None:
     tracker: SentNewsTracker = app.bot_data["sent_tracker"]
     wm: WatchlistManager     = app.bot_data["watchlist_manager"]
     translator: TranslationService = app.bot_data["translator"]
