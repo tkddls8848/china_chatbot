@@ -7,18 +7,19 @@ sys.path.insert(0, str(ROOT / "app"))
 from news import sources
 
 
-def test_periodic_us_market_source_interleaves_queries(monkeypatch):
-    def fake_query(query, query_index, limit):
+def _stub_stock_queries(monkeypatch, expected_market: str):
+    def fake_query(market, query, query_index, limit):
+        assert market == expected_market
         assert "when:1d" in query
         assert limit == 4
         rows = [
             sources.GlobalArticle(
-                article_id=f"us:{query_index}:{row}",
-                title=f"US headline {query_index}-{row}",
+                article_id=f"{market.lower()}:{query_index}:{row}",
+                title=f"{market} headline {query_index}-{row}",
                 content="Market news",
                 published_at="2026-07-18 10:00:00",
                 url=f"https://example.com/{query_index}/{row}",
-                extra={"market": "US"},
+                extra={"market": market},
             )
             for row in range(4)
         ]
@@ -29,11 +30,15 @@ def test_periodic_us_market_source_interleaves_queries(monkeypatch):
                 content="Market news",
                 published_at="2026-07-18 10:00:00",
                 url="https://example.com/0/0",
-                extra={"market": "US"},
+                extra={"market": market},
             )
         return rows
 
-    monkeypatch.setattr(sources, "_fetch_google_news_us_query", fake_query)
+    monkeypatch.setattr(sources, "_fetch_google_news_stock_query", fake_query)
+
+
+def test_periodic_us_market_source_interleaves_queries(monkeypatch):
+    _stub_stock_queries(monkeypatch, "US")
 
     articles = sources.fetch_google_news_us_stock_articles()
 
@@ -48,3 +53,44 @@ def test_periodic_us_market_source_interleaves_queries(monkeypatch):
     ]
     assert sum(article.url == "https://example.com/0/0" for article in articles) == 1
     assert all(article.extra["market"] == "US" for article in articles)
+
+
+def test_periodic_kr_market_source_uses_korean_queries(monkeypatch):
+    _stub_stock_queries(monkeypatch, "KR")
+
+    articles = sources.fetch_google_news_kr_stock_articles()
+
+    assert len(articles) == 10
+    assert all(article.extra["market"] == "KR" for article in articles)
+
+
+def test_market_stock_query_tags_market_and_id_prefix(monkeypatch):
+    def fake_rss(url, label, max_articles=None):
+        assert label == "gnews-kr:0"
+        assert "hl=ko&gl=KR" in url
+        return [
+            sources.GlobalArticle(
+                article_id="rss:gnews-kr:0:abc",
+                title="코스피 상승",
+                content="본문",
+                published_at="2026-07-18 10:00:00",
+                url="https://example.com/kr",
+            )
+        ]
+
+    monkeypatch.setattr(sources, "fetch_rss_articles", fake_rss)
+
+    articles = sources._fetch_google_news_stock_query("KR", "코스피 when:1d", 0, 4)
+
+    assert articles[0].article_id == "gnews-kr:rss:gnews-kr:0:abc"
+    assert articles[0].extra == {"market": "KR", "provider": "google-news"}
+
+
+def test_korean_queries_use_korean_locale():
+    # 한국 기사를 영어 로케일로 질의하면 종목명이 빠진 요약만 돌아온다.
+    assert "hl=ko&gl=KR&ceid=KR:ko" in sources._google_news_url("코스피", "KR")
+    assert "hl=en-US&gl=US&ceid=US:en" in sources._google_news_url("US stocks", "US")
+    assert all(
+        any("가" <= ch <= "힣" for ch in query)
+        for query in sources._MARKET_STOCK_NEWS_QUERIES["KR"]
+    )

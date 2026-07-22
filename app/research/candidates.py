@@ -1,7 +1,14 @@
 ﻿import logging
 import re
+from collections import Counter
 from typing import Any, Dict
 
+from core.config import (
+    RESEARCH_KEYWORD_CANDIDATE_LIMIT,
+    RESEARCH_KEYWORD_CANDIDATES_ENABLED,
+    RESEARCH_NAME_TOKEN_MAX_FREQUENCY,
+    RESEARCH_THEME_PATTERN_CANDIDATE_LIMIT,
+)
 from stocks import StockDatabase
 
 logger = logging.getLogger(__name__)
@@ -125,8 +132,47 @@ def _build_pattern_matcher(patterns: list[str], whole_word: bool = False):
     return matches
 
 
-def _entry_match_terms(entry: dict[str, str]) -> list[str]:
-    """뉴스 본문 매칭용 종목명 용어. 영문명은 일반 단어를 제외한 토큰으로 나눈다."""
+def _english_name_tokens(value: str) -> list[str]:
+    """영문 종목명 → 매칭 후보 토큰(4자 이상, 법인 형태 등 일반 단어 제외)."""
+    return [
+        token
+        for token in re.findall(r"[A-Za-z]{4,}", value)
+        if token.lower() not in _NAME_TOKEN_STOPWORDS
+    ]
+
+
+def _build_name_token_frequency(stock_entries: list[dict[str, str]]) -> Counter:
+    """토큰별로 그 토큰을 이름에 가진 종목 수를 센다.
+
+    'TECH'·'ENERGY'처럼 수십~수백 종목이 공유하는 토큰은 뉴스에 한 번 나오면
+    무관한 종목을 무더기로 끌어온다("Big Tech earnings" → 이름에 TECH가 든
+    모든 종목). 어느 단어가 흔한지는 시장마다 다르므로 목록을 손으로 관리하지
+    않고 종목 DB에서 직접 센다.
+    """
+    frequency: Counter = Counter()
+    for entry in stock_entries:
+        tokens: set[str] = set()
+        for value in (
+            str(entry.get("cn_name") or "").strip(),
+            _entry_display_name(entry),
+        ):
+            if value and value.isascii():
+                tokens.update(token.lower() for token in _english_name_tokens(value))
+        frequency.update(tokens)
+    return frequency
+
+
+def _entry_match_terms(
+    entry: dict[str, str],
+    token_frequency: Counter | None = None,
+    max_token_frequency: int = RESEARCH_NAME_TOKEN_MAX_FREQUENCY,
+) -> list[str]:
+    """뉴스 본문 매칭용 종목명 용어.
+
+    영문명은 일반 단어를 제외한 토큰으로 나누고, 여러 종목이 공유하는 흔한
+    토큰은 버린다. 남는 토큰이 없으면 이 종목은 이름 매칭 대상에서 빠진다.
+    중국어·한국어 이름은 통째로 쓰므로 이 필터를 거치지 않는다.
+    """
     terms: list[str] = []
     for value in (
         str(entry.get("cn_name") or "").strip(),
@@ -135,12 +181,61 @@ def _entry_match_terms(entry: dict[str, str]) -> list[str]:
         if not value:
             continue
         if value.isascii():
-            for token in re.findall(r"[A-Za-z]{4,}", value):
-                if token.lower() not in _NAME_TOKEN_STOPWORDS:
-                    terms.append(token)
+            for token in _english_name_tokens(value):
+                if (
+                    token_frequency is not None
+                    and token_frequency.get(token.lower(), 0) > max_token_frequency
+                ):
+                    continue
+                terms.append(token)
         else:
             terms.append(value)
     return list(dict.fromkeys(terms))
+
+
+def _build_name_matcher(match_terms: list[str]):
+    """뉴스 본문에서 이 종목을 가리키는지 판정한다.
+
+    영문명은 **서로 다른 토큰 2개 이상**이 같은 기사에 나와야 한다. 종목 DB에서는
+    드물지만 영어 기사에서는 흔한 단어(Daily, Home, Better...)가 한 개만 걸려도
+    무관한 종목이 후보로 올라오기 때문이다("Daily Journal" ← 기사 속 daily).
+    이름이 한 단어면 그 자체가 고유하므로 1개로 충분하다.
+    중국어·한국어 이름은 통째로 쓰며 기존 경계 규칙을 그대로 따른다.
+    """
+    cjk_terms = [term for term in match_terms if not term.isascii()]
+    tokens = [term for term in match_terms if term.isascii()]
+    cjk_matcher = _build_pattern_matcher(cjk_terms, whole_word=True) if cjk_terms else None
+    token_patterns = [
+        re.compile(rf"\b{re.escape(token)}\b", re.IGNORECASE) for token in tokens
+    ]
+    required = min(2, len(token_patterns))
+
+    def matches(text: str) -> bool:
+        if cjk_matcher is not None and cjk_matcher(text):
+            return True
+        hits = 0
+        for pattern in token_patterns:
+            if pattern.search(text):
+                hits += 1
+                if hits >= required:
+                    return True
+        return False
+
+    return matches
+
+
+def _rotate_by_market(by_market: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """시장별 후보 목록을 번갈아 하나씩 뽑아 이어 붙인다(입력은 보존)."""
+    rotated: list[dict[str, Any]] = []
+    queues = [list(queue) for queue in by_market.values() if queue]
+    while queues:
+        remaining = []
+        for queue in queues:
+            rotated.append(queue.pop(0))
+            if queue:
+                remaining.append(queue)
+        queues = remaining
+    return rotated
 
 
 def _news_evidence(item: dict[str, Any]) -> dict[str, str]:
@@ -235,7 +330,17 @@ def build_research_candidate_universe(
     news_items: list[dict[str, Any]],
     market_view: str = "",
     max_candidates: int = 30,
+    keyword_candidates: bool = RESEARCH_KEYWORD_CANDIDATES_ENABLED,
+    keyword_limit: int = RESEARCH_KEYWORD_CANDIDATE_LIMIT,
+    theme_pattern_limit: int = RESEARCH_THEME_PATTERN_CANDIDATE_LIMIT,
+    name_token_max_frequency: int = RESEARCH_NAME_TOKEN_MAX_FREQUENCY,
 ) -> list[dict[str, Any]]:
+    """후보 universe를 근거 강도 순으로 만든다.
+
+    근거 등급: 관심종목 > LLM이 코드를 명시한 후보(mentioned_stocks·테마 codes)
+    > 뉴스 본문 종목명 매칭 > 이름 문자열이 키워드와 겹치는 후보. 마지막 등급은
+    근거가 약하면서 수백 개씩 잡히므로 기본적으로 만들지 않거나 상한을 둔다.
+    """
     candidates: dict[str, dict[str, Any]] = {}
     haystacks = [
         f"{item.get('title', '')}\n{item.get('content', '')}"
@@ -265,25 +370,34 @@ def build_research_candidate_universe(
             "matched_news": [],
         }
 
-    view_patterns = _extract_research_patterns(market_view) if market_view else []
+    view_patterns = (
+        _extract_research_patterns(market_view)
+        if market_view and keyword_candidates and keyword_limit > 0
+        else []
+    )
     if view_patterns:
         matcher = _build_pattern_matcher(view_patterns)
-        research_added = 0
+        # 시장별로 번갈아 담아, 상한이 한 시장(주로 A주)에 쏠리지 않게 한다.
+        by_market: dict[str, list[dict[str, Any]]] = {}
         for entry in stock_entries:
             code = str(entry.get("code") or "")
             name = _entry_display_name(entry)
-            search_text = _entry_search_text(entry)
             if not code or not name or code in candidates:
                 continue
-            if matcher(search_text):
-                candidates[code] = {
-                    "code": code,
-                    "name": name,
-                    "market": entry.get("market", ""),
-                    "in_watchlist": False,
-                    "matched_news": [],
-                }
-                research_added += 1
+            if matcher(_entry_search_text(entry)):
+                by_market.setdefault(str(entry.get("market") or ""), []).append(
+                    {
+                        "code": code,
+                        "name": name,
+                        "market": entry.get("market", ""),
+                        "in_watchlist": False,
+                        "matched_news": [],
+                    }
+                )
+        research_added = 0
+        for candidate in _rotate_by_market(by_market)[:keyword_limit]:
+            candidates[candidate["code"]] = candidate
+            research_added += 1
         logger.info("[RESEARCH] 키워드 후보 %d개 추가 (패턴: %s)", research_added, view_patterns[:5])
 
     mentioned_added = 0
@@ -312,12 +426,13 @@ def build_research_candidate_universe(
     if mentioned_added:
         logger.info("[RESEARCH] 직접 언급 후보 %d개 추가", mentioned_added)
 
+    token_frequency = _build_name_token_frequency(stock_entries)
     for entry in stock_entries:
         code = str(entry.get("code") or "")
         name = _entry_display_name(entry)
         if not code or not name or not _name_is_matchable(name):
             continue
-        match_terms = _entry_match_terms(entry)
+        match_terms = _entry_match_terms(entry, token_frequency, name_token_max_frequency)
         if not match_terms:
             continue
         # 값싼 부분 문자열 사전 필터: 전체 뉴스에 안 나오는 이름은 정규식 생략
@@ -326,7 +441,7 @@ def build_research_candidate_universe(
             for term in match_terms
         ):
             continue
-        name_matcher = _build_pattern_matcher(match_terms, whole_word=True)
+        name_matcher = _build_name_matcher(match_terms)
 
         matched_news = []
         for item, haystack in zip(news_items, haystacks):
@@ -360,6 +475,7 @@ def build_research_candidate_universe(
         }
 
     theme_added = 0
+    theme_pattern_added = 0
     for item in news_items:
         theme_candidates = item.get("theme_candidates", [])
         if not isinstance(theme_candidates, list):
@@ -391,11 +507,17 @@ def build_research_candidate_universe(
                     ):
                         theme_added += 1
 
+            # 코드가 아니라 이름 문자열로만 걸린 테마 후보는 근거가 약하므로
+            # 전체 뉴스를 통틀어 theme_pattern_limit개까지만 받는다.
+            if theme_pattern_added >= theme_pattern_limit:
+                continue
             patterns = _extract_theme_patterns(theme_candidate)
             if not patterns:
                 continue
             theme_matcher = _build_pattern_matcher(patterns)
             for entry in stock_entries:
+                if theme_pattern_added >= theme_pattern_limit:
+                    break
                 code = str(entry.get("code") or "")
                 name = _entry_display_name(entry)
                 search_text = _entry_search_text(entry)
@@ -411,6 +533,7 @@ def build_research_candidate_universe(
                         relation_reason,
                     ):
                         theme_added += 1
+                        theme_pattern_added += 1
 
     if theme_added:
         logger.info("[RESEARCH] 테마 후보 %d개 추가", theme_added)
@@ -435,14 +558,5 @@ def _prioritize_candidates(
     by_market: dict[str, list[dict[str, Any]]] = {}
     for candidate in keyword_only:
         by_market.setdefault(str(candidate.get("market") or ""), []).append(candidate)
-    rotated: list[dict[str, Any]] = []
-    queues = [q for q in by_market.values() if q]
-    while queues:
-        remaining = []
-        for queue in queues:
-            rotated.append(queue.pop(0))
-            if queue:
-                remaining.append(queue)
-        queues = remaining
 
-    return (watch + evidenced + rotated)[:max_candidates]
+    return (watch + evidenced + _rotate_by_market(by_market))[:max_candidates]

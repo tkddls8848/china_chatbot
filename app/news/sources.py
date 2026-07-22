@@ -216,6 +216,19 @@ def fetch_rss_articles(
     return articles
 
 
+# 시장별 Google News 로케일. 현지 언어로 질의해야 그 시장 종목이 실제로
+# 기사 본문에 등장한다(한국 기사를 영어로 질의하면 종목명이 사라진다).
+_GOOGLE_NEWS_LOCALES = {
+    "KR": "hl=ko&gl=KR&ceid=KR:ko",
+}
+_DEFAULT_GOOGLE_NEWS_LOCALE = "hl=en-US&gl=US&ceid=US:en"
+
+
+def _google_news_url(query: str, market: str = "") -> str:
+    locale = _GOOGLE_NEWS_LOCALES.get(market.upper(), _DEFAULT_GOOGLE_NEWS_LOCALE)
+    return f"https://news.google.com/rss/search?q={quote_plus(query)}&{locale}"
+
+
 def fetch_google_news_history(query: str, day: date, market: str) -> list[GlobalArticle]:
     """Fetch articles for one closed calendar day from Google News RSS.
 
@@ -228,8 +241,11 @@ def fetch_google_news_history(query: str, day: date, market: str) -> list[Global
     bounded_query = (
         f"{query} after:{previous_day.isoformat()} before:{next_day.isoformat()}"
     )
-    url = "https://news.google.com/rss/search?q=" + quote_plus(bounded_query) + "&hl=en-US&gl=US&ceid=US:en"
-    return fetch_rss_articles(url, f"history:{market}:{day.isoformat()}", max_articles=None)
+    return fetch_rss_articles(
+        _google_news_url(bounded_query),
+        f"history:{market}:{day.isoformat()}",
+        max_articles=None,
+    )
 
 
 _REGIONAL_MARKET_QUERIES = {
@@ -240,11 +256,20 @@ _REGIONAL_MARKET_QUERIES = {
     "JP": "Japan stock market economy",
     "TW": "Taiwan stock market economy",
 }
-_US_STOCK_NEWS_QUERIES = (
-    "US stock market Wall Street when:1d",
-    "S&P 500 Nasdaq stocks earnings when:1d",
-    "US companies stock market news when:1d",
-)
+# 시장 전용 소스의 질의. 리서치 후보 발굴이 개별 종목 언급에 의존하므로
+# 지수 시황뿐 아니라 종목·실적 질의를 함께 넣는다.
+_MARKET_STOCK_NEWS_QUERIES = {
+    "US": (
+        "US stock market Wall Street when:1d",
+        "S&P 500 Nasdaq stocks earnings when:1d",
+        "US companies stock market news when:1d",
+    ),
+    "KR": (
+        "코스피 증시 마감 when:1d",
+        "코스닥 종목 실적 when:1d",
+        "한국 증시 상승 종목 when:1d",
+    ),
+}
 
 def _interleave(groups: list[list[GlobalArticle]]) -> list[GlobalArticle]:
     result: list[GlobalArticle] = []
@@ -270,9 +295,12 @@ def _deduplicate_articles(articles: list[GlobalArticle]) -> list[GlobalArticle]:
 
 def _fetch_google_news_market(market: str) -> list[GlobalArticle]:
     query = _REGIONAL_MARKET_QUERIES[market]
-    url = "https://news.google.com/rss/search?q=" + quote_plus(query) + "&hl=en-US&gl=US&ceid=US:en"
     per_market_limit = max(1, (NEWS_SOURCE_ARTICLE_LIMIT + 6) // 7)
-    articles = fetch_rss_articles(url, f"gnews:{market}", max_articles=per_market_limit)
+    articles = fetch_rss_articles(
+        _google_news_url(query, market),
+        f"gnews:{market}",
+        max_articles=per_market_limit,
+    )
     return [
         GlobalArticle(
             article_id=f"gnews:{market}:{article.article_id}",
@@ -301,51 +329,50 @@ def fetch_google_news_global_articles() -> list[GlobalArticle]:
     return _deduplicate_articles(_interleave(groups))[:NEWS_SOURCE_ARTICLE_LIMIT]
 
 
-def _fetch_google_news_us_query(
+def _fetch_google_news_stock_query(
+    market: str,
     query: str,
     query_index: int,
     limit: int,
 ) -> list[GlobalArticle]:
-    url = (
-        "https://news.google.com/rss/search?q="
-        + quote_plus(query)
-        + "&hl=en-US&gl=US&ceid=US:en"
-    )
+    # article_id 접두사(gnews-us 등)는 sent_ids 호환을 위해 유지한다.
+    prefix = f"gnews-{market.lower()}"
     articles = fetch_rss_articles(
-        url,
-        f"gnews-us:{query_index}",
+        _google_news_url(query, market),
+        f"{prefix}:{query_index}",
         max_articles=limit,
     )
     return [
         GlobalArticle(
-            article_id=f"gnews-us:{article.article_id}",
+            article_id=f"{prefix}:{article.article_id}",
             title=article.title,
             content=article.content,
             published_at=article.published_at,
             published_date=article.published_date,
             url=article.url,
-            extra={"market": "US", "provider": "google-news"},
+            extra={"market": market, "provider": "google-news"},
         )
         for article in articles
     ]
 
 
-def fetch_google_news_us_stock_articles() -> list[GlobalArticle]:
-    """주기 전역 다이제스트용 미국 증시 전용 Google News RSS."""
+def fetch_google_news_stock_articles(market: str) -> list[GlobalArticle]:
+    """시장 전용 Google News RSS(주기 다이제스트·리서치 공용)."""
+    queries = _MARKET_STOCK_NEWS_QUERIES[market.upper()]
     per_query_limit = max(
         1,
-        (NEWS_SOURCE_ARTICLE_LIMIT + len(_US_STOCK_NEWS_QUERIES) - 1)
-        // len(_US_STOCK_NEWS_QUERIES),
+        (NEWS_SOURCE_ARTICLE_LIMIT + len(queries) - 1) // len(queries),
     )
-    with ThreadPoolExecutor(max_workers=len(_US_STOCK_NEWS_QUERIES)) as executor:
+    with ThreadPoolExecutor(max_workers=len(queries)) as executor:
         futures = [
             executor.submit(
-                _fetch_google_news_us_query,
+                _fetch_google_news_stock_query,
+                market.upper(),
                 query,
                 index,
                 per_query_limit,
             )
-            for index, query in enumerate(_US_STOCK_NEWS_QUERIES)
+            for index, query in enumerate(queries)
         ]
         groups = []
         for future in futures:
@@ -354,3 +381,11 @@ def fetch_google_news_us_stock_articles() -> list[GlobalArticle]:
             except Exception:
                 groups.append([])
     return _deduplicate_articles(_interleave(groups))[:NEWS_SOURCE_ARTICLE_LIMIT]
+
+
+def fetch_google_news_us_stock_articles() -> list[GlobalArticle]:
+    return fetch_google_news_stock_articles("US")
+
+
+def fetch_google_news_kr_stock_articles() -> list[GlobalArticle]:
+    return fetch_google_news_stock_articles("KR")

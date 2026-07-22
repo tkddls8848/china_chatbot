@@ -9,7 +9,11 @@ from typing import Any, Dict
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from core.config import RESEARCH_MAX_CANDIDATES, RESEARCH_REMOVE_RELEVANCE_THRESHOLD
+from core.config import (
+    RESEARCH_DISCOVERY_RESERVED_SLOTS,
+    RESEARCH_MAX_CANDIDATES,
+    RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
+)
 from core.workers import run_non_urgent, wait_for_urgent_idle
 from core.menu_status import set_menu_button_text
 from research.candidates import build_research_candidate_universe
@@ -490,21 +494,24 @@ async def _run_research_job(
         max_candidates=RESEARCH_MAX_CANDIDATES,
     )
 
-    # 강세 섹터 구성종목·问财 스크리닝 후보를 코드 중복 없이 병합한다.
+    # 시장별 발굴 후보(중화권 섹터·问财, 미국 스크리너, 한국 등락률)를 병합한다.
+    # 뉴스·키워드 후보가 상한을 채우면 발굴 후보가 통째로 잘리므로, 발굴 결과가
+    # 있을 때에 한해 뒤쪽(근거가 약한 키워드 후보) 자리를 내어준다.
     quote_service = context.bot_data.get("quote_service")
     try:
         extra_candidates = await run_non_urgent(
             collect_extra_candidates, quote_service, stock_db, watchlist, market_view
         )
         existing_codes = {c["code"] for c in candidate_universe}
-        remaining_slots = max(
-            0,
-            RESEARCH_MAX_CANDIDATES - len(candidate_universe),
-        )
         new_candidates = [
             c for c in extra_candidates if c["code"] not in existing_codes
         ]
-        candidate_universe.extend(new_candidates[:remaining_slots])
+        if new_candidates:
+            reserved = min(RESEARCH_DISCOVERY_RESERVED_SLOTS, len(new_candidates))
+            kept = max(0, RESEARCH_MAX_CANDIDATES - reserved)
+            candidate_universe = (candidate_universe[:kept] + new_candidates)[
+                :RESEARCH_MAX_CANDIDATES
+            ]
     except Exception as e:
         logger.warning("[RESEARCH] 추가 후보 수집 실패: %s", e)
 

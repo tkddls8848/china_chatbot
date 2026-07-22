@@ -71,6 +71,59 @@ def tencent_symbol(code: str) -> str | None:
     return None
 
 
+_KR_YAHOO_SUFFIXES = {"KOSPI": ".KS", "KOSDAQ": ".KQ"}
+
+
+def yahoo_symbol(code: str) -> str | None:
+    """미국·한국 universe 키 → Yahoo 심볼. 미지원은 None.
+
+    텐센트는 A주·홍콩만 제공하므로 그 밖의 시장은 Yahoo로 조회한다.
+    한국 6자리 코드는 A주 코드와 형식이 겹쳐 단독으로는 시장을 알 수 없으니
+    거래소가 담긴 universe 키(KR:KOSDAQ:247540)만 받는다.
+    """
+    parts = str(code or "").split(":")
+    if len(parts) != 3:
+        return None
+    market, exchange, raw = (part.strip().upper() for part in parts)
+    if not raw:
+        return None
+    if market == "US":
+        return raw.replace(".", "-")
+    if market == "KR" and raw.isdigit():
+        suffix = _KR_YAHOO_SUFFIXES.get(exchange)
+        return f"{raw.zfill(6)}{suffix}" if suffix else None
+    return None
+
+
+def parse_yahoo_closes(close_frame: Any, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    """yfinance 종가 프레임 → 심볼별 {price, pct_change, amount}.
+
+    단일 심볼이면 Series, 복수면 심볼별 컬럼을 가진 DataFrame이 온다.
+    전일 종가가 없으면 등락률은 비운다(가격만으로도 쓸모가 있다).
+    """
+    if close_frame is None:
+        return {}
+    if isinstance(close_frame, pd.Series):
+        close_frame = close_frame.to_frame(symbols[0] if symbols else "value")
+
+    quotes: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        if symbol not in close_frame.columns:
+            continue
+        series = pd.to_numeric(close_frame[symbol], errors="coerce").dropna()
+        if series.empty:
+            continue
+        price = _safe_float(series.iloc[-1])
+        previous = _safe_float(series.iloc[-2]) if len(series) >= 2 else None
+        pct_change = (
+            (price / previous - 1) * 100
+            if price is not None and previous not in (None, 0)
+            else None
+        )
+        quotes[symbol] = {"price": price, "pct_change": pct_change, "amount": None}
+    return quotes
+
+
 def parse_tencent_quotes(text: str) -> dict[str, dict[str, Any]]:
     """`v_sh600519="1~贵州茅台~600519~..."` 응답 → 코드별 {price, pct_change, amount}.
 
@@ -198,19 +251,61 @@ class QuoteService:
         key = "tencent_quotes:" + ",".join(sorted(symbols))
         return self._cache.get_or_fetch(key, fetch)
 
+    def _fetch_yahoo_quotes(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """미국·한국 종목 배치 시세(Yahoo). 심볼 목록 단위로 TTL 캐시."""
+
+        @_akshare_retry
+        def fetch() -> dict[str, dict[str, Any]]:
+            import yfinance as yf
+
+            frame = yf.download(
+                symbols,
+                period="5d",  # 주말·휴장을 건너뛰고 직전 종가를 확보하기 위한 여유
+                progress=False,
+                auto_adjust=True,
+                threads=False,
+            )
+            if frame is None or frame.empty:
+                return {}
+            return parse_yahoo_closes(frame["Close"], symbols)
+
+        key = "yahoo_quotes:" + ",".join(sorted(symbols))
+        return self._cache.get_or_fetch(key, fetch)
+
     def get_watchlist_quotes(self, codes: list[str]) -> dict[str, dict[str, Any]]:
-        """코드별 {price, pct_change, amount}. 실패하면 조용히 비운다."""
+        """코드별 {price, pct_change, amount}. 실패하면 조용히 비운다.
+
+        A주·홍콩은 텐센트, 미국·한국은 Yahoo로 나눠 조회한다. 한쪽이 실패해도
+        다른 시장 시세는 그대로 반환한다.
+        """
         if not self._enabled or not codes:
             return {}
-        symbols = [s for s in (tencent_symbol(c) for c in codes) if s]
-        if not symbols:
-            return {}
-        try:
-            fetched = self._fetch_tencent_quotes(symbols)
-        except Exception as e:
-            logger.warning("[QUANT] 시세 조회 실패: %s", e)
-            return {}
-        return {code: fetched[code] for code in codes if code in fetched}
+
+        tencent_by_code = {c: s for c in codes if (s := tencent_symbol(c))}
+        yahoo_by_code = {
+            c: s for c in codes if c not in tencent_by_code and (s := yahoo_symbol(c))
+        }
+
+        quotes: dict[str, dict[str, Any]] = {}
+        if tencent_by_code:
+            try:
+                fetched = self._fetch_tencent_quotes(sorted(set(tencent_by_code.values())))
+                quotes.update({code: fetched[code] for code in tencent_by_code if code in fetched})
+            except Exception as e:
+                logger.warning("[QUANT] 시세 조회 실패: %s", e)
+        if yahoo_by_code:
+            try:
+                fetched = self._fetch_yahoo_quotes(sorted(set(yahoo_by_code.values())))
+                quotes.update(
+                    {
+                        code: fetched[symbol]
+                        for code, symbol in yahoo_by_code.items()
+                        if symbol in fetched
+                    }
+                )
+            except Exception as e:
+                logger.warning("[QUANT] 미국·한국 시세 조회 실패: %s", e)
+        return quotes
 
     def get_price(self, code: str) -> float | None:
         """관심리스트 이벤트 기록용 현재가(최선 노력)."""

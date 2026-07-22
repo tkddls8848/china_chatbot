@@ -57,9 +57,52 @@ msvcrt/fcntl 분기, 경로는 `pathlib` 사용).
   StockDB의 종목별 market으로 보정한다.
 - AkShare는 홍콩 또는 실제 A주 형식일 때만 호출한다. 잘못된 코드로 두드리면 동방재부가
   연결을 끊어 `RemoteDisconnected` 재시도만 반복된다.
+- 미국·한국 종목의 정식 키는 `US:NASDAQ:AAPL` / `KR:KOSPI:005930` 형태다. **한국 6자리
+  코드는 A주 코드와 형식이 겹치므로** 코드만으로 시장을 단정하지 말고 거래소가 담긴
+  키를 쓴다(`stocks/universe.py`의 `stock_key`). 시세도 이 키로 나뉜다: A주·홍콩은
+  텐센트, 미국·한국은 Yahoo(`quotes.yahoo_symbol`).
 - `yahoo_ticker()`는 접미사를 붙일 수 없는 조합(예: CN 태그가 붙은 한국 코드)에 빈
   문자열을 반환하고, 호출부는 이를 "조회 건너뜀"으로 처리한다. 무의미한 404를 만들지 말 것.
 - 시세는 현지 소스(AkShare) 우선, Yahoo Finance는 독립 폴백이다.
+
+## 리서치는 시장 균형이 기본값이다
+
+중국·홍콩·미국·한국을 함께 다루므로, **우선순위 순서대로 상한까지 채우는 코드는
+곧 중화권 전용이 된다.** 과거에 리서치 뉴스가 첫 소스(futu)로만 채워져 미국·한국
+종목이 추천에 오르지 못한 적이 있다. 상한이 걸리는 자리마다 시장 회전을 넣는다.
+
+- 뉴스 수집(`research/news.py`): 소스를 동시에 조회해 시장별 버킷을 만든 뒤
+  `RESEARCH_NEWS_MARKETS` 순서로 라운드로빈 선택하고, **선택된 기사만 번역**한다.
+  시장 태그는 기사의 `extra["market"]`(혼합 소스 gnews) → `SourceSpec.market` 순.
+- 후보 발굴(`research/discovery.py`): 중화권(섹터·问财)·미국(yfinance 프리셋
+  스크리너)·한국(FDR KRX 등락률) 결과를 `_interleave_by_market`으로 번갈아 배치한다.
+  호출부가 앞에서 자르므로 **순서 자체가 균형 장치**다.
+- 후보 universe 상한(`RESEARCH_MAX_CANDIDATES`)은 뉴스·키워드 후보가 다 먹으므로
+  `RESEARCH_DISCOVERY_RESERVED_SLOTS`만큼 발굴 후보 자리를 남긴다.
+- 컨텍스트 예산이 빠듯하다. 실측상 기사 6건 + 후보 10개가 `RESEARCH_CTX_MAX` 12288의
+  거의 전부이며, 중국어 원문 기준 본문 260자가 한계선이라 `RESEARCH_NEWS_CONTENT_MAX_CHARS`
+  기본값이 240이다. `RESEARCH_NEWS_MAX_ITEMS`를 올리면 ctx도 같이 올린다.
+- **리서치 입력은 기본적으로 번역하지 않는다**(`RESEARCH_TRANSLATE_NEWS=false`). 분석
+  모델이 다국어를 읽고, 종목명 매칭도 원문(cn_name·영문명)에서 더 잘 걸린다. 대신 번역
+  파이프라인이 함께 주던 `mentioned_stocks`·`theme_candidates`·`sentiment`가 비므로,
+  켜고 끌 때 후보 구성이 달라진다는 점을 기억한다.
+
+## 후보는 근거 강도 순이다 (노이즈가 상한을 먹지 않게)
+
+종목 DB가 15,000개라 **이름 문자열이 겹치는 후보는 언제나 수백 개가 나온다.** 근거 없는
+후보가 상한(`RESEARCH_MAX_CANDIDATES`)을 채워 진짜 후보를 밀어낸 사례가 반복됐다.
+
+- 등급: 관심종목 > LLM이 코드를 명시(mentioned_stocks·테마 codes) > 뉴스 본문 종목명
+  매칭 > 시장 데이터 발굴 > 이름이 주제 키워드와 겹침. 마지막 등급
+  (`RESEARCH_KEYWORD_CANDIDATES_ENABLED`)은 **기본 비활성**이고, 이름 매칭으로만 걸린
+  테마 후보도 `RESEARCH_THEME_PATTERN_CANDIDATE_LIMIT`로 제한한다.
+- 영문명 매칭에는 두 겹의 방어가 있다(`_build_name_matcher`). 종목 DB에서 여러 종목이
+  공유하는 토큰은 빈도로 걸러내고(`RESEARCH_NAME_TOKEN_MAX_FREQUENCY`, 실측 tech=29·
+  energy=83 vs apple=1), DB에선 드물지만 영어 기사에선 흔한 단어(Daily, Home) 때문에
+  **여러 단어 이름은 토큰 2개 이상**이 같은 기사에 나와야 인정한다. 한 단어 이름
+  (Alphabet)은 1개로 충분하다.
+- 중국어·한국어 이름은 통째로 매칭하며 한글은 앞글자 경계를 요구한다("이닉스"가
+  "하이닉스"에 걸리는 오탐 방지).
 
 ## 외부 의존성의 알려진 함정
 
@@ -69,6 +112,10 @@ msvcrt/fcntl 분기, 경로는 `pathlib` 사용).
 - **동방재부 인기순위 API**(`QUANT_HOT_RANK_ENABLED`): 해외 IP에서 차단되므로 기본
   비활성. 활성화 실패를 버그로 오인하지 말 것.
 - **pywencai**(问财 스크리닝): 비공식 API라 선택 설치·기본 비활성(`WENCAI_ENABLED`).
+- **yfinance 프리셋 스크리너**(`yf.screen`, 미국 후보 발굴): 1.5+ 전용 API이며 ETF·펀드가
+  섞여 오므로 `quoteType == EQUITY`만 받는다. 실패는 빈 목록으로 흘린다.
+- **FinanceDataReader**: `StockListing("KRX")`의 등락률 컬럼명이 버전마다 다르고
+  오타(`ChagesRatio`)가 섞여 있어 후보 컬럼을 순서대로 찾는다.
 - 뉴스·시세 소스는 실패해도 다른 기능이 계속 동작해야 한다. 소스별 실패 임계·쿨다운
   (`NEWS_SOURCE_FAILURE_THRESHOLD`/`COOLDOWN`)이 있으므로 새 소스도 같은 패턴을 따른다.
 - 감성 점수는 별도 모델이 아니라 Ollama 번역 파이프라인(`app/llm/translator.py`)이

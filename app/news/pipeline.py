@@ -251,7 +251,9 @@ async def _confirm_and_log_global_article(
     codes = signal_codes(translated.mentioned_stocks)
     market = str(
         article.extra.get("market")
-        or NEWS_SOURCE_MARKETS.get(spec.key.lower(), "OTHER")
+        or NEWS_SOURCE_MARKETS.get(spec.key.lower())
+        or spec.market
+        or "OTHER"
     )
     try:
         if prediction_log is not None and translated.sentiment is not None:

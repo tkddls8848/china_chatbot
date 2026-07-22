@@ -9,9 +9,9 @@
 | `instruments` | 종목 데이터베이스와 일별 갱신 |
 | `quant` | 시세·자금흐름·섹터 정량 데이터 |
 | `watchlist` | 관심종목 추가·삭제·목록 |
-| `news` | Futu·Sina·Google News·RSS 수집과 다이제스트 |
+| `news` | Futu·Sina·Google News(글로벌·미국·한국)·RSS 수집과 다이제스트 |
 | `market_sentiment` | 날짜별 시장 감성 백필·집계·차트 |
-| `research` | 뉴스·정량 데이터 기반 시장 리서치 |
+| `research` | 뉴스·정량 데이터 기반 시장 리서치(중화권·미국·한국) |
 | `briefing` | 모닝·마감 브리핑과 주간 성적표 |
 | `signal_scoring` | 종목 감성 뷰와 신호 성과 채점 |
 | `system_admin` | 도움말·기능 상태·GPU와 소스 상태 |

@@ -2,6 +2,11 @@
 
 전역 속보에서 분석 입력용 뉴스 아이템을 모은다. 뉴스 파이프라인과 동일한
 NewsSourceRegistry를 공유해 소스 페일오버를 그대로 따른다.
+
+수집은 시장 균형을 맞춘다. 소스 우선순위대로 상한까지 채우면 첫 소스
+(중화권)가 전부 가져가 미국·한국 뉴스가 분석 입력에 들어가지 못하므로,
+기사를 시장별로 모은 뒤 RESEARCH_NEWS_MARKETS 순서로 라운드로빈 선택한다.
+번역은 선택된 기사에만 수행한다(LLM 호출 수 = 최종 아이템 수).
 """
 
 import asyncio
@@ -11,10 +16,13 @@ from typing import Any
 from core.config import (
     NEWS_LIVE_MAX_AGE_HOURS,
     NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
+    RESEARCH_NEWS_CONTENT_MAX_CHARS,
     RESEARCH_NEWS_GLOBAL_LIMIT,
+    RESEARCH_NEWS_MARKETS,
     RESEARCH_NEWS_MAX_ITEMS,
+    RESEARCH_TRANSLATE_NEWS,
 )
-from news.registry import NewsSourceRegistry
+from news.registry import NewsSourceRegistry, SourceSpec
 from news.utils import (
     filter_recent_articles,
     is_timeout_error,
@@ -23,6 +31,8 @@ from news.utils import (
 from llm.translator import TranslationService
 
 logger = logging.getLogger(__name__)
+
+_OTHER_MARKET = "OTHER"
 
 
 async def _fetch_source(func, *args):
@@ -41,14 +51,19 @@ def _make_news_item(
     mentioned_stocks: list[str] | None = None,
     theme_candidates: list[dict[str, Any]] | None = None,
     sentiment: float | None = None,
+    market: str = "",
 ) -> dict[str, Any]:
+    # 시나처럼 제목 없이 본문만 오는 소스가 있다. 번역을 켜면 모델이 제목을
+    # 만들어 주지만, 원문을 그대로 쓸 때는 본문 앞부분을 제목으로 삼는다.
+    title = title or content[:60]
     return {
         "id": f"{source}:{published_at}:{title[:30]}",
         "source": source,
+        "market": market,
         "ticker": "",
         "name": "",
         "title": title[:240],
-        "content": content[:700],
+        "content": content[:RESEARCH_NEWS_CONTENT_MAX_CHARS],
         "published_at": published_at,
         "url": url,
         "mentioned_stocks": mentioned_stocks or [],
@@ -57,25 +72,64 @@ def _make_news_item(
     }
 
 
-async def collect_global_market_news_items(
-    translator: TranslationService | None = None,
-    translate_semaphore: asyncio.Semaphore | None = None,
-    registry: NewsSourceRegistry | None = None,
-    max_items: int = RESEARCH_NEWS_MAX_ITEMS,
-) -> list[dict[str, Any]]:
-    """레지스트리의 활성 소스에서 최신 뉴스를 모아 분석 입력으로 변환한다."""
-    if registry is None:
-        logger.warning("[RESEARCH] news registry가 없어 전역 뉴스 수집을 건너뜁니다.")
-        return []
+def _article_market(article, spec: SourceSpec) -> str:
+    """기사 시장 태그. 혼합 소스(gnews)는 기사별 extra가 권위 있는 값이다."""
+    extra = getattr(article, "extra", None) or {}
+    return str(extra.get("market") or spec.market or "").upper() or _OTHER_MARKET
 
-    news_items: list[dict[str, Any]] = []
-    for spec in registry.active_specs():
-        if len(news_items) >= max_items:
+
+def select_balanced_articles(
+    buckets: dict[str, list[tuple[SourceSpec, Any]]],
+    max_items: int,
+    markets: tuple[str, ...] | list[str] = RESEARCH_NEWS_MARKETS,
+) -> list[tuple[SourceSpec, Any]]:
+    """시장 버킷을 라운드로빈으로 훑어 max_items개를 고른다.
+
+    markets에 적힌 순서를 먼저 돌고, 목록에 없는 시장은 그 뒤에 이어 붙인다.
+    비어 있는 시장은 건너뛰므로, 한 시장만 수집돼도 상한까지 채운다.
+    """
+    ordered_markets = [market for market in dict.fromkeys(markets) if buckets.get(market)]
+    ordered_markets += [
+        market
+        for market in buckets
+        if market not in ordered_markets and buckets.get(market)
+    ]
+
+    selected: list[tuple[SourceSpec, Any]] = []
+    cursors = {market: 0 for market in ordered_markets}
+    while len(selected) < max_items:
+        progressed = False
+        for market in ordered_markets:
+            if len(selected) >= max_items:
+                break
+            cursor = cursors[market]
+            queue = buckets[market]
+            if cursor >= len(queue):
+                continue
+            selected.append(queue[cursor])
+            cursors[market] = cursor + 1
+            progressed = True
+        if not progressed:
             break
-        try:
-            articles = await _fetch_source(spec.fetch)
-            registry.record_success(spec.key)
-        except TimeoutError:
+    return selected
+
+
+async def _collect_articles_by_market(
+    registry: NewsSourceRegistry,
+) -> dict[str, list[tuple[SourceSpec, Any]]]:
+    """활성 소스를 동시에 조회해 시장별 기사 버킷을 만든다(실패는 건너뜀)."""
+    specs = registry.active_specs()
+    if not specs:
+        return {}
+
+    results = await asyncio.gather(
+        *(_fetch_source(spec.fetch) for spec in specs),
+        return_exceptions=True,
+    )
+
+    buckets: dict[str, list[tuple[SourceSpec, Any]]] = {}
+    for spec, result in zip(specs, results):
+        if isinstance(result, TimeoutError):
             registry.record_failure(spec.key, "timeout")
             logger.error(
                 "[RESEARCH] %s news collection timed out: %.1f seconds",
@@ -83,51 +137,88 @@ async def collect_global_market_news_items(
                 NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
             )
             continue
-        except Exception as e:
-            registry.record_failure(spec.key, str(e))
-            logger.error("[RESEARCH] %s news collection failed: %s", spec.key, e)
+        if isinstance(result, BaseException):
+            registry.record_failure(spec.key, str(result))
+            logger.error("[RESEARCH] %s news collection failed: %s", spec.key, result)
             continue
 
-        articles = filter_recent_articles(articles, NEWS_LIVE_MAX_AGE_HOURS)
-        source_limit = min(RESEARCH_NEWS_GLOBAL_LIMIT, max_items - len(news_items))
-        for article in articles[:source_limit]:
-            title = article.title
-            content = article.content
-            mentioned_stocks: list[str] = []
-            theme_candidates: list[dict[str, Any]] = []
-            sentiment: float | None = None
-            if translator is not None and translate_semaphore is not None:
-                try:
-                    translated = await translate_article(
-                        translator,
-                        translate_semaphore,
-                        spec.prompt_key,
-                        title,
-                        content,
-                    )
-                    title = translated.title
-                    content = translated.content
-                    mentioned_stocks = translated.mentioned_stocks
-                    theme_candidates = translated.theme_candidates
-                    sentiment = translated.sentiment
-                except Exception as e:
-                    logger.error("[RESEARCH] %s translation failed: %s", spec.key, e)
-                    if is_timeout_error(e):
-                        return news_items[:max_items]
-                    continue
-            news_items.append(
-                _make_news_item(
-                    spec.label,
+        registry.record_success(spec.key)
+        articles = filter_recent_articles(result, NEWS_LIVE_MAX_AGE_HOURS)
+        for article in articles[:RESEARCH_NEWS_GLOBAL_LIMIT]:
+            buckets.setdefault(_article_market(article, spec), []).append((spec, article))
+    return buckets
+
+
+async def collect_global_market_news_items(
+    translator: TranslationService | None = None,
+    translate_semaphore: asyncio.Semaphore | None = None,
+    registry: NewsSourceRegistry | None = None,
+    max_items: int = RESEARCH_NEWS_MAX_ITEMS,
+    markets: tuple[str, ...] | list[str] = RESEARCH_NEWS_MARKETS,
+    translate: bool = RESEARCH_TRANSLATE_NEWS,
+) -> list[dict[str, Any]]:
+    """레지스트리의 활성 소스에서 시장 균형을 맞춰 분석 입력 뉴스를 만든다.
+
+    translate=False면 번역 LLM을 호출하지 않고 원문을 그대로 담는다. 분석
+    모델은 다국어를 읽고, 종목명 매칭도 원문(중국어 cn_name·영문명)에서 더 잘
+    걸린다. 대신 번역이 함께 주던 mentioned_stocks·theme_candidates·sentiment는
+    비어 있게 된다.
+    """
+    if registry is None:
+        logger.warning("[RESEARCH] news registry가 없어 전역 뉴스 수집을 건너뜁니다.")
+        return []
+
+    buckets = await _collect_articles_by_market(registry)
+    if not buckets:
+        return []
+
+    selected = select_balanced_articles(buckets, max_items, markets)
+    logger.info(
+        "[RESEARCH] 뉴스 후보 시장 분포: %s → 선택 %d건 (%s)",
+        {market: len(rows) for market, rows in buckets.items()},
+        len(selected),
+        "번역본" if translate else "원문",
+    )
+
+    news_items: list[dict[str, Any]] = []
+    for spec, article in selected:
+        title = article.title
+        content = article.content
+        market = _article_market(article, spec)
+        mentioned_stocks: list[str] = []
+        theme_candidates: list[dict[str, Any]] = []
+        sentiment: float | None = None
+        if translate and translator is not None and translate_semaphore is not None:
+            try:
+                translated = await translate_article(
+                    translator,
+                    translate_semaphore,
+                    spec.prompt_key,
                     title,
                     content,
-                    article.published_at,
-                    article.url,
-                    mentioned_stocks=mentioned_stocks,
-                    theme_candidates=theme_candidates,
-                    sentiment=sentiment,
                 )
+                title = translated.title
+                content = translated.content
+                mentioned_stocks = translated.mentioned_stocks
+                theme_candidates = translated.theme_candidates
+                sentiment = translated.sentiment
+            except Exception as e:
+                logger.error("[RESEARCH] %s translation failed: %s", spec.key, e)
+                if is_timeout_error(e):
+                    return news_items[:max_items]
+                continue
+        news_items.append(
+            _make_news_item(
+                spec.label,
+                title,
+                content,
+                article.published_at,
+                article.url,
+                mentioned_stocks=mentioned_stocks,
+                theme_candidates=theme_candidates,
+                sentiment=sentiment,
+                market=market,
             )
-            if len(news_items) >= max_items:
-                break
+        )
 
     return news_items[:max_items]

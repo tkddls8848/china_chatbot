@@ -24,10 +24,37 @@ def test_build_source_specs_ignores_unknown_and_duplicates():
 
 
 def test_build_source_specs_supports_google_news_provider():
-    specs = build_source_specs(["gnews", "gnews_us"], [])
+    specs = build_source_specs(["gnews", "gnews_us", "gnews_kr"], [])
 
-    assert [spec.key for spec in specs] == ["gnews", "gnews_us"]
+    assert [spec.key for spec in specs] == ["gnews", "gnews_us", "gnews_kr"]
     assert all(spec.prompt_key == "global" for spec in specs)
+
+
+def test_builtin_specs_carry_market_tags():
+    specs = {
+        spec.key: spec
+        for spec in build_source_specs(["futu", "gnews", "gnews_us", "gnews_kr"], [])
+    }
+
+    assert specs["futu"].market == "CN"
+    assert specs["gnews_us"].market == "US"
+    assert specs["gnews_kr"].market == "KR"
+    # 혼합 소스는 시장 태그를 비워 두고 기사별 extra["market"]로 구분한다.
+    assert specs["gnews"].market == ""
+
+
+def test_source_markets_config_tags_rss_and_overrides_builtin():
+    specs = {
+        spec.key: spec
+        for spec in build_source_specs(
+            ["futu"],
+            [("mk-stock", "http://x/feed")],
+            {"rss:mk-stock": "KR", "futu": "HK"},
+        )
+    }
+
+    assert specs["rss:mk-stock"].market == "KR"
+    assert specs["futu"].market == "HK"
 
 
 def test_eastmoney_news_provider_is_not_registered():

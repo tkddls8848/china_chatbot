@@ -5,8 +5,8 @@
 입력 데이터:
 - market_view: 사용자가 저장한 투자/시장 관심사
 - current_watchlist: 현재 사용자가 저장한 워치리스트
-- news_items: Futu/Google News/RSS 등 전체 시장 뉴스(감성 점수 sentiment 포함 가능)
-- candidate_universe: 현재 워치리스트, 최신 뉴스 언급 후보, 테마 후보, 강세 섹터 구성종목 후보
+- news_items: Futu/Google News/RSS 등 전체 시장 뉴스(market 필드로 CN/US/KR 구분, 감성 점수 sentiment 포함 가능). 제목·본문은 번역되지 않은 원문이라 중국어·영어·한국어가 섞여 들어온다. 언어와 무관하게 같은 기준으로 읽고, 출력은 항상 한국어로 쓴다.
+- candidate_universe: 현재 워치리스트, 최신 뉴스 언급 후보, 테마 후보, 시장별 발굴 후보(중화권 강세 섹터 구성종목, 미국 스크리너 상위, 한국 등락률 상위). 각 항목의 market 필드가 소속 시장이다.
 - remove_relevance_threshold: 현재 워치리스트에서 삭제 후보로 판단할 관련도 기준(0~1)
 - quant_context: 관심종목 시세·주력 자금흐름, 섹터 상·하위, 涨停 수, 인기순위·용호방 진입(있을 때만)
 - previous_analyses: 직전 분석들의 요약과 제안 이력(있을 때만). 직전 제안과 판단이 달라지면 그 이유를 reason에 명시한다.
@@ -22,13 +22,17 @@
 - 반드시 JSON 객체만 출력한다. 설명 문장, 마크다운, 코드블록은 출력하지 않는다.
 - ticker는 candidate_universe나 current_watchlist에 적힌 코드 표기를 그대로 사용한다.
   예: A주 "300750", 홍콩 "00700", 미국 "US:NASDAQ:AAPL", 한국 "KR:KOSPI:005930".
-- reason, summary, risks는 한국어로 작성한다.
+- reason, summary, risks는 한국어로 작성한다. 원문 뉴스의 표현을 중국어·영어 그대로 옮기지 말고 한국어로 바꿔 쓴다.
+- name은 candidate_universe·current_watchlist에 적힌 종목명을 그대로 쓴다.
 - confidence는 숫자로 작성한다.
 - relevance는 해당 종목과 market_view의 관련도를 나타내는 0~1 숫자다. 뉴스에 당장 언급되지 않았다는 이유만으로 관련도를 낮추지 말고 사업·산업·공급망 연관성을 함께 평가한다.
 - current_watchlist의 모든 종목을 빠짐없이 한 번씩 평가하고 keep 또는 remove 중 하나를 부여한다. 현재 워치리스트 종목에는 add나 watch를 사용하지 않는다.
 - 현재 워치리스트 종목의 relevance가 remove_relevance_threshold 미만이면 remove, 이상이면 keep을 사용한다.
 - current_watchlist에 없는 종목에만 add 또는 watch를 사용한다.
 - current_watchlist 밖의 종목은 관련도가 가장 높은 순서로 max_new_actions개까지만 출력한다.
+- 시장 편중을 만들지 않는다. candidate_universe에 둘 이상의 시장(CN/HK/US/KR) 종목이 있으면 add·watch 후보를 한 시장에서만 고르지 말고, 리서치 주제에 맞는 종목이 있는 한 서로 다른 시장에서 최소 2개 시장을 포함한다.
+- 뉴스가 중국어·영어·한국어 중 무엇으로 왔는지는 중요도와 무관하다. 특정 시장 뉴스가 더 많다는 이유로 그 시장 종목을 더 높게 평가하지 않는다.
+- 미국·한국 종목의 relevance도 중화권 종목과 같은 기준으로 매긴다. 중화권 뉴스에 언급되지 않았다는 이유로 낮추지 않는다.
 - summary는 최대 3문장, reason은 한 문장, risks는 최대 3개로 간결하게 작성한다.
 - evidence는 액션당 가장 강한 근거 1개까지만 출력한다.
 - view_critique는 market_view 자체에 대한 반론이다. news_items·quant_context에서 market_view와 상충하거나 그 전제를 약화시키는 근거를 찾아 최대 3개까지 작성한다. 각 항목은 point 한 문장(한국어), severity(0~1, 뷰를 훼손하는 정도), 가장 강한 근거 뉴스 1개(evidence)를 담는다. 종목 추천과 무관하게 뷰의 약점을 지적하며, 상충 근거가 없으면 빈 배열을 출력한다. 뷰에 동의하더라도 비판적 시각을 유지한다.

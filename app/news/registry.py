@@ -17,6 +17,7 @@ from news.sources import (
     fetch_cls_articles,
     fetch_futu_articles,
     fetch_google_news_global_articles,
+    fetch_google_news_kr_stock_articles,
     fetch_google_news_us_stock_articles,
     fetch_rss_articles,
     fetch_sina_articles,
@@ -32,6 +33,9 @@ class SourceSpec:
     label: str
     prompt_key: str
     fetch: Callable[[], list[GlobalArticle]]
+    # 소스가 대표하는 시장(CN/US/KR...). 빈 값은 여러 시장이 섞인 소스라는 뜻이며,
+    # 이때 시장 구분은 기사별 extra["market"]에서 얻는다.
+    market: str = ""
 
 
 @dataclass
@@ -42,26 +46,49 @@ class _SourceHealth:
     last_success_at: datetime | None = None
 
 
-_BUILTIN_SPECS: dict[str, tuple[str, str, Callable[[], list[GlobalArticle]]]] = {
-    "futu": ("푸투니우니우(富途牛牛)", "futu", fetch_futu_articles),
-    "cls": ("재련사(財联社)", "cls", fetch_cls_articles),
-    "sina": ("신랑재경(新浪财经)", "global", fetch_sina_articles),
-    "ths": ("동화순(同花顺)", "global", fetch_ths_articles),
+# (label, prompt_key, fetch, market)
+_BUILTIN_SPECS: dict[str, tuple[str, str, Callable[[], list[GlobalArticle]], str]] = {
+    "futu": ("푸투니우니우(富途牛牛)", "futu", fetch_futu_articles, "CN"),
+    "cls": ("재련사(財联社)", "cls", fetch_cls_articles, "CN"),
+    "sina": ("신랑재경(新浪财经)", "global", fetch_sina_articles, "CN"),
+    "ths": ("동화순(同花顺)", "global", fetch_ths_articles, "CN"),
 }
 
-_BUILTIN_SPECS["gnews"] = ("Google News Global", "global", fetch_google_news_global_articles)
+_BUILTIN_SPECS["gnews"] = (
+    "Google News Global",
+    "global",
+    fetch_google_news_global_articles,
+    "",  # 기사별 extra["market"]로 구분되는 혼합 소스
+)
 _BUILTIN_SPECS["gnews_us"] = (
     "미국 증시 뉴스",
     "global",
     fetch_google_news_us_stock_articles,
+    "US",
+)
+_BUILTIN_SPECS["gnews_kr"] = (
+    "한국 증시 뉴스",
+    "global",
+    fetch_google_news_kr_stock_articles,
+    "KR",
 )
 
 
 def build_source_specs(
     source_keys: list[str],
     rss_feeds: list[tuple[str, str]],
+    source_markets: dict[str, str] | None = None,
 ) -> list[SourceSpec]:
-    """설정 문자열에서 SourceSpec 목록을 만든다. 순서가 곧 우선순위다."""
+    """설정 문자열에서 SourceSpec 목록을 만든다. 순서가 곧 우선순위다.
+
+    source_markets(NEWS_SOURCE_MARKETS)는 소스 키 → 시장 매핑으로, RSS 피드처럼
+    빌트인 시장 태그가 없는 소스에 시장을 부여하거나 기본 태그를 덮어쓴다.
+    """
+    markets = source_markets or {}
+
+    def resolve_market(key: str, default: str = "") -> str:
+        return str(markets.get(key.lower()) or default).upper()
+
     specs: list[SourceSpec] = []
     seen: set[str] = set()
     for key in source_keys:
@@ -72,8 +99,16 @@ def build_source_specs(
         if builtin is None:
             logger.warning("[NEWS] 알 수 없는 전역 뉴스 소스 무시: %s", key)
             continue
-        label, prompt_key, fetch = builtin
-        specs.append(SourceSpec(key=key, label=label, prompt_key=prompt_key, fetch=fetch))
+        label, prompt_key, fetch, market = builtin
+        specs.append(
+            SourceSpec(
+                key=key,
+                label=label,
+                prompt_key=prompt_key,
+                fetch=fetch,
+                market=resolve_market(key, market),
+            )
+        )
         seen.add(key)
 
     for label, url in rss_feeds:
@@ -86,6 +121,7 @@ def build_source_specs(
                 label=label,
                 prompt_key="global",
                 fetch=partial(fetch_rss_articles, url, label),
+                market=resolve_market(key) or resolve_market(label),
             )
         )
         seen.add(key)

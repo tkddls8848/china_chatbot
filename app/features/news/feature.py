@@ -11,6 +11,7 @@ from core.config import (
     NEWS_RSS_FEEDS,
     NEWS_SOURCE_COOLDOWN_MINUTES,
     NEWS_SOURCE_FAILURE_THRESHOLD,
+    NEWS_SOURCE_MARKETS,
     OLLAMA_BASE_URL,
     OLLAMA_NUM_GPU,
     PROMPT_DIR,
@@ -36,7 +37,11 @@ def _install_services(app) -> None:
         SENT_NEWS_RETENTION_DAYS,
     )
     app.bot_data["news_registry"] = NewsSourceRegistry(
-        build_source_specs(NEWS_GLOBAL_SOURCE_KEYS, NEWS_RSS_FEEDS),
+        build_source_specs(
+            NEWS_GLOBAL_SOURCE_KEYS,
+            NEWS_RSS_FEEDS,
+            NEWS_SOURCE_MARKETS,
+        ),
         failure_threshold=NEWS_SOURCE_FAILURE_THRESHOLD,
         cooldown_minutes=NEWS_SOURCE_COOLDOWN_MINUTES,
     )
@@ -81,5 +86,5 @@ FEATURE = FeatureSpec(
     install_jobs=_install_jobs,
     data_files=("data/news/sent_ids.json", "data/news/news_log.json"),
     prompts=("prompts/futu_ko.txt", "prompts/global_ko.txt"),
-    summary="Futu·Sina·Google News·RSS 수집, 번역, 날짜 필터와 전송",
+    summary="Futu·Sina·Google News(글로벌·미국·한국)·RSS 수집, 번역, 날짜 필터와 전송",
 )

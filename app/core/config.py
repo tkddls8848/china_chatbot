@@ -125,7 +125,7 @@ def _parse_global_source_keys() -> list[str]:
     raw = os.environ.get("NEWS_GLOBAL_SOURCES", "").strip()
     if raw:
         return [key.strip().lower() for key in raw.split(",") if key.strip()]
-    keys = ["futu", "sina", "gnews", "gnews_us"]
+    keys = ["futu", "sina", "gnews", "gnews_us", "gnews_kr"]
     if NEWS_ENABLE_CLS:
         keys.append("cls")
     return keys
@@ -173,10 +173,30 @@ RESEARCH_ANALYSIS_TIMEOUT = max(
     int(os.environ.get("RESEARCH_ANALYSIS_TIMEOUT", "600")),
 )
 RESEARCH_NEWS_MAX_ITEMS = int(
-    os.environ.get("RESEARCH_NEWS_MAX_ITEMS", "3")
+    os.environ.get("RESEARCH_NEWS_MAX_ITEMS", "6")
 )
 RESEARCH_NEWS_GLOBAL_LIMIT = int(
     os.environ.get("RESEARCH_NEWS_GLOBAL_LIMIT", "3")
+)
+# 분석 payload에 넣을 기사 본문 길이 상한. 중국어 원문 기준 6건 × 260자가
+# RESEARCH_CTX_MAX(12288)의 한계선이므로 여유를 두고 240으로 잡는다.
+RESEARCH_NEWS_CONTENT_MAX_CHARS = max(
+    80,
+    int(os.environ.get("RESEARCH_NEWS_CONTENT_MAX_CHARS", "240")),
+)
+# 리서치 분석 입력을 번역할지 여부. false면 번역 LLM 호출(기사당 1회)을 건너뛰고
+# 원문을 그대로 넣는다. 분석 모델은 다국어를 읽으므로 결과 품질보다 실행 시간이
+# 더 크게 걸리는 지점이라 기본값이 false다. 대신 번역 파이프라인이 함께 뽑던
+# mentioned_stocks·theme_candidates·sentiment가 없어지므로, 후보 발굴은 뉴스
+# 본문 종목명 매칭과 시장 데이터 발굴(섹터·스크리너·등락률)에 의존한다.
+RESEARCH_TRANSLATE_NEWS = _env_bool("RESEARCH_TRANSLATE_NEWS", "false")
+# 리서치 뉴스 수집에서 균형을 맞출 시장 순서. 소스 우선순위대로 뽑으면 첫 소스
+# (중화권)가 상한을 독식해 미국·한국 뉴스가 분석 입력에 들어가지 못한다.
+# 여기 적힌 시장끼리 라운드로빈으로 뽑고, 목록 밖 시장은 마지막에 채운다.
+RESEARCH_NEWS_MARKETS = tuple(
+    market.strip().upper()
+    for market in os.environ.get("RESEARCH_NEWS_MARKETS", "CN,US,KR").split(",")
+    if market.strip()
 )
 # 분석 결과는 JSON 한 덩어리로 오므로 상한에 걸리면 문자열 중간에서 잘려
 # 파싱이 실패한다. 후보 수(RESEARCH_MAX_CANDIDATES)를 늘리면 함께 올린다.
@@ -203,9 +223,39 @@ RESEARCH_MAX_CANDIDATES = max(
     1,
     int(os.environ.get("RESEARCH_MAX_CANDIDATES", "10")),
 )
+# 리서치 주제 키워드를 종목 '이름'과 대조해 만드는 후보. 근거가 이름 문자열
+# 겹침뿐이라 15,000종목 상대로는 수백 개가 잡히면서 근거 있는 후보를 상한 밖으로
+# 밀어낸다. 뉴스 근거·시장 데이터 발굴이 후보를 채우므로 기본 비활성이며,
+# 켜더라도 LIMIT 개까지만 채운다(뉴스가 없는 날의 보조 수단).
+RESEARCH_KEYWORD_CANDIDATES_ENABLED = _env_bool(
+    "RESEARCH_KEYWORD_CANDIDATES_ENABLED", "false"
+)
+RESEARCH_KEYWORD_CANDIDATE_LIMIT = max(
+    0,
+    int(os.environ.get("RESEARCH_KEYWORD_CANDIDATE_LIMIT", "5")),
+)
+# 뉴스 테마 후보에서 LLM이 코드를 지정하지 않고 '이름 매칭'으로만 걸린 후보의
+# 상한. 위와 같은 이유로 제한한다(LLM이 코드를 명시한 후보는 제한하지 않는다).
+RESEARCH_THEME_PATTERN_CANDIDATE_LIMIT = max(
+    0,
+    int(os.environ.get("RESEARCH_THEME_PATTERN_CANDIDATE_LIMIT", "5")),
+)
+# 뉴스 본문 종목명 매칭에서 버릴 '흔한 영문 토큰'의 기준(이 수보다 많은 종목이
+# 공유하는 토큰은 사용하지 않는다). 종목 DB 실측상 tech=29, energy=83인 반면
+# apple=1, semiconductor=6이라 15면 일반 단어만 걸러진다.
+RESEARCH_NAME_TOKEN_MAX_FREQUENCY = max(
+    1,
+    int(os.environ.get("RESEARCH_NAME_TOKEN_MAX_FREQUENCY", "15")),
+)
 RESEARCH_MAX_NEW_ACTIONS = max(
     0,
     int(os.environ.get("RESEARCH_MAX_NEW_ACTIONS", "4")),
+)
+# 후보 universe 상한 중 시장별 발굴(섹터·미국 스크리너·한국 등락률)에 남겨 둘
+# 자리. 0이면 뉴스·키워드 후보가 상한을 채웠을 때 발굴 후보가 들어가지 못한다.
+RESEARCH_DISCOVERY_RESERVED_SLOTS = max(
+    0,
+    int(os.environ.get("RESEARCH_DISCOVERY_RESERVED_SLOTS", "3")),
 )
 NON_URGENT_WORKER_COUNT = max(1, int(os.environ.get("NON_URGENT_WORKER_COUNT", "3")))
 # 뉴스 주기가 도는 동안 비긴급 LLM 작업을 보류할 최대 시간(초). 한도를 넘으면
@@ -231,6 +281,23 @@ RESEARCH_SECTOR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_SECTOR_CANDIDATE_
 # 동화순 问财 자연어 스크리닝(비공식 API, pywencai 별도 설치 필요)
 WENCAI_ENABLED = _env_bool("WENCAI_ENABLED", "false")
 WENCAI_CANDIDATE_LIMIT = int(os.environ.get("WENCAI_CANDIDATE_LIMIT", "10"))
+# 미국 후보 발굴: Yahoo Finance 프리셋 스크리너(yfinance.screen).
+RESEARCH_US_CANDIDATES_ENABLED = _env_bool("RESEARCH_US_CANDIDATES_ENABLED", "true")
+RESEARCH_US_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_US_CANDIDATE_LIMIT", "8"))
+RESEARCH_US_SCREENERS = tuple(
+    name.strip()
+    for name in os.environ.get(
+        "RESEARCH_US_SCREENERS", "day_gainers,most_actives"
+    ).split(",")
+    if name.strip()
+)
+# 한국 후보 발굴: FinanceDataReader KRX 시세 목록의 등락률 상위.
+RESEARCH_KR_CANDIDATES_ENABLED = _env_bool("RESEARCH_KR_CANDIDATES_ENABLED", "true")
+RESEARCH_KR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_KR_CANDIDATE_LIMIT", "8"))
+# 거래대금(원) 하한. 급등만 보고 잡주를 추천 후보로 올리지 않기 위한 필터.
+RESEARCH_KR_MIN_TRADING_VALUE = float(
+    os.environ.get("RESEARCH_KR_MIN_TRADING_VALUE", "5000000000")
+)
 
 # 정량 컨텍스트(시세·자금흐름·섹터·인기순위·涨停·용호방)
 QUANT_CONTEXT_ENABLED = _env_bool("QUANT_CONTEXT_ENABLED", "true")
@@ -253,6 +320,8 @@ def _parse_market_map() -> dict[str, str]:
         "sina": "CN",
         "ths": "CN",
         "cls": "CN",
+        "gnews_us": "US",
+        "gnews_kr": "KR",
     }
     for item in raw.split(","):
         source, separator, market = item.rpartition(":")
