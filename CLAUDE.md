@@ -14,9 +14,8 @@ msvcrt/fcntl 분기, 경로는 `pathlib` 사용).
 
 - 실행: `python app/bot.py` — `app/`이 import 루트다. 모듈은 `from core.config import ...`
   형태로 import 하며 `app.` 접두사를 붙이지 않는다.
-- 테스트: `python -m pytest tests/` — **conftest.py가 없다.** 각 테스트 파일이 직접
-  `sys.path.insert(0, str(ROOT / "app"))`와 더미 `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`
-  환경변수를 설정한다. 새 테스트 파일도 같은 서두를 따른다.
+- 테스트: `python -m pytest -q` — `tests/conftest.py`가 `app/` import 경로,
+  더미 Telegram 환경 변수와 워크스페이스 로컬 임시 디렉터리를 공통 설정한다.
 - 봇은 `data/runtime/bot.lock`으로 단일 인스턴스를 강제한다.
 
 ## 설정 원칙
@@ -33,7 +32,7 @@ msvcrt/fcntl 분기, 경로는 `pathlib` 사용).
 ## 아키텍처: 기능 레지스트리
 
 - 기능 단위는 `app/features/<키>/feature.py`의 `FeatureSpec`(base.py) 선언이 단일 조립
-  지점이다. 명령어·인라인 메뉴·콜백 접두사·스케줄 잡·데이터 파일·프롬프트를 여기에 선언하고
+  지점이다. 명령어·인라인 메뉴·콜백 접두사·스케줄 잡·데이터 파일을 여기에 선언하고
   `features/__init__.py`의 `ALL_FEATURES`에 등록한다. 카탈로그는 `app/features/README.md`.
 - 활성 목록은 `.env`의 `FEATURES_ENABLED`. 의존 기능이 빠지면 시작 단계에서
   `FeatureConfigurationError`로 실패한다(불완전 조합 방지가 의도).

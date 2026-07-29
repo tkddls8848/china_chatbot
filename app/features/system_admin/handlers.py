@@ -5,7 +5,6 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from core.config import HELP_TEXT
 from core.system_control import SystemControlManager
 from handlers.navigation import main_menu, persistent_menu
 
@@ -13,10 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    registry = context.bot_data.get("feature_registry")
-    help_text = registry.help_text() if registry is not None else HELP_TEXT
+    registry = context.bot_data["feature_registry"]
     await update.message.reply_text(
-        help_text,
+        registry.help_text(),
         parse_mode="HTML",
         reply_markup=persistent_menu(registry),
     )

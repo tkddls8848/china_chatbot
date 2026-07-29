@@ -1,12 +1,4 @@
 import asyncio
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from watchlist.events import WatchlistEventLog, build_scorecard_lines
 
@@ -62,3 +54,24 @@ def test_scorecard_handles_missing_price():
     ]
     lines = build_scorecard_lines(events, {"600519": "귀주모태주"}, {"600519": 110.0})
     assert "가격 데이터 없음" in lines["added"][0]
+
+
+def test_scorecard_escapes_custom_names_for_telegram_html():
+    events = [
+        {
+            "ts": "2026-06-20T09:00:00",
+            "event": "add",
+            "code": "US:NASDAQ:AAPL",
+            "name": "<b>A&B</b>",
+            "price": 100.0,
+        }
+    ]
+    watchlist = {"US:NASDAQ:AAPL": "<b>A&B</b>"}
+
+    lines = build_scorecard_lines(
+        events,
+        watchlist,
+        {"US:NASDAQ:AAPL": 110.0},
+    )
+
+    assert "&lt;b&gt;A&amp;B&lt;/b&gt;" in lines["added"][0]

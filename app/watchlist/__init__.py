@@ -1,4 +1,4 @@
-from watchlist.events import WatchlistEventLog, record_watchlist_event
+from watchlist.events import WatchlistEventLog
 from watchlist.handlers import (
     cmd_add,
     cmd_list,
@@ -14,5 +14,4 @@ __all__ = [
     "cmd_list",
     "cmd_menu",
     "handle_watchlist_callback",
-    "record_watchlist_event",
 ]

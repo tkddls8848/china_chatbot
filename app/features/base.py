@@ -25,6 +25,7 @@ class CommandSpec:
     name: str
     description: str
     handler: CommandHandlerFunc
+    usage: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,5 +62,3 @@ class FeatureSpec:
     install_services: ServiceInstaller | None = None
     install_jobs: JobInstaller | None = None
     data_files: tuple[str, ...] = ()
-    prompts: tuple[str, ...] = ()
-    summary: str = ""

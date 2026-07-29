@@ -1,14 +1,6 @@
 import json
-import os
-import sys
-from pathlib import Path
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from llm.translator import TranslationError, TranslationService
 from news.utils import format_sentiment_line, normalize_stock_code

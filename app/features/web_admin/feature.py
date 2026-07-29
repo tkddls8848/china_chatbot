@@ -11,6 +11,4 @@ from features.base import FeatureSpec
 FEATURE = FeatureSpec(
     key="web_admin",
     label="관리 웹",
-    summary="관심종목·뉴스·리서치·시스템 상태를 보는 내장 웹 대시보드"
-    " (WEB_ADMIN_PASSWORD 설정 시에만 기동)",
 )

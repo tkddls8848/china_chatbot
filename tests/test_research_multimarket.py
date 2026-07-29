@@ -1,13 +1,5 @@
 """리서치 후보 발굴이 미국·한국 universe 종목을 다루는지 검증."""
 import json
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from research.candidates import build_research_candidate_universe
 from stocks import StockDatabase
@@ -103,6 +95,29 @@ def test_keyword_candidates_respect_limit_and_rotate_markets(tmp_path):
     assert len(candidates) == 4
     # A주가 상한을 독식하지 않고 미국 종목도 들어온다.
     assert "US:NASDAQ:ONSC" in {c["code"] for c in candidates}
+
+
+def test_direct_mention_upgrades_existing_keyword_candidate(tmp_path):
+    candidates = build_research_candidate_universe(
+        _db(tmp_path),
+        watchlist={},
+        news_items=[
+            {
+                "title": "미국 기술주 동향",
+                "content": "",
+                "mentioned_stocks": ["ONSC"],
+            }
+        ],
+        market_view="반도체",
+        keyword_candidates=True,
+    )
+
+    onsemi = next(
+        candidate
+        for candidate in candidates
+        if candidate["code"] == "US:NASDAQ:ONSC"
+    )
+    assert onsemi["matched_news"]
 
 
 def test_english_stopword_tokens_do_not_match_news(tmp_path):

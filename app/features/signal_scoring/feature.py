@@ -14,7 +14,7 @@ FEATURE = FeatureSpec(
     label="감성 신호 성과",
     requires=frozenset({"news", "watchlist", "instruments"}),
     commands=(
-        CommandSpec("view", "종목 감성 보기", cmd_view),
+        CommandSpec("view", "종목 감성 보기", cmd_view, usage="[종목코드]"),
         CommandSpec("score", "신호 성과 채점", cmd_score),
     ),
     menus=(
@@ -22,5 +22,4 @@ FEATURE = FeatureSpec(
     ),
     install_services=_install_services,
     data_files=("data/signal_scoring/prediction_log.jsonl",),
-    summary="뉴스 감성의 종목별 집계와 실제 가격 방향 채점",
 )

@@ -25,5 +25,4 @@ FEATURE = FeatureSpec(
     label="정량 시장 데이터",
     requires=frozenset({"instruments"}),
     install_services=_install_services,
-    summary="시세·자금흐름·섹터·상한가·용호방 데이터",
 )

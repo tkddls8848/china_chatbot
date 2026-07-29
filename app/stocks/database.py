@@ -1,12 +1,11 @@
 """StockDatabase: 종목 코드/이름 캐시의 빌드·보강·조회.
 
-외부 데이터 수집·파싱·분류 유틸리티는 stock_db_sources 에 분리되어 있다.
+외부 데이터 수집·파싱·분류 유틸리티는 stocks.sources에 분리되어 있다.
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import Callable
 
 from stocks.sources import (
     _classify_market,
@@ -14,9 +13,20 @@ from stocks.sources import (
     _fetch_hk_spot,
     _stock_entry,
 )
-from stocks.universe import fetch_kr_listed, fetch_us_listed
+from stocks.universe import fetch_kr_listed, fetch_us_listed, stock_key
 
 logger = logging.getLogger(__name__)
+
+_MARKET_SCOPE = {
+    "CN": "CN",
+    "SH": "CN",
+    "SZ": "CN",
+    "STAR": "CN",
+    "CHI": "CN",
+    "HK": "HK",
+    "KR": "KR",
+    "US": "US",
+}
 
 
 class StockDatabase:
@@ -24,7 +34,7 @@ class StockDatabase:
         self._cache_file = cache_file
         self._enabled = enabled
         self._db: dict[str, dict] = {}
-        self._aliases: dict[str, str] | None = None  # 접미 코드 → universe 키
+        self._aliases: dict[str, str | None] | None = None
 
     def build(self) -> None:
         """종목 코드·이름 목록만 갱신한다. 시총·업종 보강은 enrich()를 별도로 실행."""
@@ -34,6 +44,8 @@ class StockDatabase:
         hk_loaded = False
         try:
             df_a = _fetch_a_code_name()
+            if df_a is None or df_a.empty:
+                raise RuntimeError("A-share universe is empty")
             cols = list(df_a.columns)
             if "code" in cols:
                 code_col, name_col = "code", "name"
@@ -41,16 +53,17 @@ class StockDatabase:
                 code_col, name_col = "股票代码", "股票名称"
             for _, row in df_a.iterrows():
                 code = str(row[code_col]).zfill(6)
+                key = stock_key("CN", "", code)
                 cn_name = row[name_col]
                 market = _classify_market(code)
                 ticker = f"{code}.SS" if market == "SH" else f"{code}.SZ"
                 entry = _stock_entry(cn_name, market, ticker=ticker, exchange=market)
                 # 기존 시장 보강 데이터 보존
-                old = old_db.get(code, {})
+                old = old_db.get(key, {})
                 for field in ("market_cap_cny", "industry"):
                     if old.get(field):
                         entry[field] = old[field]
-                db[code] = entry
+                db[key] = entry
             a_loaded = True
             logger.info("[StockDB] A주 %d종목 로드", len(db))
         except Exception as e:
@@ -60,6 +73,8 @@ class StockDatabase:
         hk_before = len(db)
         try:
             df_hk = _fetch_hk_spot()
+            if df_hk is None or df_hk.empty:
+                raise RuntimeError("Hong Kong universe is empty")
             cols = list(df_hk.columns)
             if "代码" in cols and "中文名称" in cols:
                 hk_code_col, hk_name_col = "代码", "中文名称"
@@ -69,13 +84,14 @@ class StockDatabase:
                 hk_code_col, hk_name_col = cols[1], cols[2]
             for _, row in df_hk.iterrows():
                 code = str(row[hk_code_col]).zfill(5)
+                key = stock_key("HK", "HKEX", code)
                 cn_name = row[hk_name_col]
                 entry = _stock_entry(cn_name, "HK", ticker=f"{code.zfill(4)}.HK", exchange="HKEX")
-                old = old_db.get(code, {})
+                old = old_db.get(key, {})
                 for field in ("market_cap_cny", "industry"):
                     if old.get(field):
                         entry[field] = old[field]
-                db[code] = entry
+                db[key] = entry
             hk_loaded = True
             logger.info("[StockDB] 홍콩 %d종목 로드", len(db) - hk_before)
         except Exception as e:
@@ -100,6 +116,10 @@ class StockDatabase:
             rows = fetcher()
         except Exception as exc:
             logger.warning("[StockDB] %s universe collection failed: %s", market, exc)
+            StockDatabase._preserve_markets(db, old_db, {market})
+            return
+        if not rows:
+            logger.warning("[StockDB] %s universe collection returned no rows", market)
             StockDatabase._preserve_markets(db, old_db, {market})
             return
         for row in rows:
@@ -138,20 +158,15 @@ class StockDatabase:
         db: dict[str, dict],
         old_db: dict[str, dict],
         markets: set[str],
-        code_filter: Callable[[str], bool] | None = None,
     ) -> None:
         for code, entry in old_db.items():
-            if entry.get("market") not in markets or code in db:
+            if (
+                not isinstance(entry, dict)
+                or str(entry.get("market") or "").upper() not in markets
+                or code in db
+            ):
                 continue
-            if code_filter is not None and not code_filter(code):
-                continue
-            cn_name = str(
-                entry.get("cn_name")
-                or entry.get("display_name")
-                or entry.get("name")
-                or ""
-            )
-            db[code] = _stock_entry(cn_name, str(entry.get("market") or ""))
+            db[code] = dict(entry)
 
     def load(self) -> None:
         self._db = json.loads(self._cache_file.read_text(encoding="utf-8"))
@@ -175,18 +190,37 @@ class StockDatabase:
         except Exception as e:
             logger.warning("[StockDB] 빌드 실패, 빈 DB로 동작: %s", e)
 
-    def _alias_index(self) -> dict[str, str]:
-        """US:NASDAQ:AAPL 같은 universe 키를 접미 코드(AAPL)로 찾기 위한 색인."""
+    def _alias_index(self) -> dict[str, str | None]:
+        """접미 코드를 고유 universe 키와 시장 한정 키로 연결한다."""
         if self._aliases is None:
-            aliases: dict[str, str] = {}
-            for key in self._db:
-                if ":" in key:
-                    aliases.setdefault(key.rsplit(":", 1)[-1], key)
+            aliases: dict[str, str | None] = {}
+
+            def register(alias: str, key: str) -> None:
+                if alias not in aliases:
+                    aliases[alias] = key
+                elif aliases[alias] != key:
+                    aliases[alias] = None
+
+            for key, entry in self._db.items():
+                upper_key = str(key).upper()
+                suffix = upper_key.rsplit(":", 1)[-1]
+                entry_market = (
+                    str(entry.get("market") or "").upper()
+                    if isinstance(entry, dict)
+                    else ""
+                )
+                scope = _MARKET_SCOPE.get(entry_market)
+                if ":" in upper_key:
+                    register(suffix, key)
+                    if scope is None:
+                        scope = _MARKET_SCOPE.get(upper_key.split(":", 1)[0])
+                if scope is not None:
+                    register(f"{scope}:{suffix}", key)
             self._aliases = aliases
         return self._aliases
 
     def resolve_code(self, code: str) -> str | None:
-        """DB 키 또는 별칭(티커·6자리 코드)을 정식 키로 해석. 없으면 None."""
+        """DB 정확 키 또는 시장 보존 별칭을 정식 키로 해석한다."""
         raw = str(code or "").strip()
         if not raw:
             return None
@@ -195,15 +229,24 @@ class StockDatabase:
         upper = raw.upper()
         if upper in self._db:
             return upper
-        return self._alias_index().get(upper)
+        if ":" not in upper:
+            return self._alias_index().get(upper)
 
-    def get_cn_name(self, code: str) -> str | None:
-        entry = self._db.get(code)
-        return entry["cn_name"] if entry else None
+        parts = upper.split(":")
+        if len(parts) != 3:
+            return None
+        market, exchange, suffix = parts
+        scope = _MARKET_SCOPE.get(market)
+        if scope is None:
+            return None
+        normalized = stock_key(scope, exchange, suffix)
+        alias = normalized.rsplit(":", 1)[-1]
+        return self._alias_index().get(f"{scope}:{alias}")
 
     def get_display_name(self, code: str) -> str | None:
-        entry = self._db.get(code)
-        return entry["display_name"] if entry else None
+        resolved = self.resolve_code(code)
+        entry = self._db.get(resolved) if resolved else None
+        return str(entry["display_name"]) if entry and entry.get("display_name") else None
 
     def get_market(self, code: str) -> str | None:
         """코드가 실제 속한 시장(권위 있는 값)을 DB에서 조회. 뉴스 로그의 출처 기반
@@ -211,9 +254,6 @@ class StockDatabase:
         resolved = self.resolve_code(code)
         entry = self._db.get(resolved) if resolved else None
         return str(entry["market"]) if entry and entry.get("market") else None
-
-    def is_valid_code(self, code: str) -> bool:
-        return code in self._db
 
     def get_all(self) -> dict[str, dict]:
         return self._db.copy()

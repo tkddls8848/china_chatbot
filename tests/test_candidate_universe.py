@@ -4,14 +4,6 @@
 일으킨 회귀 방지(리서치 모듈 복원 시 발견).
 """
 import json
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from research.candidates import build_research_candidate_universe
 from stocks import StockDatabase

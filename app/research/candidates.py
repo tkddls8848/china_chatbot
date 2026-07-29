@@ -1,7 +1,7 @@
-﻿import logging
+import logging
 import re
 from collections import Counter
-from typing import Any, Dict
+from typing import Any
 
 from core.config import (
     RESEARCH_KEYWORD_CANDIDATE_LIMIT,
@@ -61,10 +61,7 @@ _NAME_TOKEN_STOPWORDS = {
 
 
 def _name_is_matchable(name: str) -> bool:
-    name = name.strip()
-    if len(name) >= 3:
-        return True
-    return len(name) >= 4 and name.isascii()
+    return len(name.strip()) >= 3
 
 
 def _entry_display_name(entry: dict[str, str]) -> str:
@@ -294,7 +291,7 @@ def _theme_relation_fields(theme_candidate: dict[str, Any]) -> tuple[str, str]:
 def _add_theme_candidate(
     candidates: dict[str, dict[str, Any]],
     entry: dict[str, str],
-    watchlist: Dict[str, str],
+    watchlist: dict[str, str],
     evidence: dict[str, str],
     relation_keyword: str,
     relation_reason: str,
@@ -326,7 +323,7 @@ def _add_theme_candidate(
 
 def build_research_candidate_universe(
     stock_db: StockDatabase,
-    watchlist: Dict[str, str],
+    watchlist: dict[str, str],
     news_items: list[dict[str, Any]],
     market_view: str = "",
     max_candidates: int = 30,
@@ -414,6 +411,9 @@ def build_research_candidate_universe(
             # 별칭(AAPL 등)으로 찾았으면 universe 키를 대표 코드로 쓴다.
             canonical = str(entry.get("code") or "") or resolved_code
             if canonical in candidates:
+                matched_news = candidates[canonical].setdefault("matched_news", [])
+                if evidence not in matched_news:
+                    matched_news.append(evidence)
                 continue
             candidates[canonical] = {
                 "code": canonical,

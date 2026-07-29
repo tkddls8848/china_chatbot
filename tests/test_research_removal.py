@@ -1,17 +1,10 @@
 import asyncio
 import json
-import os
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
-
-from llm.market_view import MarketViewAnalyzer
+from llm.market_view import MarketViewAnalyzer, MarketViewError
 from research import handlers
 
 
@@ -117,6 +110,110 @@ def test_market_view_parser_normalizes_relevance():
     )
 
     assert result["actions"][0]["relevance"] == 0.0
+
+
+def test_market_view_parser_scopes_and_caps_new_actions():
+    analyzer = object.__new__(MarketViewAnalyzer)
+    analyzer._max_new_actions = 1
+    result = analyzer._parse_analysis(
+        json.dumps(
+            {
+                "summary": "요약",
+                "actions": [
+                    {
+                        "ticker": "NOT-A-CANDIDATE",
+                        "action": "add",
+                        "confidence": 0.9,
+                    },
+                    {
+                        "ticker": "MSFT",
+                        "action": "add",
+                        "confidence": 0.9,
+                    },
+                    {
+                        "ticker": "AAPL",
+                        "action": "ADD",
+                        "confidence": 1.4,
+                        "relevance": -0.2,
+                    },
+                    {
+                        "ticker": "005930",
+                        "action": "watch",
+                        "confidence": 0.7,
+                    },
+                    {
+                        "ticker": "00700",
+                        "action": "remove",
+                        "confidence": -0.2,
+                        "relevance": 1.4,
+                    },
+                    {
+                        "ticker": "AAPL",
+                        "action": "buy",
+                        "confidence": 1,
+                    },
+                ],
+                "risks": [],
+            }
+        ),
+        watchlist={"US:NASDAQ:MSFT": "Microsoft", "00700": "Tencent"},
+        candidate_universe=[
+            {"code": "US:NASDAQ:AAPL"},
+            {"code": "US:NASDAQ:MSFT"},
+            {"code": "KR:KOSPI:005930"},
+        ],
+    )
+
+    assert result["actions"] == [
+        {
+            "ticker": "US:NASDAQ:AAPL",
+            "name": "",
+            "action": "add",
+            "confidence": 1.0,
+            "relevance": 0.0,
+            "reason": "",
+            "evidence": [],
+        },
+        {
+            "ticker": "00700",
+            "name": "",
+            "action": "remove",
+            "confidence": 0.0,
+            "relevance": 1.0,
+            "reason": "",
+            "evidence": [],
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("confidence", float("nan")),
+        ("confidence", float("inf")),
+        ("relevance", float("-inf")),
+    ],
+)
+def test_market_view_parser_rejects_non_finite_action_scores(field, value):
+    analyzer = object.__new__(MarketViewAnalyzer)
+    action = {
+        "ticker": "600001",
+        "action": "remove",
+        "confidence": 0.8,
+        "relevance": 0.5,
+    }
+    action[field] = value
+
+    with pytest.raises(MarketViewError, match=rf"{field} must be finite"):
+        analyzer._parse_analysis(
+            json.dumps(
+                {
+                    "summary": "요약",
+                    "actions": [action],
+                    "risks": [],
+                }
+            )
+        )
 
 
 class _WatchlistManagerStub:

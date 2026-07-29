@@ -35,14 +35,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if await handle_menu_callback(update, context, data):
         return
 
-    registry = context.bot_data.get("feature_registry")
-    if registry is not None:
-        await registry.dispatch_callback(query, context, data)
+    registry = context.bot_data["feature_registry"]
+    await registry.dispatch_callback(query, context, data)
 
 
 async def configure_telegram_menu(app: Application) -> None:
-    registry = app.bot_data.get("feature_registry")
-    commands = registry.telegram_commands() if registry is not None else []
+    registry = app.bot_data["feature_registry"]
+    commands = registry.telegram_commands()
     await app.bot.set_my_commands(commands)
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     try:

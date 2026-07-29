@@ -40,5 +40,4 @@ FEATURE = FeatureSpec(
         MenuSpec("❔ 도움말", "nav:help", 3),
     ),
     install_services=_install_services,
-    summary="도움말·기능 상태·뉴스 소스 상태·GPU 제어",
 )

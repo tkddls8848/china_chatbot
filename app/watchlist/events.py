@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import html
 import json
 import logging
 from datetime import datetime, timedelta
@@ -127,7 +128,8 @@ def build_scorecard_lines(
             latest_by_code[code] = event
 
     for code, event in latest_by_code.items():
-        name = str(event.get("name") or watchlist.get(code) or code)
+        name = html.escape(str(event.get("name") or watchlist.get(code) or code))
+        display_code = html.escape(code)
         kind = event.get("event")
         entry_price = event.get("price")
         current = current_prices.get(code)
@@ -136,8 +138,12 @@ def build_scorecard_lines(
         change_part = f"{change:+.1f}%" if change is not None else "가격 데이터 없음"
 
         if kind == "add" and code in watchlist:
-            added_lines.append(f"• {name} ({code}) {ts} 편입 → {change_part}")
+            added_lines.append(
+                f"• {name} ({display_code}) {ts} 편입 → {change_part}"
+            )
         elif kind == "remove":
-            removed_lines.append(f"• {name} ({code}) {ts} 편출 → 이후 {change_part}")
+            removed_lines.append(
+                f"• {name} ({display_code}) {ts} 편출 → 이후 {change_part}"
+            )
 
     return {"added": added_lines, "removed": removed_lines}

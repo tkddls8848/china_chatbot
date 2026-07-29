@@ -8,7 +8,6 @@ from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.ext import Application, ContextTypes
 
-from handlers import configure_telegram_menu
 from core.config import (
     FEATURES_ENABLED,
     RUNTIME_LOCK_FILE,
@@ -16,7 +15,8 @@ from core.config import (
 )
 from core.data_layout import migrate_legacy_data_files
 from features import build_feature_registry
-from webadmin import start_web_admin, stop_web_admin
+from handlers.commands import configure_telegram_menu
+from webadmin.server import start_web_admin, stop_web_admin
 
 logger = logging.getLogger(__name__)
 _SINGLE_INSTANCE_LOCK = None
@@ -60,8 +60,8 @@ async def _start_application(app: Application) -> None:
     scheduler.start()
     # 웹 서버는 Application 기동 후에만 시작할 수 있어 install_services가
     # 아닌 여기서 기능 활성 여부를 보고 띄운다.
-    registry = app.bot_data.get("feature_registry")
-    if registry is not None and registry.is_enabled("web_admin"):
+    registry = app.bot_data["feature_registry"]
+    if registry.is_enabled("web_admin"):
         await start_web_admin(app)
 
 

@@ -410,15 +410,3 @@ def _parse_allowed_chat_ids() -> frozenset[int]:
 
 # 비어 있으면 모두 허용(기존 동작). 채우면 해당 chat_id에서만 명령을 받는다.
 ALLOWED_CHAT_IDS = _parse_allowed_chat_ids()
-HELP_TEXT = (
-    "<b>명령어 안내</b>\n\n"
-    "/market [일수] — 국가별 뉴스 감성\n"
-    "/menu · /list — 관심종목 관리·목록\n"
-    "/add 종목코드 — 관심종목 추가\n"
-    "/view [종목코드] — 종목 감성\n"
-    "/score — 운영 신호 성과\n"
-    "/research show|set|run|clear — 리서치\n"
-    "/briefing morning|evening|scorecard — 브리핑\n"
-    "/stockdb build · /system — 관리\n\n"
-    "종목코드 예: 중국 600519 · 홍콩 09988"
-)

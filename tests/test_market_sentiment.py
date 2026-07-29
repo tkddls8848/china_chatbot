@@ -2,16 +2,8 @@ import asyncio
 import json
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
-import os
-import sys
-from pathlib import Path
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from state.news_log import NewsLog, aggregate_market_sentiment, market_history_gaps
 from features.market_sentiment import handlers as commands

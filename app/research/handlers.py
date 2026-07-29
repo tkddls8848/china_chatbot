@@ -1,10 +1,10 @@
-﻿import asyncio
+import asyncio
 import html
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -13,9 +13,11 @@ from core.config import (
     RESEARCH_DISCOVERY_RESERVED_SLOTS,
     RESEARCH_MAX_CANDIDATES,
     RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
+    TELEGRAM_MESSAGE_LIMIT,
 )
-from core.workers import run_non_urgent, wait_for_urgent_idle
 from core.menu_status import set_menu_button_text
+from core.telegram_html import truncate_html
+from core.workers import run_non_urgent, wait_for_urgent_idle
 from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
 from llm.market_view import MarketViewError, MarketViewManager
@@ -25,8 +27,6 @@ from watchlist.events import record_watchlist_event
 
 logger = logging.getLogger(__name__)
 _RESEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="research")
-
-TELEGRAM_MESSAGE_LIMIT = 4096
 
 
 def _log_research_task_error(task: asyncio.Task) -> None:
@@ -109,7 +109,7 @@ def _normalize_code(code: str) -> str:
 
 def _collect_research_actions(
     result: dict[str, Any],
-    watchlist: Dict[str, str],
+    watchlist: dict[str, str],
     stock_db: StockDatabase,
 ) -> dict[str, list[dict[str, Any]]]:
     add_items: list[dict[str, Any]] = []
@@ -302,9 +302,7 @@ def _format_research_result_message(
     )
     if dropped_lines:
         text += f"\n\n<b>검증에서 기각된 후보</b>\n{chr(10).join(dropped_lines)}"
-    if len(text) > TELEGRAM_MESSAGE_LIMIT:
-        text = text[: TELEGRAM_MESSAGE_LIMIT - 3] + "..."
-    return text
+    return truncate_html(text, TELEGRAM_MESSAGE_LIMIT)
 
 
 async def cmd_research(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

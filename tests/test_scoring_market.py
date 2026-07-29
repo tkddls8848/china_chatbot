@@ -4,14 +4,7 @@
 잘못 찍히는 경우가 있다(docs/market_tinker_error.md). score_signals가
 StockDatabase의 종목별 market으로 이를 덮어써야 잘못된 시세 조회를 피한다.
 """
-import os
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from stocks import StockDatabase
 from state import scoring

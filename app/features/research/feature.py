@@ -72,7 +72,14 @@ FEATURE = FeatureSpec(
     key="research",
     label="시장 리서치",
     requires=frozenset({"news", "watchlist", "instruments", "quant"}),
-    commands=(CommandSpec("research", "리서치 실행", cmd_research),),
+    commands=(
+        CommandSpec(
+            "research",
+            "리서치 실행",
+            cmd_research,
+            usage="show|set|run|clear",
+        ),
+    ),
     menus=(
         MenuSpec("🔎 리서치", "nav:research", 1, "🔎 리서치", 1),
     ),
@@ -81,9 +88,4 @@ FEATURE = FeatureSpec(
     ),
     install_services=_install_services,
     data_files=("data/research/market_research.json",),
-    prompts=(
-        "prompts/market_research_ko.txt",
-        "prompts/market_research_verify_ko.txt",
-    ),
-    summary="뉴스·관심종목·정량 데이터를 결합한 시장 분석",
 )

@@ -148,7 +148,6 @@ def build_wencai_candidates(
         return []
 
     code_col = next((c for c in df.columns if "代码" in str(c)), None)
-    name_col = next((c for c in df.columns if "简称" in str(c) or "名称" in str(c)), None)
     if code_col is None:
         return []
 
@@ -164,7 +163,7 @@ def build_wencai_candidates(
         candidates.append(
             _candidate_entry(
                 code,
-                display_name or (str(row[name_col]) if name_col else code),
+                display_name,
                 stock_db.get_market(code) or "CN",
                 watchlist,
                 relation_keyword="问财",

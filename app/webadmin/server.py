@@ -67,7 +67,7 @@ def _tail_jsonl(path: Path, limit: int) -> list[dict[str, Any]]:
 def build_app(bot_app):
     """텔레그램 Application을 캡처한 FastAPI 앱을 만든다."""
     from fastapi import Depends, FastAPI, HTTPException, status
-    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.responses import HTMLResponse
     from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
     api = FastAPI(title="China Chatbot 관리", docs_url=None, redoc_url=None)
@@ -132,17 +132,23 @@ def build_app(bot_app):
         code = str(payload.get("code", "")).strip()
         if not code:
             raise HTTPException(status_code=400, detail="종목 코드가 필요합니다.")
+        stock_db = _bot_data().get("stock_db")
+        if stock_db is None:
+            raise HTTPException(
+                status_code=503,
+                detail="종목 DB 기능을 사용할 수 없습니다.",
+            )
+        resolved = stock_db.resolve_code(code)
+        if resolved is None:
+            raise HTTPException(
+                status_code=400,
+                detail="종목 DB에 없는 코드입니다.",
+            )
         name = str(payload.get("name", "")).strip()
         if not name:
-            stock_db = _bot_data().get("stock_db")
-            if stock_db is not None:
-                resolved = stock_db.resolve_code(code) or code
-                name = stock_db.get_display_name(resolved) or resolved
-                code = resolved
-            else:
-                name = code
-        await manager.add(code, name)
-        return {"code": code, "name": name}
+            name = stock_db.get_display_name(resolved) or resolved
+        await manager.add(resolved, name)
+        return {"code": resolved, "name": name}
 
     @api.delete("/api/watchlist/{code}")
     async def watchlist_remove(code: str, _: str = Depends(require_auth)):

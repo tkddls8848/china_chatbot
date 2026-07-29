@@ -13,7 +13,11 @@ from watchlist import (
 
 
 def _install_services(app) -> None:
-    app.bot_data["watchlist_manager"] = WatchlistManager(WATCHLIST_FILE)
+    stock_db = app.bot_data["stock_db"]
+    app.bot_data["watchlist_manager"] = WatchlistManager(
+        WATCHLIST_FILE,
+        code_resolver=stock_db.resolve_code,
+    )
     app.bot_data["watchlist_events"] = WatchlistEventLog(WATCHLIST_EVENTS_FILE)
 
 FEATURE = FeatureSpec(
@@ -22,7 +26,7 @@ FEATURE = FeatureSpec(
     requires=frozenset({"instruments"}),
     commands=(
         CommandSpec("menu", "관심종목 관리", cmd_menu),
-        CommandSpec("add", "관심종목 추가", cmd_add),
+        CommandSpec("add", "관심종목 추가", cmd_add, usage="종목코드"),
         CommandSpec("list", "관심종목 목록", cmd_list),
     ),
     menus=(
@@ -33,5 +37,4 @@ FEATURE = FeatureSpec(
     ),
     install_services=_install_services,
     data_files=("data/watchlist/watchlist.json", "data/watchlist/watchlist_events.json"),
-    summary="관심종목 추가·삭제·목록과 변경 이벤트",
 )

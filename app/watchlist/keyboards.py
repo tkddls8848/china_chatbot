@@ -1,5 +1,3 @@
-from typing import Dict
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
@@ -12,7 +10,7 @@ def build_add_market_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def build_list_keyboard(watchlist: Dict[str, str]) -> InlineKeyboardMarkup:
+def build_list_keyboard(watchlist: dict[str, str]) -> InlineKeyboardMarkup:
     buttons = [
         [
             InlineKeyboardButton(

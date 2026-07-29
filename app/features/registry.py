@@ -66,20 +66,22 @@ class FeatureRegistry:
         installed_keys: set[str] = set()
         pending = list(requested_specs)
         while pending:
-            ready = [
-                spec
-                for spec in pending
-                if spec.requires <= installed_keys
-            ]
-            if not ready:
+            ready = next(
+                (
+                    spec
+                    for spec in pending
+                    if spec.requires <= installed_keys
+                ),
+                None,
+            )
+            if ready is None:
                 cycle = ", ".join(sorted(spec.key for spec in pending))
                 raise FeatureConfigurationError(
                     f"기능 의존성 순환: {cycle}"
                 )
-            for spec in ready:
-                enabled_specs.append(spec)
-                installed_keys.add(spec.key)
-                pending.remove(spec)
+            enabled_specs.append(ready)
+            installed_keys.add(ready.key)
+            pending.remove(ready)
 
         command_names = [
             command.name
@@ -112,20 +114,89 @@ class FeatureRegistry:
             )
             raise FeatureConfigurationError(f"데이터 소유권 중복: {details}")
 
+        menu_owners: dict[str, list[str]] = {}
+        persistent_callbacks: dict[str, list[tuple[str, str]]] = {}
+        for spec in all_specs:
+            for menu in spec.menus:
+                menu_owners.setdefault(menu.callback_data, []).append(spec.key)
+                if menu.persistent_label:
+                    persistent_callbacks.setdefault(
+                        menu.persistent_label,
+                        [],
+                    ).append((spec.key, menu.callback_data))
+
+        duplicate_menu_callbacks = {
+            callback_data: owners
+            for callback_data, owners in menu_owners.items()
+            if len(owners) > 1
+        }
+        if duplicate_menu_callbacks:
+            details = "; ".join(
+                f"{callback_data} -> {', '.join(owners)}"
+                for callback_data, owners in sorted(
+                    duplicate_menu_callbacks.items()
+                )
+            )
+            raise FeatureConfigurationError(
+                f"중복 메뉴 callback_data: {details}"
+            )
+
+        duplicate_persistent_labels = {
+            label: entries
+            for label, entries in persistent_callbacks.items()
+            if len(entries) > 1
+        }
+        if duplicate_persistent_labels:
+            details = "; ".join(
+                f"{label} -> {', '.join(owner for owner, _ in entries)}"
+                for label, entries in sorted(
+                    duplicate_persistent_labels.items()
+                )
+            )
+            raise FeatureConfigurationError(f"중복 하단 메뉴 라벨: {details}")
+
         self._all_specs = tuple(all_specs)
         self._enabled_specs = tuple(enabled_specs)
         self._enabled_keys = frozenset(requested)
+        self._menu_owners = {
+            callback_data: owners[0]
+            for callback_data, owners in menu_owners.items()
+        }
+        self._persistent_callbacks = {
+            label: entries[0][1]
+            for label, entries in persistent_callbacks.items()
+        }
 
     @property
     def enabled_keys(self) -> frozenset[str]:
         return self._enabled_keys
 
-    @property
-    def enabled_specs(self) -> tuple[FeatureSpec, ...]:
-        return self._enabled_specs
-
     def is_enabled(self, key: str) -> bool:
         return key in self._enabled_keys
+
+    def menu_owner(self, callback_data: str) -> str | None:
+        owner = self._menu_owners.get(callback_data)
+        if owner is not None:
+            return owner
+        matching_roots = (
+            (root, root_owner)
+            for root, root_owner in self._menu_owners.items()
+            if callback_data.startswith(f"{root}:")
+        )
+        return next(
+            (
+                root_owner
+                for _, root_owner in sorted(
+                    matching_roots,
+                    key=lambda item: len(item[0]),
+                    reverse=True,
+                )
+            ),
+            None,
+        )
+
+    def persistent_callback(self, label: str) -> str | None:
+        return self._persistent_callbacks.get(label)
 
     def install_telegram_handlers(self, app: Application) -> None:
         for feature in self._enabled_specs:
@@ -188,7 +259,15 @@ class FeatureRegistry:
         lines = ["<b>명령어 안내</b>", ""]
         for feature in self._enabled_specs:
             for command in feature.commands:
-                lines.append(f"/{command.name} — {command.description}")
+                usage = f" {command.usage}" if command.usage else ""
+                lines.append(f"/{command.name}{usage} — {command.description}")
+        lines.extend(
+            [
+                "",
+                "종목코드 예: 중국 600519 · 홍콩 09988",
+                "한국 KR:KOSPI:005930 · 미국 US:NASDAQ:AAPL",
+            ]
+        )
         return "\n".join(lines)
 
     def catalog_lines(self) -> list[str]:

@@ -1,13 +1,5 @@
 """리서치 결과의 마켓 뷰 반론(view_critique) 파싱·렌더링 검증."""
 import json
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from llm.market_view import MarketViewAnalyzer
 from research.handlers import _format_research_result_message

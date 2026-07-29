@@ -3,7 +3,7 @@ import logging
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import requests
 
@@ -57,8 +57,8 @@ class TranslationService:
         """런타임에 Ollama num_gpu를 변경한다(-1=자동, 0=CPU, N=레이어). 다음 요청부터 반영."""
         self._num_gpu = max(-1, num_gpu)
 
-    def _load_prompts(self, prompt_dir: Path) -> Dict[str, str]:
-        prompts: Dict[str, str] = {}
+    def _load_prompts(self, prompt_dir: Path) -> dict[str, str]:
+        prompts: dict[str, str] = {}
         for source, filename in self._PROMPT_FILES.items():
             path = prompt_dir / filename
             prompts[source] = path.read_text(encoding="utf-8")

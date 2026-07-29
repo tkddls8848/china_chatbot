@@ -1,13 +1,5 @@
 """FeatureRegistry의 CallbackSpec 기반 콜백 디스패치 검증."""
 import asyncio
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from features.base import CallbackSpec, FeatureSpec
 from features.registry import FeatureRegistry

@@ -140,10 +140,6 @@ class NewsSourceRegistry:
         self._cooldown = timedelta(minutes=max(1, cooldown_minutes))
         self._health: dict[str, _SourceHealth] = {spec.key: _SourceHealth() for spec in specs}
 
-    @property
-    def specs(self) -> list[SourceSpec]:
-        return list(self._specs)
-
     def active_specs(self) -> list[SourceSpec]:
         """쿨다운 중이 아닌 소스를 우선순위 순서로 반환한다."""
         now = datetime.now()

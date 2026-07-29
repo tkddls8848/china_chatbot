@@ -1,12 +1,4 @@
-import os
-import sys
 from datetime import datetime, timedelta
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from news.registry import NewsSourceRegistry, build_source_specs
 

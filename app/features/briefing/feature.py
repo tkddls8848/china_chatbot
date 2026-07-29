@@ -80,12 +80,17 @@ FEATURE = FeatureSpec(
     key="briefing",
     label="브리핑",
     requires=frozenset({"news", "watchlist", "research", "quant"}),
-    commands=(CommandSpec("briefing", "브리핑 생성", cmd_briefing),),
+    commands=(
+        CommandSpec(
+            "briefing",
+            "브리핑 생성",
+            cmd_briefing,
+            usage="morning|evening|scorecard",
+        ),
+    ),
     menus=(
         MenuSpec("📰 브리핑", "nav:briefing", 1, "📰 브리핑", 1),
     ),
     install_services=_install_services,
     install_jobs=_install_jobs,
-    prompts=("prompts/briefing_ko.txt",),
-    summary="모닝·마감 브리핑과 관심종목 주간 성적표",
 )

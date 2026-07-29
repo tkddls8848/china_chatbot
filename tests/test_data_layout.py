@@ -1,13 +1,4 @@
 """레거시 평면 data/ 배치의 기능별 디렉토리 이전 검증."""
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
-
 from core import config
 from core.data_layout import _default_pairs, migrate_legacy_data_files
 

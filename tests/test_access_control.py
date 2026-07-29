@@ -1,17 +1,10 @@
 import asyncio
-import os
-import sys
-from pathlib import Path
 from types import SimpleNamespace
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 from core import access
 import handlers.commands as commands
 from core.menu_status import set_menu_button_text
+from features import ALL_FEATURES, build_feature_registry
 from handlers.navigation import (
     handle_menu_callback,
     handle_menu_text,
@@ -22,6 +15,10 @@ from handlers.navigation import (
 from handlers.commands import configure_telegram_menu
 from watchlist.handlers import cmd_menu, handle_watchlist_callback
 from watchlist.keyboards import build_list_keyboard
+
+
+def _registry():
+    return build_feature_registry(feature.key for feature in ALL_FEATURES)
 
 
 def _update(chat_id):
@@ -135,7 +132,7 @@ def test_menu_status_changes_only_target_button():
 def test_persistent_menu_exposes_score_button():
     labels = {
         button.text
-        for row in persistent_menu().keyboard
+        for row in persistent_menu(_registry()).keyboard
         for button in row
     }
     assert "📈 성과" in labels
@@ -163,7 +160,11 @@ def test_home_text_refreshes_persistent_menu_before_inline_home():
 
     message = Message()
     update = SimpleNamespace(effective_message=message)
-    context = SimpleNamespace(user_data={}, bot_data={}, application=None)
+    context = SimpleNamespace(
+        user_data={},
+        bot_data={"feature_registry": _registry()},
+        application=None,
+    )
 
     asyncio.run(handle_menu_text(update, context))
 
@@ -191,19 +192,7 @@ def test_bot_startup_pushes_latest_persistent_menu(monkeypatch):
         async def send_message(self, **kwargs):
             sent.append(kwargs)
 
-    registry = SimpleNamespace(
-        telegram_commands=lambda: [],
-        enabled_keys=frozenset(
-            {
-                "market_sentiment",
-                "watchlist",
-                "research",
-                "briefing",
-                "signal_scoring",
-                "system_admin",
-            }
-        ),
-    )
+    registry = _registry()
     app = SimpleNamespace(
         bot=Bot(),
         bot_data={"feature_registry": registry},
@@ -290,7 +279,10 @@ def test_navigation_watch_opens_delete_list_directly():
     )
     context = SimpleNamespace(
         user_data={},
-        bot_data={"watchlist_manager": Watchlist()},
+        bot_data={
+            "feature_registry": _registry(),
+            "watchlist_manager": Watchlist(),
+        },
         application=None,
     )
     handled = asyncio.run(

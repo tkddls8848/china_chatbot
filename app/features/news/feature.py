@@ -85,6 +85,4 @@ FEATURE = FeatureSpec(
     install_services=_install_services,
     install_jobs=_install_jobs,
     data_files=("data/news/sent_ids.json", "data/news/news_log.json"),
-    prompts=("prompts/futu_ko.txt", "prompts/global_ko.txt"),
-    summary="Futu·Sina·Google News(글로벌·미국·한국)·RSS 수집, 번역, 날짜 필터와 전송",
 )

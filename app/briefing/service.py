@@ -17,8 +17,9 @@ from core.config import (
     TELEGRAM_CHAT_ID,
     TELEGRAM_MESSAGE_LIMIT,
 )
-from core.workers import run_non_urgent, wait_for_urgent_idle
 from core.menu_status import set_menu_button_text
+from core.telegram_html import truncate_html
+from core.workers import run_non_urgent, wait_for_urgent_idle
 from research.news import collect_global_market_news_items
 from state.news_log import aggregate_sentiment_by_code
 from stocks.quotes import format_quant_summary
@@ -32,12 +33,6 @@ _WEEKDAYS_KO = ["월", "화", "수", "목", "금", "토", "일"]
 def _today_header() -> str:
     now = datetime.now()
     return f"{now.strftime('%Y-%m-%d')} ({_WEEKDAYS_KO[now.weekday()]})"
-
-
-def _truncate(text: str) -> str:
-    if len(text) <= TELEGRAM_MESSAGE_LIMIT:
-        return text
-    return text[: TELEGRAM_MESSAGE_LIMIT - 3] + "..."
 
 
 def _sentiment_marker(sentiment) -> str:
@@ -153,7 +148,7 @@ async def send_morning_briefing(app: Application, force: bool = False) -> None:
     try:
         await app.bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
-            text=_truncate("\n\n".join(sections)),
+            text=truncate_html("\n\n".join(sections), TELEGRAM_MESSAGE_LIMIT),
             parse_mode="HTML",
         )
         logger.info("[BRIEFING] 모닝 브리핑 전송 완료")
@@ -218,7 +213,7 @@ async def send_evening_briefing(app: Application, force: bool = False) -> None:
     try:
         await app.bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
-            text=_truncate("\n\n".join(sections)),
+            text=truncate_html("\n\n".join(sections), TELEGRAM_MESSAGE_LIMIT),
             parse_mode="HTML",
         )
         logger.info("[BRIEFING] 마감 브리핑 전송 완료")
@@ -269,7 +264,7 @@ async def send_weekly_scorecard(app: Application, notify_empty: bool = False) ->
     try:
         await app.bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
-            text=_truncate("\n\n".join(sections)),
+            text=truncate_html("\n\n".join(sections), TELEGRAM_MESSAGE_LIMIT),
             parse_mode="HTML",
         )
         logger.info("[SCORECARD] 주간 성적표 전송 완료")

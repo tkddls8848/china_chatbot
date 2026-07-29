@@ -12,6 +12,8 @@ import requests
 logger = logging.getLogger(__name__)
 
 SIGHT_KEY = "sight"
+_ALLOWED_ACTIONS = frozenset({"add", "keep", "remove", "watch"})
+_NEW_ACTIONS = frozenset({"add", "watch"})
 
 
 class MarketViewError(RuntimeError):
@@ -200,11 +202,12 @@ class MarketViewAnalyzer:
             if self._timeout is not None
             else None
         )
+        candidates = candidate_universe or []
         payload = {
             "market_view": market_view,
             "current_watchlist": watchlist,
             "news_items": news_items,
-            "candidate_universe": candidate_universe or [],
+            "candidate_universe": candidates,
             "remove_relevance_threshold": self._remove_relevance_threshold,
             "max_new_actions": self._max_new_actions,
         }
@@ -216,7 +219,11 @@ class MarketViewAnalyzer:
             payload,
             timeout=self._remaining_timeout(deadline),
         )
-        result = self._parse_analysis(raw)
+        result = self._parse_analysis(
+            raw,
+            watchlist=watchlist,
+            candidate_universe=candidates,
+        )
         if self._verification_enabled:
             result = self._verify_actions(
                 market_view,
@@ -429,7 +436,13 @@ class MarketViewAnalyzer:
         selected = min(self._max_ctx, max(self._min_ctx, bucket))
         return selected, estimated_input, required
 
-    def _parse_analysis(self, raw: str) -> dict[str, Any]:
+    def _parse_analysis(
+        self,
+        raw: str,
+        *,
+        watchlist: dict[str, str] | None = None,
+        candidate_universe: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         payload = self._extract_json_object(raw)
         try:
             data = json.loads(payload)
@@ -451,45 +464,21 @@ class MarketViewAnalyzer:
         if not isinstance(risks, list):
             raise MarketViewError("analysis JSON risks must be a list")
 
-        normalized_actions: list[dict[str, Any]] = []
-        for item in actions:
-            if not isinstance(item, dict):
-                raise MarketViewError("analysis JSON actions must contain objects")
-            ticker = item.get("ticker")
-            action = item.get("action")
-            if not isinstance(ticker, str) or not isinstance(action, str):
-                raise MarketViewError("analysis action requires ticker and action")
-
-            confidence = item.get("confidence", 0)
-            try:
-                confidence = float(confidence)
-            except (TypeError, ValueError) as e:
-                raise MarketViewError("analysis action confidence must be numeric") from e
-
-            evidence = item.get("evidence", [])
-            if not isinstance(evidence, list):
-                raise MarketViewError("analysis action evidence must be a list")
-
-            relevance = item.get("relevance")
-            if relevance is not None:
-                try:
-                    relevance = min(1.0, max(0.0, float(relevance)))
-                except (TypeError, ValueError) as e:
-                    raise MarketViewError(
-                        "analysis action relevance must be numeric"
-                    ) from e
-
-            normalized_actions.append(
-                {
-                    "ticker": ticker.strip(),
-                    "name": str(item.get("name") or "").strip(),
-                    "action": action,
-                    "confidence": confidence,
-                    "relevance": relevance,
-                    "reason": str(item.get("reason") or "").strip(),
-                    "evidence": [e for e in evidence if isinstance(e, dict)],
-                }
-            )
+        candidate_codes = (
+            [
+                str(item.get("code") or "").strip()
+                for item in candidate_universe
+                if isinstance(item, dict) and str(item.get("code") or "").strip()
+            ]
+            if candidate_universe is not None
+            else None
+        )
+        normalized_actions = self._normalize_actions(
+            actions,
+            watchlist_codes=list(watchlist) if watchlist is not None else None,
+            candidate_codes=candidate_codes,
+            max_new_actions=getattr(self, "_max_new_actions", 4),
+        )
 
         return {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -498,6 +487,141 @@ class MarketViewAnalyzer:
             "risks": [str(r).strip() for r in risks if str(r).strip()],
             "view_critique": self._normalize_view_critique(data.get("view_critique")),
         }
+
+    @staticmethod
+    def _normalize_score(value: Any, field: str, *, optional: bool = False) -> float | None:
+        if value is None and optional:
+            return None
+        try:
+            score = float(value)
+        except (TypeError, ValueError) as e:
+            raise MarketViewError(f"analysis action {field} must be numeric") from e
+        if not math.isfinite(score):
+            raise MarketViewError(f"analysis action {field} must be finite")
+        return min(1.0, max(0.0, score))
+
+    @staticmethod
+    def _canonical_code_index(codes: list[str]) -> dict[str, str]:
+        """Build a case-insensitive exact/suffix index for canonical stock keys.
+
+        `US:NASDAQ:AAPL` and `KR:KOSPI:005930` may be returned by a small model
+        as `AAPL` and `005930`. A suffix is accepted only when it resolves to one
+        supplied canonical key; ambiguous aliases are deliberately rejected.
+        """
+        exact: dict[str, str] = {}
+        suffixes: dict[str, set[str]] = {}
+        for raw_code in codes:
+            canonical = str(raw_code or "").strip()
+            if not canonical:
+                continue
+            token = canonical.upper()
+            exact.setdefault(token, canonical)
+            if ":" in token:
+                suffixes.setdefault(token.rsplit(":", 1)[-1], set()).add(canonical)
+
+        index = dict(exact)
+        for suffix, matches in suffixes.items():
+            if suffix not in index and len(matches) == 1:
+                index[suffix] = next(iter(matches))
+        return index
+
+    @classmethod
+    def _normalize_actions(
+        cls,
+        actions: list[Any],
+        *,
+        watchlist_codes: list[str] | None = None,
+        candidate_codes: list[str] | None = None,
+        max_new_actions: int = 4,
+    ) -> list[dict[str, Any]]:
+        """Validate and normalize LLM actions against the supplied universes.
+
+        Candidate scoping applies only to add/watch. Keep/remove are resolved
+        independently against the current watchlist so a removal cannot be lost
+        merely because the candidate universe was truncated.
+        """
+        watchlist_index = (
+            cls._canonical_code_index(watchlist_codes)
+            if watchlist_codes is not None
+            else None
+        )
+        candidate_index = (
+            cls._canonical_code_index(candidate_codes)
+            if candidate_codes is not None
+            else None
+        )
+        watchlist_tokens = {
+            str(code).strip().upper()
+            for code in (watchlist_codes or [])
+            if str(code).strip()
+        }
+        new_action_limit = max(0, int(max_new_actions))
+        new_action_count = 0
+        normalized: list[dict[str, Any]] = []
+        seen_tickers: set[str] = set()
+
+        for item in actions:
+            if not isinstance(item, dict):
+                raise MarketViewError("analysis JSON actions must contain objects")
+            ticker = item.get("ticker")
+            action = item.get("action")
+            if not isinstance(ticker, str) or not isinstance(action, str):
+                raise MarketViewError("analysis action requires ticker and action")
+
+            action = action.strip().lower()
+            if action not in _ALLOWED_ACTIONS:
+                continue
+            ticker = ticker.strip()
+            token = ticker.upper()
+            if not token:
+                continue
+
+            if action in _NEW_ACTIONS:
+                if candidate_index is not None:
+                    canonical = candidate_index.get(token)
+                    if canonical is None:
+                        continue
+                    ticker = canonical
+                if ticker.upper() in watchlist_tokens:
+                    continue
+                if new_action_count >= new_action_limit:
+                    continue
+            elif watchlist_index is not None:
+                canonical = watchlist_index.get(token)
+                if canonical is None:
+                    continue
+                ticker = canonical
+            canonical_token = ticker.upper()
+            if canonical_token in seen_tickers:
+                continue
+
+            confidence = cls._normalize_score(item.get("confidence", 0), "confidence")
+
+            evidence = item.get("evidence", [])
+            if not isinstance(evidence, list):
+                raise MarketViewError("analysis action evidence must be a list")
+
+            relevance = cls._normalize_score(
+                item.get("relevance"),
+                "relevance",
+                optional=True,
+            )
+
+            normalized.append(
+                {
+                    "ticker": ticker,
+                    "name": str(item.get("name") or "").strip(),
+                    "action": action,
+                    "confidence": confidence,
+                    "relevance": relevance,
+                    "reason": str(item.get("reason") or "").strip(),
+                    "evidence": [e for e in evidence if isinstance(e, dict)],
+                }
+            )
+            if action in _NEW_ACTIONS:
+                new_action_count += 1
+            seen_tickers.add(canonical_token)
+        return normalized
 
     @staticmethod
     def _normalize_view_critique(raw: Any) -> list[dict[str, Any]]:

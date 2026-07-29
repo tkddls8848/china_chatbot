@@ -3,15 +3,6 @@
 LLM이 추출한 mentioned_stocks에 미국 티커(JNJ.N, NVDA 등)가 섞여
 prediction_log에 기록되고 /score에서 시세 조회 실패를 일으키는 회귀 방지.
 """
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
-
 from news.utils import signal_codes
 from state.scoring import load_signals
 

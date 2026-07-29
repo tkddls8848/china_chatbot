@@ -7,6 +7,7 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from stocks import StockDatabase
+from stocks.universe import stock_key
 from watchlist.keyboards import (
     build_add_market_keyboard,
     build_list_keyboard,
@@ -24,18 +25,22 @@ def _normalize_stock_code(value: str) -> str | None:
 
 
 def normalize_selected_stock_code(selection: str, value: str) -> str | None:
-    market, exchange = selection.rsplit(":", 1)
+    try:
+        market, exchange = selection.rsplit(":", 1)
+    except ValueError:
+        return None
+    market = market.strip().upper()
+    exchange = exchange.strip().upper()
     raw = value.strip().upper()
     if market in {"KR", "CN", "HK"}:
         if not raw.isdigit():
             return None
-        raw = raw.zfill(5 if market == "HK" else 6)
     elif market == "US":
         if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,14}", raw) or raw.isdigit():
             return None
     else:
         return None
-    return f"{market}:{exchange}:{raw}"
+    return stock_key(market, exchange, raw)
 
 
 def _unsupported_code_message(code: str) -> str:
@@ -94,6 +99,7 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    code = stock_db.resolve_code(code) or code
     name = stock_db.get_display_name(code)
     if not name:
         await update.message.reply_text(
@@ -119,7 +125,10 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=build_list_keyboard(watchlist),
         )
         return
-    stock_list = "\n".join(f"  • {name} ({code})" for code, name in watchlist.items())
+    stock_list = "\n".join(
+        f"  • {html.escape(name)} ({html.escape(code)})"
+        for code, name in watchlist.items()
+    )
     await message.reply_text(
         f"<b>현재 관심종목</b>\n\n{stock_list}",
         parse_mode="HTML",

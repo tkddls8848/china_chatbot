@@ -22,6 +22,13 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 전체 설정과 기본값은 [`.env.example`](.env.example)에서 확인할 수 있습니다. 번역·LLM 브리핑을 사용하려면 Ollama 서버와 설정한 모델이 실행 중이어야 합니다.
 
+## 테스트
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
 ## 주요 기능
 
 - 중국·홍콩·미국·한국·글로벌 시장 뉴스 수집과 한국어 번역
@@ -39,7 +46,7 @@ OLLAMA_BASE_URL=http://localhost:11434
 | `/menu`, `/list` | 관심 종목 목록 |
 | `/add 종목코드` | 관심 종목 추가 |
 | `/view [종목코드]` | 종목별 뉴스 감성 |
-| `/score [backtest]` | 감성 신호 성과 |
+| `/score` | 감성 신호 성과 |
 | `/research show\|set\|run\|clear` | 리서치 후보 관리 |
 | `/briefing morning\|evening\|scorecard` | 브리핑 또는 성과표 생성 |
 | `/stockdb build` | 종목 DB 갱신 |

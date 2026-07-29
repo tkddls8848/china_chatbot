@@ -24,7 +24,7 @@ from core.config import (
     NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
     TELEGRAM_CHAT_ID,
 )
-from core.workers import run_non_urgent, urgent_phase
+from core.workers import urgent_phase
 from news.registry import NewsSourceRegistry, SourceSpec
 from news.sources import GlobalArticle
 from news.utils import (
@@ -41,7 +41,6 @@ from news.utils import (
     translate_article,
 )
 from state import NewsLog, PredictionLog, SentNewsTracker
-from stocks import StockDatabase
 from llm.translator import TranslationResult, TranslationService
 from watchlist import WatchlistManager
 
@@ -354,14 +353,6 @@ async def send_global_digest(
                     row.spec.key,
                     row.translated.title[:30],
                 )
-
-
-async def refresh_stock_db(stock_db: StockDatabase) -> None:
-    try:
-        await run_non_urgent(stock_db.build)
-        logger.info("[StockDB] 일별 갱신 완료")
-    except Exception as e:
-        logger.warning("[StockDB] 일별 갱신 실패: %s", e)
 
 
 async def fetch_all(app: Application) -> None:

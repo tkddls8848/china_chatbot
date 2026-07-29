@@ -1,19 +1,11 @@
 import asyncio
 import itertools
 import json
-import os
-import sys
 import threading
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "app"))
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat")
 
 import bot
 from bot import _acquire_single_instance_lock
@@ -40,6 +32,61 @@ def test_new_watchlist_starts_empty(tmp_path):
     assert json.loads(state_file.read_text(encoding="utf-8")) == {}
 
 
+def test_existing_watchlist_uses_injected_code_resolver(tmp_path):
+    state_file = tmp_path / "watchlist.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "CN:SH:600519": "Legacy Moutai",
+                "HK:HKEX:00700": "Legacy Tencent",
+                "aapl": "Legacy Apple",
+                "US:NASDAQ:AAPL": "Canonical Apple",
+                "005930": "Samsung",
+                "unknown": "Keep unresolved",
+            }
+        ),
+        encoding="utf-8",
+    )
+    aliases = {
+        "CN:SH:600519": "600519",
+        "HK:HKEX:00700": "00700",
+        "aapl": "US:NASDAQ:AAPL",
+        "US:NASDAQ:AAPL": "US:NASDAQ:AAPL",
+        "005930": "KR:KOSPI:005930",
+    }
+
+    manager = WatchlistManager(state_file, code_resolver=aliases.get)
+
+    assert asyncio.run(manager.get_all()) == {
+        "600519": "Legacy Moutai",
+        "00700": "Legacy Tencent",
+        "US:NASDAQ:AAPL": "Canonical Apple",
+        "KR:KOSPI:005930": "Samsung",
+        "unknown": "Keep unresolved",
+    }
+    assert json.loads(state_file.read_text(encoding="utf-8")) == asyncio.run(
+        manager.get_all()
+    )
+
+
+def test_watchlist_add_and_remove_use_injected_code_resolver(tmp_path):
+    state_file = tmp_path / "watchlist.json"
+    aliases = {"aapl": "US:NASDAQ:AAPL"}
+    manager = WatchlistManager(state_file, code_resolver=aliases.get)
+
+    async def exercise():
+        await manager.add("aapl", "Apple")
+        added = await manager.get_all()
+        removed = await manager.remove("aapl")
+        return added, removed, await manager.get_all()
+
+    added, removed, remaining = asyncio.run(exercise())
+
+    assert added == {"US:NASDAQ:AAPL": "Apple"}
+    assert removed == "Apple"
+    assert remaining == {}
+
+
 def test_scheduler_uses_application_lifecycle(monkeypatch):
     menu_configured = False
 
@@ -51,7 +98,13 @@ def test_scheduler_uses_application_lifecycle(monkeypatch):
 
     async def exercise():
         scheduler = AsyncIOScheduler()
-        app = SimpleNamespace(bot_data={"scheduler": scheduler})
+        registry = SimpleNamespace(is_enabled=lambda _key: False)
+        app = SimpleNamespace(
+            bot_data={
+                "feature_registry": registry,
+                "scheduler": scheduler,
+            }
+        )
 
         await bot._start_application(app)
         assert menu_configured
