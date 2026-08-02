@@ -1,0 +1,103 @@
+"""LLM 서비스 조립 지점.
+
+번역·시황 분석·브리핑은 모두 Cloudflare Workers AI를 쓴다. 기능(feature)들은
+서비스를 직접 조립하지 않고 이 팩토리를 호출한다.
+"""
+
+import logging
+
+from core.config import (
+    BRIEFING_LLM_ENABLED,
+    BRIEFING_PROMPT_FILE,
+    BRIEFING_TIMEOUT,
+    CLOUDFLARE_ACCOUNT_ID,
+    CLOUDFLARE_AI_BASE_URL,
+    CLOUDFLARE_ANALYSIS_MODEL,
+    CLOUDFLARE_API_TOKEN,
+    CLOUDFLARE_FAILURE_COOLDOWN_SECONDS,
+    CLOUDFLARE_FAILURE_THRESHOLD,
+    CLOUDFLARE_MAX_ATTEMPTS,
+    CLOUDFLARE_TRANSLATION_MODEL,
+    CLOUDFLARE_TRANSLATION_TIMEOUT,
+    NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
+    PROMPT_DIR,
+    RESEARCH_ANALYSIS_ENABLED,
+    RESEARCH_ANALYSIS_NUM_PREDICT,
+    RESEARCH_ANALYSIS_PROMPT_FILE,
+    RESEARCH_ANALYSIS_TIMEOUT,
+    RESEARCH_MAX_NEW_ACTIONS,
+    RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
+    RESEARCH_VERIFICATION_ENABLED,
+    RESEARCH_VERIFICATION_PROMPT_FILE,
+    TRANSLATION_ENABLED,
+    TRANSLATION_NUM_PREDICT,
+)
+from llm.backends import CloudflareWorkersAIBackend, LLMBackend, ResilientBackend
+from llm.briefing_writer import BriefingWriter
+from llm.market_view import MarketViewAnalyzer
+from llm.translator import TranslationService
+
+logger = logging.getLogger(__name__)
+
+
+def build_backend(purpose: str, *, model: str, timeout: int) -> LLMBackend:
+    """용도별 Cloudflare 백엔드를 만들고 재시도·회로 차단으로 감싼다."""
+    backend = CloudflareWorkersAIBackend(
+        account_id=CLOUDFLARE_ACCOUNT_ID,
+        api_token=CLOUDFLARE_API_TOKEN,
+        model=model,
+        base_url=CLOUDFLARE_AI_BASE_URL,
+        timeout=timeout,
+    )
+    logger.info("[LLM] purpose=%s provider=cloudflare model=%s", purpose, model)
+    return ResilientBackend(
+        backend=backend,
+        max_attempts=CLOUDFLARE_MAX_ATTEMPTS,
+        failure_threshold=CLOUDFLARE_FAILURE_THRESHOLD,
+        cooldown_seconds=CLOUDFLARE_FAILURE_COOLDOWN_SECONDS,
+    )
+
+
+def build_translation_service() -> TranslationService:
+    return TranslationService(
+        backend=build_backend(
+            "translation",
+            model=CLOUDFLARE_TRANSLATION_MODEL,
+            timeout=CLOUDFLARE_TRANSLATION_TIMEOUT,
+        ),
+        enabled=TRANSLATION_ENABLED,
+        prompt_dir=PROMPT_DIR,
+        num_predict=TRANSLATION_NUM_PREDICT,
+        brief_content_limit=NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
+    )
+
+
+def build_market_view_analyzer() -> MarketViewAnalyzer:
+    return MarketViewAnalyzer(
+        backend=build_backend(
+            "research_analysis",
+            model=CLOUDFLARE_ANALYSIS_MODEL,
+            # 분석은 입력이 크고 오래 걸리므로 리서치 타임아웃을 그대로 쓴다.
+            timeout=RESEARCH_ANALYSIS_TIMEOUT,
+        ),
+        enabled=RESEARCH_ANALYSIS_ENABLED,
+        timeout=RESEARCH_ANALYSIS_TIMEOUT,
+        num_predict=RESEARCH_ANALYSIS_NUM_PREDICT,
+        prompt_file=RESEARCH_ANALYSIS_PROMPT_FILE,
+        max_new_actions=RESEARCH_MAX_NEW_ACTIONS,
+        remove_relevance_threshold=RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
+        verification_enabled=RESEARCH_VERIFICATION_ENABLED,
+        verification_prompt_file=RESEARCH_VERIFICATION_PROMPT_FILE,
+    )
+
+
+def build_briefing_writer() -> BriefingWriter:
+    return BriefingWriter(
+        backend=build_backend(
+            "briefing",
+            model=CLOUDFLARE_ANALYSIS_MODEL,
+            timeout=BRIEFING_TIMEOUT,
+        ),
+        enabled=BRIEFING_LLM_ENABLED,
+        prompt_file=BRIEFING_PROMPT_FILE,
+    )

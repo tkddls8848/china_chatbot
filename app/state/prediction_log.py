@@ -1,7 +1,6 @@
 """뉴스 감성 신호 기록(JSONL append)과 종목별 뷰 집계.
 
-전송한 뉴스의 감성·관련종목을 예측 신호로 축적한다. /view 명령의 집계와
-scripts/score_predictions.py 오프라인 채점의 입력이 된다(docs/plan.md §5 1단계).
+전송한 뉴스의 감성·관련종목을 축적해 /view 명령의 집계 입력으로 사용한다.
 """
 
 import asyncio

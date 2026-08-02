@@ -65,6 +65,30 @@ def test_normalize_stock_code():
     assert normalize_stock_code("") == ""
 
 
+def test_brief_rules_declare_only_a_length_cap():
+    """분량은 상한만 지시한다. 목표 구간을 주면 출력 토큰과 비용이 함께 오른다."""
+    captured = {}
+
+    class _Backend:
+        name = "cloudflare"
+        model = "model"
+
+        def generate(self, **kwargs):
+            captured.update(kwargs)
+            return '{"title":"제목","content":"본문","mentioned_stocks":[]}'
+
+    service = object.__new__(TranslationService)
+    service._backend = _Backend()
+    service._num_predict = 1536
+    service._temperature = 0.1
+
+    service._request_translation("prompt", "제목", "본문", content_limit=300)
+
+    system_prompt = captured["system_prompt"]
+    assert "at most 300 characters" in system_prompt
+    assert "about" not in system_prompt.split("JSON output hard rules:")[1]
+
+
 def test_translation_rewrites_overlong_brief_instead_of_cutting():
     service = object.__new__(TranslationService)
     service._enabled = True

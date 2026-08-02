@@ -71,13 +71,6 @@ def briefing_menu() -> InlineKeyboardMarkup:
     ])
 
 
-def score_menu() -> InlineKeyboardMarkup:
-    return _keyboard([
-        [("운영 신호", "nav:score:live")],
-        *_back(),
-    ])
-
-
 def _context(context: ContextTypes.DEFAULT_TYPE, args: list[str]):
     # user_data를 그대로 전달해야 프록시로 호출되는 핸들러(cmd_add 등)가
     # add_market 같은 대화 상태에 접근할 수 있다(SimpleNamespace에는 기본으로 없음).
@@ -149,15 +142,6 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action.startswith("briefing:"):
         from briefing.service import cmd_briefing
         await cmd_briefing(update, _context(context, [action.split(":", 1)[1]]))
-    elif action == "score":
-        await message.edit_text(
-            "<b>신호 성과</b>",
-            parse_mode="HTML",
-            reply_markup=score_menu(),
-        )
-    elif action.startswith("score:"):
-        from features.signal_scoring.handlers import cmd_score
-        await cmd_score(update, _context(context, []))
     elif action == "system":
         from features.system_admin.handlers import cmd_system
         await cmd_system(update, _context(context, []))
@@ -214,12 +198,6 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 "<b>브리핑</b>",
                 parse_mode="HTML",
                 reply_markup=briefing_menu(),
-            )
-        elif action == "score":
-            await message.reply_text(
-                "<b>신호 성과</b>",
-                parse_mode="HTML",
-                reply_markup=score_menu(),
             )
         else:
             await message.reply_text("<b>관리</b>", parse_mode="HTML", reply_markup=_keyboard([

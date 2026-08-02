@@ -13,8 +13,8 @@
 | `market_sentiment` | 날짜별 시장 감성 백필·집계·차트 |
 | `research` | 뉴스·정량 데이터 기반 시장 리서치(중화권·미국·한국) |
 | `briefing` | 모닝·마감 브리핑과 주간 성적표 |
-| `signal_scoring` | 종목 감성 뷰와 신호 성과 채점 |
-| `system_admin` | 도움말·기능 상태·GPU와 소스 상태 |
+| `signal_scoring` | 종목별 뉴스 감성 뷰 |
+| `system_admin` | 도움말·기능 상태·소스 상태 |
 | `web_admin` | 인증이 적용된 내장 관리 웹 대시보드 |
 
 기능을 비활성화할 때는 `FEATURES_ENABLED`에서 키를 제거한다. 의존 기능이

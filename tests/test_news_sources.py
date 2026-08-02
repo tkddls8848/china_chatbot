@@ -1,11 +1,19 @@
 from news import sources
 
+# 소스 상한은 .env로 튜닝되는 값이다. 개발자 환경 설정에 따라 테스트가 깨지지
+# 않도록 이 모듈에서는 상한을 고정해 두고 기대값을 그 값에서 유도한다.
+_ARTICLE_LIMIT = 10
+_QUERY_COUNT = 3
+_PER_QUERY_LIMIT = (_ARTICLE_LIMIT + _QUERY_COUNT - 1) // _QUERY_COUNT
+
 
 def _stub_stock_queries(monkeypatch, expected_market: str):
+    monkeypatch.setattr(sources, "NEWS_SOURCE_ARTICLE_LIMIT", _ARTICLE_LIMIT)
+
     def fake_query(market, query, query_index, limit):
         assert market == expected_market
         assert "when:1d" in query
-        assert limit == 4
+        assert limit == _PER_QUERY_LIMIT
         rows = [
             sources.GlobalArticle(
                 article_id=f"{market.lower()}:{query_index}:{row}",

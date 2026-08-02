@@ -9,15 +9,10 @@ def _analyzer(tmp_path) -> MarketViewAnalyzer:
     prompt_file = tmp_path / "prompt.txt"
     prompt_file.write_text("test prompt", encoding="utf-8")
     return MarketViewAnalyzer(
-        base_url="http://localhost:11434",
-        model="test",
+        backend=None,  # 파싱만 검증하므로 호출은 하지 않는다.
         enabled=True,
         timeout=10,
         num_predict=512,
-        min_ctx=4096,
-        max_ctx=8192,
-        ctx_safety_ratio=1.2,
-        num_thread=1,
         prompt_file=prompt_file,
     )
 

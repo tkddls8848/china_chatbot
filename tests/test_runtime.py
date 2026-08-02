@@ -159,64 +159,47 @@ def test_remaining_timeout_rejects_expired_budget(monkeypatch):
         analyzer._remaining_timeout(300.0)
 
 
-def test_analysis_request_uses_dynamic_context_and_bounded_output(monkeypatch):
-    analyzer = object.__new__(MarketViewAnalyzer)
-    analyzer._base_url = "http://localhost:11434"
-    analyzer._model = "model"
-    analyzer._prompt = "prompt"
-    analyzer._num_predict = 1024
-    analyzer._min_ctx = 8192
-    analyzer._max_ctx = 24576
-    analyzer._ctx_safety_ratio = 1.2
-    analyzer._num_thread = 6
-    analyzer._num_gpu = 0
+def test_analysis_request_passes_prompt_and_output_budget():
+    """분석 요청이 프롬프트·출력 상한·요청별 타임아웃을 백엔드로 넘기는지 확인한다."""
     captured = {}
 
-    class Response:
-        def raise_for_status(self):
-            return None
+    class _Backend:
+        name = "cloudflare"
+        model = "model"
 
-        def json(self):
-            return {"message": {"content": '{"summary":"ok"}'}}
+        def generate(self, **kwargs):
+            captured.update(kwargs)
+            return '{"summary":"ok"}'
 
-    def post(url, **kwargs):
-        captured["url"] = url
-        captured.update(kwargs)
-        return Response()
-
-    monkeypatch.setattr("llm.market_view.requests.post", post)
-    analyzer._request_analysis({"market_view": "AI"})
-
-    options = captured["json"]["options"]
-    assert options["num_predict"] == 1024
-    assert options["num_ctx"] == 8192
-    assert options["num_thread"] == 6
-
-
-@pytest.mark.parametrize(
-    ("cjk_chars", "expected_ctx"),
-    [
-        (1_000, 8_192),
-        (6_000, 16_384),
-        (12_000, 24_576),
-        (30_000, 24_576),
-    ],
-)
-def test_dynamic_research_context_uses_8k_to_24k_buckets(cjk_chars, expected_ctx):
     analyzer = object.__new__(MarketViewAnalyzer)
+    analyzer._backend = _Backend()
+    analyzer._prompt = "prompt"
+    analyzer._num_predict = 4096
+
+    analyzer._request_analysis({"market_view": "AI"}, timeout=600)
+
+    assert captured["max_tokens"] == 4096
+    assert captured["timeout"] == 600
+    assert captured["system_prompt"] == "prompt"
+    assert "AI" in captured["user_prompt"]
+
+
+def test_analysis_prepends_brace_when_response_omits_it():
+    """모델이 여는 중괄호를 빠뜨려도 JSON으로 복구한다."""
+
+    class _Backend:
+        name = "cloudflare"
+        model = "model"
+
+        def generate(self, **kwargs):
+            return '"summary":"ok"}'
+
+    analyzer = object.__new__(MarketViewAnalyzer)
+    analyzer._backend = _Backend()
+    analyzer._prompt = "prompt"
     analyzer._num_predict = 1024
-    analyzer._min_ctx = 8192
-    analyzer._max_ctx = 24576
-    analyzer._ctx_safety_ratio = 1.2
 
-    selected, estimated_input, required = analyzer._select_context_size(
-        "리서치 시스템 프롬프트",
-        "가" * cjk_chars,
-    )
-
-    assert estimated_input > 0
-    assert required > estimated_input
-    assert selected == expected_ctx
+    assert analyzer._request_analysis({}) == '{"summary":"ok"}'
 
 
 def test_analysis_payload_includes_new_action_cap():
@@ -225,6 +208,7 @@ def test_analysis_payload_includes_new_action_cap():
     analyzer._timeout = 60
     analyzer._remove_relevance_threshold = 0.35
     analyzer._max_new_actions = 4
+    analyzer._max_actions = 6
     analyzer._verification_enabled = False
     captured = {}
 
@@ -235,6 +219,34 @@ def test_analysis_payload_includes_new_action_cap():
     analyzer._request_analysis = request
     analyzer.analyze("AI", {}, [], [])
     assert captured["max_new_actions"] == 4
+    assert captured["max_actions"] == 6
+
+
+def test_truncated_analysis_recovers_complete_actions():
+    analyzer = object.__new__(MarketViewAnalyzer)
+    analyzer._max_new_actions = 4
+    analyzer._max_actions = 6
+    raw = (
+        '{"summary":"요약","actions":['
+        '{"ticker":"US:NASDAQ:AMZN","name":"Amazon","action":"add",'
+        '"confidence":0.85,"relevance":0.9,"reason":"강세",'
+        '"evidence":[]},'
+        '{"ticker":"US:NASDAQ:MSFT","name":"Microsoft","action":"add",'
+        '"confidence":0.8,"rel'
+    )
+
+    result = analyzer._parse_analysis(
+        raw,
+        watchlist={},
+        candidate_universe=[
+            {"code": "US:NASDAQ:AMZN"},
+            {"code": "US:NASDAQ:MSFT"},
+        ],
+    )
+
+    assert result["summary"] == "요약"
+    assert [item["ticker"] for item in result["actions"]] == ["US:NASDAQ:AMZN"]
+    assert "완성된 액션 1개" in result["risks"][0]
 
 
 def test_market_view_history_is_migrated_and_saved_as_compact_summaries(tmp_path):

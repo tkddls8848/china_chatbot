@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import requests
+from llm.backends import LLMBackend
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,11 @@ class TranslationResult:
 
 
 class TranslationService:
-    """Translate Chinese financial news to Korean with Ollama."""
+    """Translate financial news to Korean through a pluggable LLM backend.
+
+    프롬프트 구성·재작성·JSON 검증만 담당하고, 공급자별 HTTP 호출은
+    `llm.backends`의 백엔드가 맡는다.
+    """
 
     _PROMPT_FILES = {
         "cls": "cls_ko.txt",
@@ -35,27 +39,19 @@ class TranslationService:
 
     def __init__(
         self,
-        base_url: str,
-        model: str,
+        backend: LLMBackend,
         enabled: bool,
-        timeout: int,
         prompt_dir: Path,
-        num_gpu: int = 0,
         num_predict: int = 512,
         brief_content_limit: int = 180,
+        temperature: float = 0.1,
     ):
-        self._base_url = base_url.rstrip("/")
-        self._model = model
+        self._backend = backend
         self._enabled = enabled
-        self._timeout = timeout
-        self._num_gpu = num_gpu
         self._num_predict = num_predict
+        self._temperature = temperature
         self._brief_content_limit = max(1, brief_content_limit)
         self._prompts = self._load_prompts(prompt_dir)
-
-    def set_num_gpu(self, num_gpu: int) -> None:
-        """런타임에 Ollama num_gpu를 변경한다(-1=자동, 0=CPU, N=레이어). 다음 요청부터 반영."""
-        self._num_gpu = max(-1, num_gpu)
 
     def _load_prompts(self, prompt_dir: Path) -> dict[str, str]:
         prompts: dict[str, str] = {}
@@ -200,6 +196,10 @@ class TranslationService:
                 if retry_for_translation
                 else ""
             )
+            # 상한만 주므로 모델은 상한보다 훨씬 짧게 쓴다(실측: 상한 500자에서
+            # 77~105자). 분량을 실제로 늘리려면 목표 구간("about X to Y")과 무엇을
+            # 담을지를 함께 지시해야 한다 — 출력 토큰이 늘어 비용도 함께 오르므로
+            # 의도적으로 상한만 두고 있다.
             brief_rules = (
                 f"\n- content must be a complete Korean news brief of at most "
                 f"{content_limit} characters including spaces.\n"
@@ -217,38 +217,12 @@ class TranslationService:
             "- Do not omit content. If the body is short, translate that short body."
             f"{brief_rules}"
         )
-        response = requests.post(
-            f"{self._base_url}/api/chat",
-            json={
-                "model": self._model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"title:\n{title}\n\ncontent:\n{content}"},
-                ],
-                "stream": False,
-                "think": False,
-                "format": "json",
-                "options": {
-                    "temperature": 0.1,
-                    "num_predict": self._num_predict,
-                    "num_gpu": self._num_gpu,
-                },
-            },
-            timeout=self._timeout,
+        return self._backend.generate(
+            system_prompt=system_prompt,
+            user_prompt=f"title:\n{title}\n\ncontent:\n{content}",
+            max_tokens=self._num_predict,
+            temperature=self._temperature,
         )
-        response.raise_for_status()
-
-        data = response.json()
-        message = data.get("message") or {}
-        translated = message.get("content")
-        if not isinstance(translated, str) or not translated.strip():
-            logger.error(
-                "[TRANSLATE] empty content; thinking_present=%s; response=%s",
-                bool(message.get("thinking")),
-                json.dumps(data, ensure_ascii=False)[:500],
-            )
-            raise ValueError("empty Ollama response content")
-        return translated
 
     @staticmethod
     def _looks_untranslated_chinese(text: str) -> bool:

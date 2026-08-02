@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import requests
+from llm.backends import LLMBackend, LLMBackendError
 
 logger = logging.getLogger(__name__)
 
@@ -147,43 +147,31 @@ class MarketViewManager:
 class MarketViewAnalyzer:
     def __init__(
         self,
-        base_url: str,
-        model: str,
+        backend: LLMBackend,
         enabled: bool,
         timeout: int | None,
         num_predict: int,
-        min_ctx: int,
-        max_ctx: int,
-        ctx_safety_ratio: float,
-        num_thread: int,
         prompt_file: Path,
-        num_gpu: int = 0,
         max_new_actions: int = 4,
         remove_relevance_threshold: float = 0.35,
         verification_enabled: bool = False,
         verification_prompt_file: Path | None = None,
     ):
-        self._base_url = base_url.rstrip("/")
-        self._model = model
+        self._backend = backend
         self._enabled = enabled
         self._timeout = timeout
         self._num_predict = num_predict
-        self._min_ctx = max(4096, min_ctx)
-        self._max_ctx = max(self._min_ctx, max_ctx)
-        self._ctx_safety_ratio = max(1.0, ctx_safety_ratio)
-        self._num_thread = max(1, num_thread)
-        self._num_gpu = num_gpu
         self._max_new_actions = max(0, max_new_actions)
+        # Some providers enforce a smaller completion ceiling than requested.
+        # Keep the response compact; unchanged watchlist entries are not
+        # actionable and do not need to consume the JSON budget.
+        self._max_actions = min(8, max(4, self._max_new_actions + 2))
         self._remove_relevance_threshold = remove_relevance_threshold
         self._prompt = prompt_file.read_text(encoding="utf-8")
         self._verification_prompt = ""
         if verification_prompt_file is not None and verification_prompt_file.exists():
             self._verification_prompt = verification_prompt_file.read_text(encoding="utf-8")
         self._verification_enabled = verification_enabled and bool(self._verification_prompt)
-
-    def set_num_gpu(self, num_gpu: int) -> None:
-        """런타임에 Ollama num_gpu를 변경한다(-1=자동, 0=CPU, N=레이어). 다음 요청부터 반영."""
-        self._num_gpu = max(-1, num_gpu)
 
     def analyze(
         self,
@@ -210,6 +198,9 @@ class MarketViewAnalyzer:
             "candidate_universe": candidates,
             "remove_relevance_threshold": self._remove_relevance_threshold,
             "max_new_actions": self._max_new_actions,
+            "max_actions": getattr(
+                self, "_max_actions", min(8, max(4, self._max_new_actions + 2))
+            ),
         }
         if quant_context:
             payload["quant_context"] = quant_context
@@ -342,55 +333,34 @@ class MarketViewAnalyzer:
     ) -> str:
         system_prompt = prompt or self._prompt
         payload_text = json.dumps(payload, ensure_ascii=False)
-        num_ctx, estimated_input_tokens, required_tokens = self._select_context_size(
-            system_prompt,
-            payload_text,
-        )
         article_count = len(
             payload.get("news_items")
             or payload.get("news_titles")
             or []
         )
-        log = logger.warning if required_tokens > self._max_ctx else logger.info
-        log(
-            "[MarketView] 동적 컨텍스트: 기사=%d, 문자=%d, 입력≈%d토큰, "
-            "출력예약=%d, 필요≈%d, num_ctx=%d",
+        # 컨텍스트는 모델이 고정으로 갖고 있으므로 크기를 고르지 않는다. 대신
+        # 입력이 얼마나 커졌는지는 남겨 둔다 — 후보·기사 수를 늘렸을 때 비용과
+        # 잘림을 추적하는 유일한 단서다.
+        logger.info(
+            "[MarketView] 분석 입력: 기사=%d, 문자=%d, 입력≈%d토큰, 출력예약=%d",
             article_count,
             len(system_prompt) + len(payload_text),
-            estimated_input_tokens,
+            self._estimate_tokens(system_prompt) + self._estimate_tokens(payload_text),
             self._num_predict,
-            required_tokens,
-            num_ctx,
         )
-        response = requests.post(
-            f"{self._base_url}/api/chat",
-            json={
-                "model": self._model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": payload_text},
-                    {"role": "assistant", "content": "{"},
-                ],
-                "stream": False,
-                "think": False,
-                "format": "json",
-                "options": {
-                    "temperature": 0.2,
-                    "num_predict": self._num_predict,
-                    "num_ctx": num_ctx,
-                    "num_thread": self._num_thread,
-                    "num_gpu": self._num_gpu,
-                },
-            },
-            timeout=timeout,
-        )
-        response.raise_for_status()
+        try:
+            content = self._backend.generate(
+                system_prompt=system_prompt,
+                user_prompt=payload_text,
+                max_tokens=self._num_predict,
+                temperature=0.2,
+                timeout=timeout,
+            )
+        except LLMBackendError as error:
+            raise MarketViewError(str(error)) from error
 
-        data = response.json()
-        message = data.get("message") or {}
-        content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise MarketViewError("empty Ollama response content")
+        if not content.strip():
+            raise MarketViewError("empty analysis response content")
         if not content.lstrip().startswith("{"):
             content = "{" + content
         return content
@@ -417,25 +387,6 @@ class MarketViewAnalyzer:
         other_chars = len(text) - cjk_chars
         return max(1, math.ceil((cjk_chars * 1.5) + (other_chars / 3)))
 
-    def _select_context_size(
-        self,
-        system_prompt: str,
-        payload_text: str,
-    ) -> tuple[int, int, int]:
-        estimated_input = (
-            self._estimate_tokens(system_prompt)
-            + self._estimate_tokens(payload_text)
-            + 64
-        )
-        required = math.ceil(
-            estimated_input * self._ctx_safety_ratio
-            + self._num_predict
-            + 256
-        )
-        bucket = math.ceil(required / 8192) * 8192
-        selected = min(self._max_ctx, max(self._min_ctx, bucket))
-        return selected, estimated_input, required
-
     def _parse_analysis(
         self,
         raw: str,
@@ -448,7 +399,12 @@ class MarketViewAnalyzer:
             data = json.loads(payload)
         except json.JSONDecodeError as e:
             logger.error("[ANALYZE] JSON parse failed: %s | raw=%r", e, raw[:300])
-            return self._fallback_partial_analysis(raw, e)
+            return self._fallback_partial_analysis(
+                raw,
+                e,
+                watchlist=watchlist,
+                candidate_universe=candidate_universe,
+            )
 
         if not isinstance(data, dict):
             raise MarketViewError("analysis JSON must be an object")
@@ -479,6 +435,7 @@ class MarketViewAnalyzer:
             candidate_codes=candidate_codes,
             max_new_actions=getattr(self, "_max_new_actions", 4),
         )
+        normalized_actions = normalized_actions[: getattr(self, "_max_actions", 8)]
 
         return {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -663,20 +620,71 @@ class MarketViewAnalyzer:
         self,
         raw: str,
         error: json.JSONDecodeError,
+        *,
+        watchlist: dict[str, str] | None = None,
+        candidate_universe: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         summary = self._extract_string_field(raw, "summary")
         if not summary:
             raise MarketViewError(f"invalid JSON response: {error}") from error
+        actions = self._extract_complete_array_objects(raw, "actions")
+        candidate_codes = (
+            [
+                str(item.get("code") or "").strip()
+                for item in candidate_universe
+                if isinstance(item, dict) and str(item.get("code") or "").strip()
+            ]
+            if candidate_universe is not None
+            else None
+        )
+        try:
+            normalized_actions = self._normalize_actions(
+                actions,
+                watchlist_codes=list(watchlist) if watchlist is not None else None,
+                candidate_codes=candidate_codes,
+                max_new_actions=getattr(self, "_max_new_actions", 4),
+            )[: getattr(self, "_max_actions", 8)]
+        except MarketViewError:
+            normalized_actions = []
+        recovered = (
+            f" 완성된 액션 {len(normalized_actions)}개를 함께 복구했습니다."
+            if normalized_actions
+            else ""
+        )
         return {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "summary": summary.strip(),
-            "actions": [],
+            "actions": normalized_actions,
             "risks": [
-                "LLM 응답 JSON이 중간에 잘려 요약만 복구했습니다. "
-                "후보 수나 출력 항목 수를 더 줄여야 합니다."
+                "LLM 응답 JSON이 중간에 잘렸습니다."
+                f"{recovered} 출력 항목 수를 제한해 재발 가능성을 낮췄습니다."
             ],
             "view_critique": [],
         }
+
+    @staticmethod
+    def _extract_complete_array_objects(raw: str, field: str) -> list[dict[str, Any]]:
+        """Return fully formed object items preceding a truncated JSON tail."""
+        match = re.search(rf'"{re.escape(field)}"\s*:\s*\[', raw)
+        if not match:
+            return []
+        decoder = json.JSONDecoder()
+        position = match.end()
+        objects: list[dict[str, Any]] = []
+        while position < len(raw):
+            while position < len(raw) and (
+                raw[position].isspace() or raw[position] == ","
+            ):
+                position += 1
+            if position >= len(raw) or raw[position] == "]":
+                break
+            try:
+                value, position = decoder.raw_decode(raw, position)
+            except json.JSONDecodeError:
+                break
+            if isinstance(value, dict):
+                objects.append(value)
+        return objects
 
     @staticmethod
     def _extract_string_field(raw: str, field: str) -> str:

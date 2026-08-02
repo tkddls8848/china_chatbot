@@ -98,7 +98,6 @@ def build_app(bot_app):
         data = _bot_data()
         registry = data.get("feature_registry")
         scheduler = data.get("scheduler")
-        system = data.get("system_control")
 
         jobs = []
         if scheduler is not None:
@@ -110,10 +109,6 @@ def build_app(bot_app):
             "features": sorted(registry.enabled_keys) if registry else [],
             "scheduler_running": bool(scheduler and scheduler.running),
             "jobs": jobs,
-            "gpu": {
-                "enabled": bool(system and system.gpu_enabled),
-                "num_gpu": system.num_gpu if system else None,
-            },
         }
 
     # ── 관심종목 ─────────────────────────────────────
@@ -187,7 +182,7 @@ def build_app(bot_app):
             }
         return await asyncio.to_thread(_read_json, RESEARCH_STATE_FILE, {})
 
-    # ── 신호 성과 로그 ────────────────────────────────
+    # ── 종목별 뉴스 감성 로그 ─────────────────────────
     @api.get("/api/predictions")
     async def predictions_view(days: int = 7, _: str = Depends(require_auth)):
         prediction_log = _bot_data().get("prediction_log")
@@ -348,14 +343,11 @@ async function loadStatus() {
   const el = document.getElementById('status');
   try {
     const s = await api('/api/status');
-    const gpu = s.gpu.enabled
-      ? `<span class="badge on">GPU 켜짐 (num_gpu=${esc(s.gpu.num_gpu)})</span>`
-      : `<span class="badge">CPU</span>`;
     const sched = s.scheduler_running
       ? `<span class="badge on">스케줄러 동작</span>` : `<span class="badge">중지</span>`;
     const jobs = s.jobs.map(j =>
       `<tr><td>${esc(j.id)}</td><td class="muted">${esc(j.next_run || '-')}</td></tr>`).join('');
-    el.innerHTML = `<div class="row">${sched} ${gpu}</div>
+    el.innerHTML = `<div class="row">${sched}</div>
       <div class="muted">활성 기능: ${s.features.map(esc).join(', ')}</div>
       <table style="margin-top:12px"><tr><th>작업</th><th>다음 실행</th></tr>${jobs}</table>`;
   } catch (e) { el.textContent = '오류: ' + e.message; }

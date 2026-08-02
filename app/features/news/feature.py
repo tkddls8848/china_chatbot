@@ -5,27 +5,19 @@ from datetime import datetime
 
 from core.config import (
     NEWS_GLOBAL_SOURCE_KEYS,
-    NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
     NEWS_LOG_FILE,
     NEWS_LOG_RETENTION_DAYS,
     NEWS_RSS_FEEDS,
     NEWS_SOURCE_COOLDOWN_MINUTES,
     NEWS_SOURCE_FAILURE_THRESHOLD,
     NEWS_SOURCE_MARKETS,
-    OLLAMA_BASE_URL,
-    OLLAMA_NUM_GPU,
-    PROMPT_DIR,
     SCHEDULER_INTERVAL_MINUTES,
     SENT_IDS_FILE,
     SENT_NEWS_RETENTION_DAYS,
     TRANSLATION_CONCURRENCY,
-    TRANSLATION_ENABLED,
-    TRANSLATION_MODEL,
-    TRANSLATION_NUM_PREDICT,
-    TRANSLATION_TIMEOUT,
 )
 from features.base import FeatureSpec
-from llm import TranslationService
+from llm import build_translation_service
 from news import NewsSourceRegistry, build_source_specs
 from news.pipeline import fetch_all
 from state import NewsLog, SentNewsTracker
@@ -49,16 +41,7 @@ def _install_services(app) -> None:
         NEWS_LOG_FILE,
         NEWS_LOG_RETENTION_DAYS,
     )
-    app.bot_data["translator"] = TranslationService(
-        base_url=OLLAMA_BASE_URL,
-        model=TRANSLATION_MODEL,
-        enabled=TRANSLATION_ENABLED,
-        timeout=TRANSLATION_TIMEOUT,
-        prompt_dir=PROMPT_DIR,
-        num_gpu=OLLAMA_NUM_GPU,
-        num_predict=TRANSLATION_NUM_PREDICT,
-        brief_content_limit=NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
-    )
+    app.bot_data["translator"] = build_translation_service()
     app.bot_data["translate_semaphore"] = asyncio.Semaphore(
         TRANSLATION_CONCURRENCY
     )

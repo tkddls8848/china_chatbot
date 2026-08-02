@@ -37,38 +37,18 @@ def test_full_feature_set_has_unique_commands_and_valid_dependencies():
     ]
 
     assert len(command_names) == len(set(command_names))
-    assert {"market", "research", "briefing", "score", "system"} <= set(
+    assert {"market", "research", "briefing", "system"} <= set(
         command_names
     )
+    assert "score" not in command_names
 
 
-def test_service_installation_preserves_catalog_order_and_wires_gpu_consumers():
+def test_service_installation_preserves_catalog_order():
     installed = []
-    consumers = {}
-    service_keys = {
-        "news": "translator",
-        "research": "market_view_analyzer",
-        "briefing": "briefing_writer",
-    }
-
-    class Consumer:
-        num_gpu = None
-
-        def set_num_gpu(self, num_gpu):
-            self.num_gpu = num_gpu
 
     def installer(spec):
-        original = spec.install_services
-
         def install(app):
             installed.append(spec.key)
-            service_key = service_keys.get(spec.key)
-            if service_key is not None:
-                consumer = Consumer()
-                consumers[service_key] = consumer
-                app.bot_data[service_key] = consumer
-            elif spec.key == "system_admin":
-                original(app)
 
         return install
 
@@ -82,8 +62,6 @@ def test_service_installation_preserves_catalog_order_and_wires_gpu_consumers():
     registry.install_services(app)
 
     assert installed == [spec.key for spec in ALL_FEATURES]
-    app.bot_data["system_control"].set_gpu_layers(7)
-    assert {consumer.num_gpu for consumer in consumers.values()} == {7}
 
 
 def test_registry_rejects_missing_feature_dependency():
@@ -178,7 +156,6 @@ def test_disabled_features_do_not_initialize_their_services():
 
     registry.install_services(app)
 
-    assert "system_control" in app.bot_data
     assert "stock_db" not in app.bot_data
     assert "translator" not in app.bot_data
     assert "market_view_analyzer" not in app.bot_data
@@ -203,5 +180,5 @@ def test_generated_help_includes_command_usage_and_code_examples():
     assert "/market [일수]" in text
     assert "/research show|set|run|clear" in text
     assert "/briefing morning|evening|scorecard" in text
-    assert "/score — 신호 성과 채점" in text
+    assert "/score" not in text
     assert "KR:KOSPI:005930" in text

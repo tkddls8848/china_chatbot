@@ -5,8 +5,7 @@
     다른 모듈은 여기서 상수를 import 하며 `os.environ`에 직접 접근하지 않는다.
   - `data/<기능키>/*.json` = 봇이 수집·축적하는 데이터(관심종목, 전송 이력,
     종목 DB 등)로, 소유 기능별 하위 디렉토리에 둔다. 설정값은 저장하지
-    않는다. 런타임 변경(/system gpu ...)은 세션 한정이며 재시작하면
-    `.env` 값으로 되돌아간다.
+    않는다.
 
 import 시 .env 로딩과 로깅 설정이 한 번 수행된다.
 """
@@ -25,6 +24,10 @@ pd.set_option("future.infer_string", False)
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 load_dotenv(BASE_DIR / ".env")
+
+
+class ConfigurationError(RuntimeError):
+    """설정값이 잘못되어 봇을 기동할 수 없을 때 발생한다."""
 
 
 def _env_bool(name: str, default: str = "false") -> bool:
@@ -68,20 +71,64 @@ PROMPT_DIR        = Path(os.environ.get("TRANSLATION_PROMPT_DIR", "prompts"))
 if not PROMPT_DIR.is_absolute():
     PROMPT_DIR = BASE_DIR / PROMPT_DIR
 
-# ── Ollama / 번역 ─────────────────────────────────────
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-# num_gpu 설정(-1=자동, 0=CPU 전용, N=오프로딩 레이어 수).
-# 런타임 변경(/system gpu ...)은 세션 한정이며 재시작하면 이 값으로 되돌아간다.
-OLLAMA_NUM_GPU = int(os.environ.get("OLLAMA_NUM_GPU", "-1"))
-# /system gpu on 으로 켤 때 적용할 값(-1=자동 권장).
-OLLAMA_GPU_ON_VALUE = int(os.environ.get("OLLAMA_GPU_ON_VALUE", "-1"))
+# ── 번역 ──────────────────────────────────────────────
 TRANSLATION_ENABLED = _env_bool("TRANSLATION_ENABLED", "true")
-TRANSLATION_MODEL = os.environ.get("TRANSLATION_MODEL", "qwen3.5:4b")
-TRANSLATION_TIMEOUT = int(os.environ.get("TRANSLATION_TIMEOUT", "120"))
 TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "1024"))
-# Ollama는 기본적으로 모델당 요청을 직렬 처리하므로 동시 요청을 늘려도
-# 큐만 깊어진다. 늘리려면 Ollama의 OLLAMA_NUM_PARALLEL을 함께 올린다.
+# 원격 추론이라 동시 요청을 늘릴 수 있다. 올리면 Cloudflare 속도 제한(429)에
+# 걸릴 수 있으므로 로그의 result=rate_limited를 보며 조정한다.
 TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "1"))
+
+# ── Cloudflare Workers AI ─────────────────────────────
+# API 토큰은 .env에만 두고 커밋하지 않는다. 로그·예외에도 남기지 않는다.
+CLOUDFLARE_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+CLOUDFLARE_AI_BASE_URL = os.environ.get(
+    "CLOUDFLARE_AI_BASE_URL", "https://api.cloudflare.com/client/v4"
+).strip()
+CLOUDFLARE_TRANSLATION_MODEL = os.environ.get(
+    "CLOUDFLARE_TRANSLATION_MODEL", "@cf/qwen/qwen3-30b-a3b-fp8"
+).strip()
+# 시황 분석·브리핑용 모델. 미지정 시 번역과 같은 모델을 쓴다.
+CLOUDFLARE_ANALYSIS_MODEL = (
+    os.environ.get("CLOUDFLARE_ANALYSIS_MODEL", "").strip()
+    or CLOUDFLARE_TRANSLATION_MODEL
+)
+CLOUDFLARE_TRANSLATION_TIMEOUT = max(
+    5, int(os.environ.get("CLOUDFLARE_TRANSLATION_TIMEOUT", "45"))
+)
+CLOUDFLARE_MAX_ATTEMPTS = max(1, int(os.environ.get("CLOUDFLARE_MAX_ATTEMPTS", "2")))
+CLOUDFLARE_FAILURE_THRESHOLD = max(
+    1, int(os.environ.get("CLOUDFLARE_FAILURE_THRESHOLD", "3"))
+)
+CLOUDFLARE_FAILURE_COOLDOWN_SECONDS = max(
+    10, int(os.environ.get("CLOUDFLARE_FAILURE_COOLDOWN_SECONDS", "300"))
+)
+
+
+def _validate_cloudflare_credentials() -> None:
+    """자격증명 없이 기동해서 첫 뉴스 주기에 전부 실패하는 일을 막는다."""
+    if not (
+        TRANSLATION_ENABLED
+        or _env_bool("RESEARCH_ANALYSIS_ENABLED", "true")
+        or _env_bool("BRIEFING_LLM_ENABLED", "true")
+    ):
+        return
+    missing = [
+        name
+        for name, value in (
+            ("CLOUDFLARE_ACCOUNT_ID", CLOUDFLARE_ACCOUNT_ID),
+            ("CLOUDFLARE_API_TOKEN", CLOUDFLARE_API_TOKEN),
+        )
+        if not value
+    ]
+    if missing:
+        raise ConfigurationError(
+            "LLM 기능(번역·리서치·브리핑)이 켜져 있으나 "
+            f"{', '.join(missing)}이(가) .env에 비어 있습니다"
+        )
+
+
+_validate_cloudflare_credentials()
 
 # ── 관리 웹(web_admin 기능) ───────────────────────────
 # 봇 프로세스에 내장되는 관리용 웹 대시보드. FEATURES_ENABLED의 web_admin
@@ -162,11 +209,6 @@ SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5
 STOCK_DB_ENABLED = _env_bool("STOCK_DB_ENABLED", "true")
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
-# 번역과 같은 모델을 쓴다. 다른 모델로 나눠 러너를 분리하는 방식은 시도했다가
-# 되돌렸다. 두 러너가 메모리 때문에 공존하지 못하고 번갈아 축출되면서, 전환
-# 때마다 러너를 재적재해 오히려 느려졌다. 경합은 core.workers의 긴급 구간
-# 게이트로 막는다(뉴스 주기 중에는 리서치 분석 시작을 보류).
-RESEARCH_ANALYSIS_MODEL = os.environ.get("RESEARCH_ANALYSIS_MODEL", "qwen3.5:4b")
 RESEARCH_ANALYSIS_ENABLED = _env_bool("RESEARCH_ANALYSIS_ENABLED", "true")
 RESEARCH_ANALYSIS_TIMEOUT = max(
     30,
@@ -179,7 +221,7 @@ RESEARCH_NEWS_GLOBAL_LIMIT = int(
     os.environ.get("RESEARCH_NEWS_GLOBAL_LIMIT", "3")
 )
 # 분석 payload에 넣을 기사 본문 길이 상한. 중국어 원문 기준 6건 × 260자가
-# RESEARCH_CTX_MAX(12288)의 한계선이므로 여유를 두고 240으로 잡는다.
+# 모델 컨텍스트와 Neurons 비용의 한계선이므로 여유를 두고 잡는다.
 RESEARCH_NEWS_CONTENT_MAX_CHARS = max(
     80,
     int(os.environ.get("RESEARCH_NEWS_CONTENT_MAX_CHARS", "240")),
@@ -202,22 +244,6 @@ RESEARCH_NEWS_MARKETS = tuple(
 # 파싱이 실패한다. 후보 수(RESEARCH_MAX_CANDIDATES)를 늘리면 함께 올린다.
 RESEARCH_ANALYSIS_NUM_PREDICT = int(
     os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
-)
-RESEARCH_CTX_MIN = max(
-    4096,
-    int(os.environ.get("RESEARCH_CTX_MIN", "8192")),
-)
-RESEARCH_CTX_MAX = max(
-    RESEARCH_CTX_MIN,
-    int(os.environ.get("RESEARCH_CTX_MAX", "24576")),
-)
-RESEARCH_CTX_SAFETY_RATIO = max(
-    1.0,
-    float(os.environ.get("RESEARCH_CTX_SAFETY_RATIO", "1.20")),
-)
-RESEARCH_CPU_THREADS = max(
-    1,
-    int(os.environ.get("RESEARCH_CPU_THREADS", str(max(1, (os.cpu_count() or 4) // 3)))),
 )
 RESEARCH_MAX_CANDIDATES = max(
     1,
@@ -373,7 +399,7 @@ def _parse_market_backfill_queries() -> dict[str, str]:
 
 NEWS_MARKET_BACKFILL_QUERIES = _parse_market_backfill_queries()
 
-# 모닝/마감 브리핑과 주간 성적표(호스트 현지 시각 기준 cron)
+# 모닝/마감 브리핑과 관심종목 편입·편출 성과표(호스트 현지 시각 기준 cron)
 BRIEFING_MORNING_ENABLED = _env_bool("BRIEFING_MORNING_ENABLED", "true")
 BRIEFING_MORNING_HOUR = int(os.environ.get("BRIEFING_MORNING_HOUR", "8"))
 BRIEFING_MORNING_MINUTE = int(os.environ.get("BRIEFING_MORNING_MINUTE", "50"))
@@ -383,13 +409,11 @@ BRIEFING_EVENING_MINUTE = int(os.environ.get("BRIEFING_EVENING_MINUTE", "40"))
 BRIEFING_LLM_ENABLED = _env_bool("BRIEFING_LLM_ENABLED", "true")
 BRIEFING_NEWS_MAX_ITEMS = int(os.environ.get("BRIEFING_NEWS_MAX_ITEMS", "5"))
 BRIEFING_PROMPT_FILE = PROMPT_DIR / "briefing_ko.txt"
-# 미설정 시 리서치 모델·타임아웃을 따른다.
-BRIEFING_MODEL = os.environ.get("BRIEFING_MODEL", RESEARCH_ANALYSIS_MODEL)
 BRIEFING_TIMEOUT = int(os.environ.get("BRIEFING_TIMEOUT", "120"))
-SCORECARD_ENABLED = _env_bool("SCORECARD_ENABLED", "true")
-SCORECARD_DAY_OF_WEEK = os.environ.get("SCORECARD_DAY_OF_WEEK", "sat")
-SCORECARD_HOUR = int(os.environ.get("SCORECARD_HOUR", "10"))
-SCORECARD_LOOKBACK_DAYS = int(os.environ.get("SCORECARD_LOOKBACK_DAYS", "30"))
+WATCHLIST_SCORECARD_ENABLED = _env_bool("WATCHLIST_SCORECARD_ENABLED", "true")
+WATCHLIST_SCORECARD_DAY_OF_WEEK = os.environ.get("WATCHLIST_SCORECARD_DAY_OF_WEEK", "sat")
+WATCHLIST_SCORECARD_HOUR = int(os.environ.get("WATCHLIST_SCORECARD_HOUR", "10"))
+WATCHLIST_SCORECARD_LOOKBACK_DAYS = int(os.environ.get("WATCHLIST_SCORECARD_LOOKBACK_DAYS", "30"))
 
 
 def _parse_allowed_chat_ids() -> frozenset[int]:

@@ -1,5 +1,8 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
+from core.config import NEWS_DIGEST_MESSAGE_MAX_CHARS, TELEGRAM_MESSAGE_LIMIT
+from news.pipeline import PreparedGlobalArticle, send_global_digest
 from news.sources import GlobalArticle
 from news.utils import (
     chunk_message_items,
@@ -35,6 +38,81 @@ def test_chunk_message_items_keeps_articles_whole_and_ordered():
 
     assert chunks == [[items[0], items[1]], [items[2]]]
     assert [item for chunk in chunks for item in chunk] == items
+
+
+class _RecordingBot:
+    def __init__(self):
+        self.messages = []
+
+    async def send_message(self, chat_id, text, parse_mode=None):
+        self.messages.append(text)
+
+
+class _NoopTracker:
+    async def confirm(self, article_id):
+        return None
+
+    async def release(self, article_id):
+        return None
+
+
+def _prepared_rows(count, *, article_chars, source_key="futu"):
+    from news.registry import SourceSpec
+    from llm.translator import TranslationResult
+
+    spec = SourceSpec(key=source_key, label="푸투", prompt_key="futu", fetch=lambda: [])
+    rows = []
+    for index in range(count):
+        rows.append(
+            PreparedGlobalArticle(
+                spec=spec,
+                article=GlobalArticle(
+                    article_id=f"{source_key}-{index}",
+                    title="제목",
+                    content="본문",
+                    published_at="2026-08-01 10:00:00",
+                ),
+                text="가" * article_chars,
+                translated=TranslationResult("제목", "본문", [], []),
+            )
+        )
+    return rows
+
+
+def test_digest_splits_one_oversized_source_across_messages():
+    """소스 하나의 기사가 한 메시지에 안 들어가면 나눠 보낸다.
+
+    chunk_message_items는 아이템을 쪼개지 못하므로, 섹션을 미리 나누지 않으면
+    텔레그램 4096자 제한에 걸려 그 소스의 다이제스트가 통째로 실패한다.
+    """
+    bot = _RecordingBot()
+    # 한 소스에 큰 기사 6건 → 단일 섹션이면 상한을 크게 넘는다.
+    rows = _prepared_rows(6, article_chars=900)
+
+    asyncio.run(
+        send_global_digest(bot, "chat", rows, _NoopTracker(), None, None)
+    )
+
+    assert len(bot.messages) > 1
+    for message in bot.messages:
+        assert len(message) <= TELEGRAM_MESSAGE_LIMIT, len(message)
+        assert len(message) <= NEWS_DIGEST_MESSAGE_MAX_CHARS
+    # 기사는 하나도 잃지 않고 모두 실려야 한다.
+    assert sum(message.count("가" * 900) for message in bot.messages) == 6
+    # 소스 수는 섹션 분할과 무관하게 1곳으로 센다.
+    assert "소스 1곳 · 새 기사 6건" in bot.messages[0]
+
+
+def test_digest_keeps_small_sources_in_one_message():
+    bot = _RecordingBot()
+    rows = _prepared_rows(2, article_chars=200, source_key="sina")
+
+    asyncio.run(
+        send_global_digest(bot, "chat", rows, _NoopTracker(), None, None)
+    )
+
+    assert len(bot.messages) == 1
+    assert "소스 1곳 · 새 기사 2건 · 1/1" in bot.messages[0]
 
 
 def test_china_article_timestamp_includes_date_and_time_in_kst():

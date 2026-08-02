@@ -1,26 +1,11 @@
 """시장 리서치 기능 선언."""
 
 from core.config import (
-    OLLAMA_BASE_URL,
-    OLLAMA_NUM_GPU,
-    RESEARCH_ANALYSIS_ENABLED,
-    RESEARCH_ANALYSIS_MODEL,
-    RESEARCH_ANALYSIS_NUM_PREDICT,
-    RESEARCH_ANALYSIS_PROMPT_FILE,
-    RESEARCH_ANALYSIS_TIMEOUT,
-    RESEARCH_CPU_THREADS,
-    RESEARCH_CTX_MAX,
-    RESEARCH_CTX_MIN,
-    RESEARCH_CTX_SAFETY_RATIO,
     RESEARCH_HISTORY_LIMIT,
-    RESEARCH_MAX_NEW_ACTIONS,
-    RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
     RESEARCH_STATE_FILE,
-    RESEARCH_VERIFICATION_ENABLED,
-    RESEARCH_VERIFICATION_PROMPT_FILE,
 )
 from features.base import CallbackSpec, CommandSpec, FeatureSpec, MenuSpec
-from llm import MarketViewAnalyzer, MarketViewManager
+from llm import MarketViewManager, build_market_view_analyzer
 from research import (
     cmd_research,
     collect_global_market_news_items,
@@ -33,23 +18,7 @@ def _install_services(app) -> None:
         RESEARCH_STATE_FILE,
         history_limit=RESEARCH_HISTORY_LIMIT,
     )
-    app.bot_data["market_view_analyzer"] = MarketViewAnalyzer(
-        base_url=OLLAMA_BASE_URL,
-        model=RESEARCH_ANALYSIS_MODEL,
-        enabled=RESEARCH_ANALYSIS_ENABLED,
-        timeout=RESEARCH_ANALYSIS_TIMEOUT,
-        num_predict=RESEARCH_ANALYSIS_NUM_PREDICT,
-        min_ctx=RESEARCH_CTX_MIN,
-        max_ctx=RESEARCH_CTX_MAX,
-        ctx_safety_ratio=RESEARCH_CTX_SAFETY_RATIO,
-        num_thread=RESEARCH_CPU_THREADS,
-        prompt_file=RESEARCH_ANALYSIS_PROMPT_FILE,
-        num_gpu=OLLAMA_NUM_GPU,
-        max_new_actions=RESEARCH_MAX_NEW_ACTIONS,
-        remove_relevance_threshold=RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
-        verification_enabled=RESEARCH_VERIFICATION_ENABLED,
-        verification_prompt_file=RESEARCH_VERIFICATION_PROMPT_FILE,
-    )
+    app.bot_data["market_view_analyzer"] = build_market_view_analyzer()
     app.bot_data["research_pending"] = {}
 
     registry = app.bot_data["news_registry"]

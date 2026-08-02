@@ -10,7 +10,6 @@ from handlers.navigation import (
     handle_menu_text,
     persistent_menu,
     research_menu,
-    score_menu,
 )
 from handlers.commands import configure_telegram_menu
 from watchlist.handlers import cmd_menu, handle_watchlist_callback
@@ -129,25 +128,6 @@ def test_menu_status_changes_only_target_button():
     assert buttons["nav:research:show"] == "주제 보기"
 
 
-def test_persistent_menu_exposes_score_button():
-    labels = {
-        button.text
-        for row in persistent_menu(_registry()).keyboard
-        for button in row
-    }
-    assert "📈 성과" in labels
-
-
-def test_score_menu_exposes_only_live_action():
-    buttons = {
-        button.callback_data: button.text
-        for row in score_menu().inline_keyboard
-        for button in row
-    }
-    assert buttons["nav:score:live"] == "운영 신호"
-    assert "nav:score:backtest" not in buttons
-
-
 def test_home_text_refreshes_persistent_menu_before_inline_home():
     class Message:
         text = "🏠 홈"
@@ -175,7 +155,7 @@ def test_home_text_refreshes_persistent_menu_before_inline_home():
         for row in message.replies[0][1].keyboard
         for button in row
     }
-    assert "📈 성과" in labels
+    assert "📈 성과" not in labels
     assert message.replies[1][1].inline_keyboard
 
 
@@ -207,7 +187,7 @@ def test_bot_startup_pushes_latest_persistent_menu(monkeypatch):
         for row in sent[0]["reply_markup"].keyboard
         for button in row
     }
-    assert "📈 성과" in labels
+    assert "📈 성과" not in labels
 
 
 def test_callback_timeout_does_not_abort_button_action(monkeypatch, caplog):

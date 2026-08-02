@@ -14,30 +14,17 @@ from core.config import (
     BRIEFING_MORNING_ENABLED,
     BRIEFING_MORNING_HOUR,
     BRIEFING_MORNING_MINUTE,
-    BRIEFING_LLM_ENABLED,
-    BRIEFING_MODEL,
-    BRIEFING_PROMPT_FILE,
-    BRIEFING_TIMEOUT,
-    OLLAMA_BASE_URL,
-    OLLAMA_NUM_GPU,
-    SCORECARD_DAY_OF_WEEK,
-    SCORECARD_ENABLED,
-    SCORECARD_HOUR,
+    WATCHLIST_SCORECARD_DAY_OF_WEEK,
+    WATCHLIST_SCORECARD_ENABLED,
+    WATCHLIST_SCORECARD_HOUR,
 )
 from features.base import CommandSpec, FeatureSpec, MenuSpec
-from llm import BriefingWriter
+from llm import build_briefing_writer
 
 
 def _install_services(app) -> None:
     app.bot_data["trade_calendar"] = TradeCalendar()
-    app.bot_data["briefing_writer"] = BriefingWriter(
-        base_url=OLLAMA_BASE_URL,
-        model=BRIEFING_MODEL,
-        enabled=BRIEFING_LLM_ENABLED,
-        timeout=BRIEFING_TIMEOUT,
-        prompt_file=BRIEFING_PROMPT_FILE,
-        num_gpu=OLLAMA_NUM_GPU,
-    )
+    app.bot_data["briefing_writer"] = build_briefing_writer()
 
 
 def _install_jobs(scheduler, app) -> None:
@@ -63,12 +50,12 @@ def _install_jobs(scheduler, app) -> None:
             max_instances=1,
             coalesce=True,
         )
-    if SCORECARD_ENABLED:
+    if WATCHLIST_SCORECARD_ENABLED:
         scheduler.add_job(
             send_weekly_scorecard,
             trigger="cron",
-            day_of_week=SCORECARD_DAY_OF_WEEK,
-            hour=SCORECARD_HOUR,
+            day_of_week=WATCHLIST_SCORECARD_DAY_OF_WEEK,
+            hour=WATCHLIST_SCORECARD_HOUR,
             args=[app],
             id="weekly_scorecard",
             max_instances=1,

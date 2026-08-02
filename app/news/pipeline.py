@@ -298,23 +298,35 @@ async def send_global_digest(
     grouped_rows: dict[str, list[PreparedGlobalArticle]] = {}
     for row in prepared_rows:
         grouped_rows.setdefault(row.spec.key, []).append(row)
-    sections = [
-        PreparedSourceSection(
-            rows=rows,
-            text=(
-                f"<b>[{html.escape(rows[0].spec.label)}]</b>\n"
-                + _DIGEST_ARTICLE_SEPARATOR.join(row.text for row in rows)
-            ),
-        )
-        for rows in grouped_rows.values()
-    ]
+    max_body_length = NEWS_DIGEST_MESSAGE_MAX_CHARS - _DIGEST_HEADER_RESERVE
+    # chunk_message_items는 아이템 하나가 상한을 넘어도 쪼개지 못한다. 소스 하나의
+    # 기사 묶음이 한 메시지에 안 들어가면 텔레그램 4096자 제한에 걸려 전송이
+    # 통째로 실패하므로, 섹션을 만들 때 소스 안에서 먼저 나눠 둔다.
+    # (기사당 URL 500자 + 본문 상한이 겹치면 소스당 3~4건에서도 넘길 수 있다.)
+    sections: list[PreparedSourceSection] = []
+    for rows in grouped_rows.values():
+        label = f"<b>[{html.escape(rows[0].spec.label)}]</b>\n"
+        for row_group in chunk_message_items(
+            rows,
+            text_getter=lambda row: row.text,
+            max_body_length=max(1, max_body_length - len(label)),
+            separator=_DIGEST_ARTICLE_SEPARATOR,
+        ):
+            sections.append(
+                PreparedSourceSection(
+                    rows=row_group,
+                    text=label
+                    + _DIGEST_ARTICLE_SEPARATOR.join(row.text for row in row_group),
+                )
+            )
     chunks = chunk_message_items(
         sections,
         text_getter=lambda section: section.text,
-        max_body_length=NEWS_DIGEST_MESSAGE_MAX_CHARS - _DIGEST_HEADER_RESERVE,
+        max_body_length=max_body_length,
         separator=_DIGEST_SOURCE_SEPARATOR,
     )
-    source_count = len(sections)
+    # 섹션은 분할될 수 있으므로 소스 수는 그룹 수로 센다.
+    source_count = len(grouped_rows)
     article_count = len(prepared_rows)
 
     for chunk_index, chunk in enumerate(chunks, start=1):

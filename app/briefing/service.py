@@ -13,7 +13,7 @@ from telegram.ext import Application, ContextTypes
 
 from core.config import (
     BRIEFING_NEWS_MAX_ITEMS,
-    SCORECARD_LOOKBACK_DAYS,
+    WATCHLIST_SCORECARD_LOOKBACK_DAYS,
     TELEGRAM_CHAT_ID,
     TELEGRAM_MESSAGE_LIMIT,
 )
@@ -229,13 +229,13 @@ async def send_weekly_scorecard(app: Application, notify_empty: bool = False) ->
     if event_log is None:
         return
 
-    events = await event_log.snapshot(lookback_days=SCORECARD_LOOKBACK_DAYS)
+    events = await event_log.snapshot(lookback_days=WATCHLIST_SCORECARD_LOOKBACK_DAYS)
     watchlist = await wm.get_all()
     if not events:
         if notify_empty:
             await app.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=f"최근 {SCORECARD_LOOKBACK_DAYS}일간 관심리스트 편입·편출 이벤트가 없습니다.",
+                text=f"최근 {WATCHLIST_SCORECARD_LOOKBACK_DAYS}일간 관심리스트 편입·편출 이벤트가 없습니다.",
             )
         else:
             logger.info("[SCORECARD] 최근 이벤트가 없어 성적표를 건너뜁니다.")
@@ -249,7 +249,7 @@ async def send_weekly_scorecard(app: Application, notify_empty: bool = False) ->
 
     lines = build_scorecard_lines(events, watchlist, current_prices)
     sections = [
-        f"<b>📊 시장뷰 성적표</b> (최근 {SCORECARD_LOOKBACK_DAYS}일)",
+        f"<b>📊 시장뷰 성적표</b> (최근 {WATCHLIST_SCORECARD_LOOKBACK_DAYS}일)",
     ]
     if lines["added"]:
         sections.append("<b>편입 이후 성과</b>\n" + "\n".join(map(html.escape, lines["added"])))

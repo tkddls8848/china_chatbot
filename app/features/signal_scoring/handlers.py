@@ -1,26 +1,14 @@
-"""종목 감성 뷰·신호 성과 명령 구현."""
+"""종목 감성 뷰 명령 구현."""
 
 import html
-import logging
-from pathlib import Path
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from core.config import PREDICTION_LOG_FILE, VIEW_LOOKBACK_DAYS
-from core.workers import run_non_urgent
+from core.config import VIEW_LOOKBACK_DAYS
 from news.utils import normalize_stock_code
 from state import PredictionLog, aggregate_stock_views
-from state.scoring import (
-    DEFAULT_HORIZONS,
-    DEFAULT_THRESHOLD,
-    format_result_lines,
-    load_signals,
-    score_signals,
-)
 from stocks import StockDatabase
-
-logger = logging.getLogger(__name__)
 
 _VERDICT_LABELS = {
     "up": "🟢 상승 우위",
@@ -98,47 +86,3 @@ async def cmd_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
-def _score_report(log_path: Path, label: str, stock_db: StockDatabase) -> str:
-    """신호 로드 → 시세 대조 채점 → HTML 리포트(블로킹, to_thread에서 실행)."""
-    signals, neutral = load_signals(log_path, DEFAULT_THRESHOLD)
-    if not signals:
-        return (
-            f"{label} 로그에 채점할 신호가 없습니다 "
-            f"(중립 제외 {neutral}건, threshold={DEFAULT_THRESHOLD})."
-        )
-    up_count = sum(1 for s in signals if s["up"])
-    results = score_signals(signals, DEFAULT_HORIZONS, stock_db=stock_db)
-    table = "\n".join(format_result_lines(results, DEFAULT_HORIZONS))
-    return (
-        f"<b>감성 신호 적중률 ({label} 로그)</b>\n\n"
-        f"신호 {len(signals)}건 (상승 {up_count} / 하락 {len(signals) - up_count}, "
-        f"중립 제외 {neutral}건)\n\n"
-        f"<pre>{html.escape(table)}</pre>\n\n"
-        "적중률이 max(base, 1-base)를 지속 상회해야 신호에 정보가 있습니다. "
-        "예측·투자 조언이 아닙니다."
-    )
-
-
-async def cmd_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """운영 감성 신호를 실제 주가 방향과 대조해 적중률을 표시한다."""
-    message = update.effective_message
-    if message is None:
-        return
-    args = context.args or []
-    if args:
-        await message.reply_text("사용법: /score")
-        return
-    label, log_path = "운영", PREDICTION_LOG_FILE
-
-    if not log_path.exists():
-        await message.reply_text("운영 신호 로그가 없습니다.\n봇을 운영해 신호를 먼저 쌓아 주세요.")
-        return
-
-    status = await message.reply_text(f"{label} 신호 채점 중... (시세 조회)")
-    try:
-        stock_db: StockDatabase = context.bot_data["stock_db"]
-        report = await run_non_urgent(_score_report, log_path, label, stock_db)
-        await status.edit_text(report, parse_mode="HTML")
-    except Exception as e:
-        logger.exception("[SCORE] 채점 실패")
-        await status.edit_text(f"채점 실패: {e}")
