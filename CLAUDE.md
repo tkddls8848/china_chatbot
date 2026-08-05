@@ -16,6 +16,8 @@ msvcrt/fcntl 분기, 경로는 `pathlib` 사용).
   형태로 import 하며 `app.` 접두사를 붙이지 않는다.
 - 테스트: `python -m pytest -q` — `tests/conftest.py`가 `app/` import 경로,
   더미 Telegram 환경 변수와 워크스페이스 로컬 임시 디렉터리를 공통 설정한다.
+- `cloudflare_smoke` 마커가 붙은 테스트는 **실제 계정과 무료 할당량을 쓴다.**
+  `RUN_CLOUDFLARE_SMOKE=1`과 자격증명이 없으면 skip되므로 기본 실행은 안전하다.
 - 봇은 `data/runtime/bot.lock`으로 단일 인스턴스를 강제한다.
 
 ## 설정 원칙
@@ -27,7 +29,9 @@ msvcrt/fcntl 분기, 경로는 `pathlib` 사용).
   (`data/news/`, `data/watchlist/`, `data/instruments/`, `data/signal_scoring/`,
   `data/research/`, `data/runtime/`). 레거시 평면 배치는 시작 시
   `core/data_layout.py`가 1회 이동시킨다. 새 데이터 파일도 이 규칙을 따른다.
-- 런타임 변경(`/system gpu ...`)은 세션 한정이며 재시작하면 `.env` 값으로 돌아간다.
+- **런타임 설정 오버라이드는 없다.** `/system`은 조회 전용(`/system [features]`)이고,
+  값을 바꾸려면 `.env`를 고치고 재시작한다. 로컬 추론 시절의 `/system gpu`와
+  `core/system_control.py`는 Cloudflare 단독 전환 때 제거했다.
 
 ## 아키텍처: 기능 레지스트리
 
@@ -66,9 +70,12 @@ msvcrt/fcntl 분기, 경로는 `pathlib` 사용).
   호출부가 앞에서 자르므로 **순서 자체가 균형 장치**다.
 - 후보 universe 상한(`RESEARCH_MAX_CANDIDATES`)은 뉴스·키워드 후보가 다 먹으므로
   `RESEARCH_DISCOVERY_RESERVED_SLOTS`만큼 발굴 후보 자리를 남긴다.
-- 컨텍스트 예산이 빠듯하다. 실측상 기사 6건 + 후보 10개가 `RESEARCH_CTX_MAX` 12288의
-  거의 전부이며, 중국어 원문 기준 본문 260자가 한계선이라 `RESEARCH_NEWS_CONTENT_MAX_CHARS`
-  기본값이 240이다. `RESEARCH_NEWS_MAX_ITEMS`를 올리면 ctx도 같이 올린다.
+- 입력 크기가 곧 비용이다. 원격 모델이라 컨텍스트 크기를 고를 수 없으므로 로컬 시절의
+  `RESEARCH_CTX_MAX`는 제거했고, 대신 `_request_analysis()`가 **기사 수·문자 수·추정
+  입력 토큰을 로그에 남긴다**(`[MarketView] 분석 입력:`). 기사 6건
+  (`RESEARCH_NEWS_MAX_ITEMS`) + 후보 10개, 중국어 원문 기준 본문 240자
+  (`RESEARCH_NEWS_CONTENT_MAX_CHARS`)가 실측 기준선이다. 늘릴 때는 이 로그와
+  `usage.neurons`를 함께 본다.
 - **리서치 입력은 기본적으로 번역하지 않는다**(`RESEARCH_TRANSLATE_NEWS=false`). 분석
   모델이 다국어를 읽고, 종목명 매칭도 원문(cn_name·영문명)에서 더 잘 걸린다. 대신 번역
   파이프라인이 함께 주던 `mentioned_stocks`·`theme_candidates`·`sentiment`가 비므로,
@@ -144,10 +151,28 @@ msvcrt/fcntl 분기, 경로는 `pathlib` 사용).
 - 할당량이 소진되면 그날 뉴스 다이제스트는 비고 `/research`는 실패하지만, 브리핑은
   `_write_llm_comment()`가 실패를 삼켜 **데이터 전용 브리핑으로 자동 degrade**한다.
 
+## 배포는 Lightsail + Terraform이다
+
+인프라·부트스트랩은 `iac/terraform/`에 코드화되어 있고, 실행 절차와 함정은
+`iac/terraform/README.md`, 설계 근거·비용은 `docs/deployment-lightsail-plan.md`에 있다.
+코드에서 읽어낼 수 없는 두 가지만 옮겨 둔다.
+
+- **부트스트랩은 봇을 기동하지 않는다.** `data/runtime/bot.lock`은 머신 단위라 다른
+  호스트의 중복 기동을 막지 못하고, 같은 토큰으로 두 프로세스가 `getUpdates`를 치면
+  텔레그램이 `Conflict`를 반환해 양쪽이 번갈아 죽는다. 전환은 반드시 "로컬 정지 →
+  서버 기동" 순서로 사람이 한다.
+- **`user_data` 변경은 `ignore_changes`로 막혀 있다.** 바뀌면 인스턴스가 재생성되는데
+  그 디스크에 `data/`가 들어 있기 때문이다. 부트스트랩을 실제로 다시 적용하려면 SSH로
+  해당 단계를 직접 실행한다.
+
 ## 문서 위치
 
-- README의 `docs/`(설계·작업 문서, 에러 기록)는 **개발자 로컬에만 있고 저장소에 없다.**
-  원격 AI 세션에서는 볼 수 없으므로, 지속 가치가 있는 결정은 이 파일이나 코드 주석으로
-  옮겨 기록한다.
+- 저장소의 `docs/`에는 설계 문서 2건(`cloudflare-workers-ai-translation-plan.md`,
+  `deployment-lightsail-plan.md`)만 있다. 그 밖의 작업 문서·에러 기록은 **개발자 로컬에만
+  있고 저장소에 없다.** 원격 AI 세션에서는 볼 수 없으므로, 지속 가치가 있는 결정은 이
+  파일이나 코드 주석으로 옮겨 기록한다.
+- 기능 키 `signal_scoring`은 이름과 달리 **채점 기능이 아니다.** 신호 성과 채점은
+  제거했고 지금은 `/view`(뉴스 감성 집계 뷰)만 남았다. 키와 데이터 경로
+  (`data/signal_scoring/prediction_log.jsonl`)는 기존 배포 호환을 위해 유지한다.
 - 관리 웹(web_admin)은 `WEB_ADMIN_PASSWORD` 미지정 시 기능이 켜져 있어도 기동을
   건너뛴다(의도된 안전장치).

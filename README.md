@@ -33,7 +33,19 @@ CLOUDFLARE_API_TOKEN=<Workers AI 실행 권한 토큰>
 - 한도를 넘겨 쓰려면 Workers Paid 플랜에서 초과분이 1,000 Neurons당 $0.011입니다.
 - API 토큰은 `.env`에만 두고 커밋하지 않습니다. 로그와 예외 메시지에는 토큰이 남지 않습니다.
 
-배포는 [`docs/deployment-lightsail-plan.md`](docs/deployment-lightsail-plan.md)를 참고하세요.
+## 배포
+
+AWS Lightsail에 배포하며, 인스턴스·고정 IP·방화벽과 부트스트랩(스왑·systemd·백업 cron)이 Terraform으로 코드화되어 있습니다.
+
+```powershell
+cd iac\terraform
+Copy-Item terraform.tfvars.example terraform.tfvars   # ssh_public_key_path 등 편집
+terraform init; terraform apply
+terraform output cutover_commands                     # 전환 절차
+```
+
+- 실행 절차와 주의점은 [`iac/terraform/README.md`](iac/terraform/README.md), 설계 근거·비용·롤백 판단은 [`docs/deployment-lightsail-plan.md`](docs/deployment-lightsail-plan.md)에 있습니다.
+- 부트스트랩은 봇을 **기동하지 않습니다.** 같은 토큰으로 두 프로세스가 텔레그램을 폴링하면 양쪽이 번갈아 죽으므로, 전환은 "로컬 정지 → 서버 기동" 순서로 사람이 진행합니다.
 
 ## 테스트
 
@@ -55,21 +67,22 @@ python -m pytest -q -m cloudflare_smoke
 - 시장별 뉴스 감성 차트 (`/market`)
 - 관심 종목 뉴스·감성 요약
 - 뉴스 기반 시장 리서치 후보 관리 (중화권·미국·한국 균형 수집과 추천)
-- 장중·마감 브리핑 및 주간 스코어카드
+- 개장 전·마감 브리핑과 주간 관심종목 성적표
 - 중국·홍콩·한국·미국 종목 DB
 
 ## 텔레그램 명령
 
 | 명령 | 설명 |
 |---|---|
+| `/start`, `/help` | 사용 안내와 메뉴 표시 |
 | `/market [일수]` | 시장별 뉴스 감성 차트 |
 | `/menu`, `/list` | 관심 종목 목록 |
 | `/add 종목코드` | 관심 종목 추가 |
 | `/view [종목코드]` | 종목별 뉴스 감성 |
 | `/research show\|set\|run\|clear` | 리서치 후보 관리 |
-| `/briefing morning\|evening\|scorecard` | 브리핑 또는 성과표 생성 |
+| `/briefing morning\|evening\|scorecard` | 브리핑 또는 성적표 생성 |
 | `/stockdb build` | 종목 DB 갱신 |
-| `/system` | 시스템 상태 확인 |
+| `/system [features]` | 시스템 상태와 기능 카탈로그 확인 |
 
 ## 관리 웹 (선택)
 
@@ -106,8 +119,8 @@ WEB_ADMIN_PASSWORD=<반드시 지정>
 ```text
 app/        봇, 명령 처리, 뉴스·LLM·종목 DB·관심 종목 모듈
 prompts/    번역·리서치·브리핑 프롬프트
-scripts/    운영 및 보조 스크립트
+iac/        Lightsail 배포 Terraform 코드
 tests/      자동화 테스트
-docs/       설계와 작업 문서
+docs/       설계 문서 (Cloudflare 전환, Lightsail 배포 계획)
 data/       실행 중 생성되는 상태·캐시 데이터, 소유 기능별 하위 디렉토리 (Git 제외)
 ```
