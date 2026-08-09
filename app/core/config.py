@@ -17,8 +17,7 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 
-# pandas 3.0부터 문자열 추론 방식이 바뀌어 일부 AkShare 응답의 정규식 처리가
-# 실패할 수 있으므로 레거시 object 문자열 방식으로 고정한다.
+# AkShare 응답의 정규식 처리를 위해 object 문자열 방식을 사용한다.
 pd.set_option("future.infer_string", False)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -74,8 +73,6 @@ if not PROMPT_DIR.is_absolute():
 # ── 번역 ──────────────────────────────────────────────
 TRANSLATION_ENABLED = _env_bool("TRANSLATION_ENABLED", "true")
 TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "1024"))
-# 원격 추론이라 동시 요청을 늘릴 수 있다. 올리면 Cloudflare 속도 제한(429)에
-# 걸릴 수 있으므로 로그의 result=rate_limited를 보며 조정한다.
 TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "1"))
 
 # ── Cloudflare Workers AI ─────────────────────────────
@@ -141,15 +138,10 @@ WEB_ADMIN_PASSWORD = os.environ.get("WEB_ADMIN_PASSWORD", "")
 SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
 TELEGRAM_MESSAGE_LIMIT = 4096
 NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))
-NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS = max(
-    1,
-    int(os.environ.get("NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS", "180")),
-)
 NEWS_DIGEST_MESSAGE_MAX_CHARS = min(
     TELEGRAM_MESSAGE_LIMIT,
     max(2000, int(os.environ.get("NEWS_DIGEST_MESSAGE_MAX_CHARS", "3500"))),
 )
-NEWS_ENABLE_CLS = _env_bool("NEWS_ENABLE_CLS", "false")
 NEWS_SOURCE_FETCH_TIMEOUT_SECONDS = float(
     os.environ.get("NEWS_SOURCE_FETCH_TIMEOUT_SECONDS", "45")
 )
@@ -161,21 +153,6 @@ NEWS_SOURCE_ARTICLE_LIMIT = max(
     1,
     int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "10")),
 )
-
-
-def _parse_global_source_keys() -> list[str]:
-    """전역 뉴스 소스 우선순위 목록.
-
-    NEWS_GLOBAL_SOURCES가 설정되면 그 목록이 전부다. 미설정이면 기본
-    futu,em,sina에 NEWS_ENABLE_CLS=true일 때 cls를 덧붙인다(하위 호환).
-    """
-    raw = os.environ.get("NEWS_GLOBAL_SOURCES", "").strip()
-    if raw:
-        return [key.strip().lower() for key in raw.split(",") if key.strip()]
-    keys = ["futu", "sina", "gnews", "gnews_us", "gnews_kr"]
-    if NEWS_ENABLE_CLS:
-        keys.append("cls")
-    return keys
 
 
 def _parse_rss_feeds() -> list[tuple[str, str]]:
@@ -193,7 +170,14 @@ def _parse_rss_feeds() -> list[tuple[str, str]]:
     return feeds
 
 
-NEWS_GLOBAL_SOURCE_KEYS = _parse_global_source_keys()
+NEWS_GLOBAL_SOURCE_KEYS = [
+    key.strip().lower()
+    for key in os.environ.get(
+        "NEWS_GLOBAL_SOURCES",
+        "futu,sina,gnews,gnews_us,gnews_kr",
+    ).split(",")
+    if key.strip()
+]
 NEWS_RSS_FEEDS = _parse_rss_feeds()
 NEWS_SOURCE_FAILURE_THRESHOLD = int(os.environ.get("NEWS_SOURCE_FAILURE_THRESHOLD", "3"))
 NEWS_SOURCE_COOLDOWN_MINUTES = int(os.environ.get("NEWS_SOURCE_COOLDOWN_MINUTES", "60"))
@@ -202,9 +186,6 @@ NEWS_SENTIMENT_ENABLED = _env_bool("NEWS_SENTIMENT_ENABLED", "true")
 NEWS_NEGATIVE_ALERT_THRESHOLD = float(os.environ.get("NEWS_NEGATIVE_ALERT_THRESHOLD", "-0.6"))
 # /view 감성 뷰 집계에 사용할 최근 신호 일수.
 VIEW_LOOKBACK_DAYS = int(os.environ.get("VIEW_LOOKBACK_DAYS", "3"))
-# 한 주기에 처리할 전역 속보 소스 수. 기본값 0은 활성 소스 전체를 처리한다.
-# 양수로 지정하면 해당 개수만큼 소스를 회전 처리할 수 있다.
-GLOBAL_NEWS_BATCH_SIZE = int(os.environ.get("GLOBAL_NEWS_BATCH_SIZE", "0"))
 SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5"))
 STOCK_DB_ENABLED = _env_bool("STOCK_DB_ENABLED", "true")
 # ── 시황 리서치(/research) ────────────────────────────
@@ -226,12 +207,6 @@ RESEARCH_NEWS_CONTENT_MAX_CHARS = max(
     80,
     int(os.environ.get("RESEARCH_NEWS_CONTENT_MAX_CHARS", "240")),
 )
-# 리서치 분석 입력을 번역할지 여부. false면 번역 LLM 호출(기사당 1회)을 건너뛰고
-# 원문을 그대로 넣는다. 분석 모델은 다국어를 읽으므로 결과 품질보다 실행 시간이
-# 더 크게 걸리는 지점이라 기본값이 false다. 대신 번역 파이프라인이 함께 뽑던
-# mentioned_stocks·theme_candidates·sentiment가 없어지므로, 후보 발굴은 뉴스
-# 본문 종목명 매칭과 시장 데이터 발굴(섹터·스크리너·등락률)에 의존한다.
-RESEARCH_TRANSLATE_NEWS = _env_bool("RESEARCH_TRANSLATE_NEWS", "false")
 # 리서치 뉴스 수집에서 균형을 맞출 시장 순서. 소스 우선순위대로 뽑으면 첫 소스
 # (중화권)가 상한을 독식해 미국·한국 뉴스가 분석 입력에 들어가지 못한다.
 # 여기 적힌 시장끼리 라운드로빈으로 뽑고, 목록 밖 시장은 마지막에 채운다.
@@ -249,26 +224,8 @@ RESEARCH_MAX_CANDIDATES = max(
     1,
     int(os.environ.get("RESEARCH_MAX_CANDIDATES", "10")),
 )
-# 리서치 주제 키워드를 종목 '이름'과 대조해 만드는 후보. 근거가 이름 문자열
-# 겹침뿐이라 15,000종목 상대로는 수백 개가 잡히면서 근거 있는 후보를 상한 밖으로
-# 밀어낸다. 뉴스 근거·시장 데이터 발굴이 후보를 채우므로 기본 비활성이며,
-# 켜더라도 LIMIT 개까지만 채운다(뉴스가 없는 날의 보조 수단).
-RESEARCH_KEYWORD_CANDIDATES_ENABLED = _env_bool(
-    "RESEARCH_KEYWORD_CANDIDATES_ENABLED", "false"
-)
-RESEARCH_KEYWORD_CANDIDATE_LIMIT = max(
-    0,
-    int(os.environ.get("RESEARCH_KEYWORD_CANDIDATE_LIMIT", "5")),
-)
-# 뉴스 테마 후보에서 LLM이 코드를 지정하지 않고 '이름 매칭'으로만 걸린 후보의
-# 상한. 위와 같은 이유로 제한한다(LLM이 코드를 명시한 후보는 제한하지 않는다).
-RESEARCH_THEME_PATTERN_CANDIDATE_LIMIT = max(
-    0,
-    int(os.environ.get("RESEARCH_THEME_PATTERN_CANDIDATE_LIMIT", "5")),
-)
 # 뉴스 본문 종목명 매칭에서 버릴 '흔한 영문 토큰'의 기준(이 수보다 많은 종목이
-# 공유하는 토큰은 사용하지 않는다). 종목 DB 실측상 tech=29, energy=83인 반면
-# apple=1, semiconductor=6이라 15면 일반 단어만 걸러진다.
+# 공유하는 토큰은 사용하지 않는다).
 RESEARCH_NAME_TOKEN_MAX_FREQUENCY = max(
     1,
     int(os.environ.get("RESEARCH_NAME_TOKEN_MAX_FREQUENCY", "15")),
@@ -277,8 +234,7 @@ RESEARCH_MAX_NEW_ACTIONS = max(
     0,
     int(os.environ.get("RESEARCH_MAX_NEW_ACTIONS", "4")),
 )
-# 후보 universe 상한 중 시장별 발굴(섹터·미국 스크리너·한국 등락률)에 남겨 둘
-# 자리. 0이면 뉴스·키워드 후보가 상한을 채웠을 때 발굴 후보가 들어가지 못한다.
+# 후보 상한 중 시장별 발굴에 남겨 둘 자리.
 RESEARCH_DISCOVERY_RESERVED_SLOTS = max(
     0,
     int(os.environ.get("RESEARCH_DISCOVERY_RESERVED_SLOTS", "3")),
@@ -297,16 +253,10 @@ RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
         float(os.environ.get("RESEARCH_REMOVE_RELEVANCE_THRESHOLD", "0.35")),
     ),
 )
-# 시장뷰 분석 강화: bull/bear 검증 패스, 분석 이력 메모리
-RESEARCH_VERIFICATION_ENABLED = _env_bool("RESEARCH_VERIFICATION_ENABLED", "false")
-RESEARCH_VERIFICATION_PROMPT_FILE = PROMPT_DIR / "market_research_verify_ko.txt"
 RESEARCH_HISTORY_LIMIT = int(os.environ.get("RESEARCH_HISTORY_LIMIT", "3"))
 # 강세 섹터 구성종목을 리서치 후보군에 추가
 RESEARCH_SECTOR_CANDIDATES_ENABLED = _env_bool("RESEARCH_SECTOR_CANDIDATES_ENABLED", "true")
 RESEARCH_SECTOR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_SECTOR_CANDIDATE_LIMIT", "10"))
-# 동화순 问财 자연어 스크리닝(비공식 API, pywencai 별도 설치 필요)
-WENCAI_ENABLED = _env_bool("WENCAI_ENABLED", "false")
-WENCAI_CANDIDATE_LIMIT = int(os.environ.get("WENCAI_CANDIDATE_LIMIT", "10"))
 # 미국 후보 발굴: Yahoo Finance 프리셋 스크리너(yfinance.screen).
 RESEARCH_US_CANDIDATES_ENABLED = _env_bool("RESEARCH_US_CANDIDATES_ENABLED", "true")
 RESEARCH_US_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_US_CANDIDATE_LIMIT", "8"))
@@ -325,13 +275,11 @@ RESEARCH_KR_MIN_TRADING_VALUE = float(
     os.environ.get("RESEARCH_KR_MIN_TRADING_VALUE", "5000000000")
 )
 
-# 정량 컨텍스트(시세·자금흐름·섹터·인기순위·涨停·용호방)
+# 정량 컨텍스트(시세·자금흐름·섹터·涨停·용호방)
 QUANT_CONTEXT_ENABLED = _env_bool("QUANT_CONTEXT_ENABLED", "true")
 QUANT_CACHE_TTL_MINUTES = int(os.environ.get("QUANT_CACHE_TTL_MINUTES", "10"))
 QUANT_SECTOR_TOP_N = int(os.environ.get("QUANT_SECTOR_TOP_N", "5"))
 QUANT_FAILURE_COOLDOWN_MINUTES = int(os.environ.get("QUANT_FAILURE_COOLDOWN_MINUTES", "15"))
-# 동방재부 인기순위 API는 해외 IP에서 차단되므로 기본 비활성.
-QUANT_HOT_RANK_ENABLED = _env_bool("QUANT_HOT_RANK_ENABLED", "false")
 
 # 최근 뉴스 로그(마감 브리핑 요약 입력)
 NEWS_LOG_RETENTION_DAYS = int(os.environ.get("NEWS_LOG_RETENTION_DAYS", "30"))
@@ -342,10 +290,7 @@ def _parse_market_map() -> dict[str, str]:
     raw = os.environ.get("NEWS_SOURCE_MARKETS", "").strip()
     mapping: dict[str, str] = {
         "futu": "CN",
-        "em": "CN",
         "sina": "CN",
-        "ths": "CN",
-        "cls": "CN",
         "gnews_us": "US",
         "gnews_kr": "KR",
     }
@@ -371,6 +316,45 @@ MARKET_CHART_MARKETS = frozenset(
     market.strip().upper()
     for market in os.environ.get("MARKET_CHART_MARKETS", "CN,HK,US,KR").split(",")
     if market.strip()
+)
+
+# 일별 감성 다이제스트는 하루치 헤드라인을 한 번에 분석한다.
+MARKET_DIGEST_FILE = DATA_DIR / "market_sentiment" / "daily_digest.json"
+MARKET_DIGEST_ENABLED = _env_bool("MARKET_DIGEST_ENABLED", "true")
+MARKET_DIGEST_PROMPT_FILE = PROMPT_DIR / "market_digest_ko.txt"
+MARKET_DIGEST_ARTICLES_PER_DAY = max(
+    1,
+    int(os.environ.get("MARKET_DIGEST_ARTICLES_PER_DAY", "20")),
+)
+# 표본이 이보다 적은 날은 계산하지 않는다. 3건짜리 하루를 20건짜리 하루와 같은
+# 무게로 그리면 차트가 다시 출렁인다.
+MARKET_DIGEST_MIN_ARTICLES = max(
+    1,
+    int(os.environ.get("MARKET_DIGEST_MIN_ARTICLES", "5")),
+)
+# `/market` 최대 조회 범위(30일)와 맞춘다. 그보다 오래된 항목은 차트가 읽지 않는다.
+MARKET_DIGEST_RETENTION_DAYS = max(
+    1,
+    int(os.environ.get("MARKET_DIGEST_RETENTION_DAYS", "30")),
+)
+# 요청당 LLM 호출 상한. 40회 ≈ 350 Neurons.
+MARKET_DIGEST_MAX_CALLS_PER_REQUEST = max(
+    1,
+    int(os.environ.get("MARKET_DIGEST_MAX_CALLS_PER_REQUEST", "40")),
+)
+MARKET_DIGEST_NUM_PREDICT = max(
+    64,
+    int(os.environ.get("MARKET_DIGEST_NUM_PREDICT", "256")),
+)
+MARKET_DIGEST_TIMEOUT = max(
+    5,
+    int(os.environ.get("MARKET_DIGEST_TIMEOUT", "60")),
+)
+# 감성 건수의 합이 입력 헤드라인 수와 크게 다르면 결과를 버린다.
+# 허용 오차 = max(1, ceil(헤드라인 수 × 이 비율)).
+MARKET_DIGEST_COUNT_TOLERANCE_RATIO = max(
+    0.0,
+    float(os.environ.get("MARKET_DIGEST_COUNT_TOLERANCE_RATIO", "0.1")),
 )
 
 

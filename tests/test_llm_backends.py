@@ -213,22 +213,6 @@ def test_reports_reasoning_only_response():
     assert "reasoning_chars=3510" in detail
 
 
-def test_accepts_v4_envelope_wrapped_choices():
-    session = _FakeSession(
-        _FakeResponse(
-            payload={
-                "success": True,
-                "result": {
-                    "choices": [{"message": {"content": "wrapped"}}],
-                    "usage": {"prompt_tokens": 5, "completion_tokens": 7},
-                },
-            }
-        )
-    )
-
-    assert _cloudflare(session).generate(**GENERATE_KWARGS) == "wrapped"
-
-
 # ── 오류 분류 ─────────────────────────────────────────
 
 
@@ -475,8 +459,7 @@ def _service(backend):
     service._enabled = True
     service._num_predict = 512
     service._temperature = 0.1
-    service._brief_content_limit = 180
-    service._prompts = {"global": "prompt"}
+    service._prompt = "prompt"
     return service
 
 
@@ -494,14 +477,14 @@ def test_service_translates_through_the_backend():
     session = _FakeSession(_chat_completion(payload))
     backend, _ = _resilient(session)
 
-    result = _service(backend).translate_article("global", "原文", "原文 본문")
+    result = _service(backend).translate_article("原文", "原文 본문")
 
     assert result.title == "제목"
     assert result.mentioned_stocks == ["600519"]
     assert result.sentiment == 0.4
     system_prompt = session.calls[0]["json"]["messages"][0]["content"]
     assert system_prompt.startswith("prompt")
-    assert "JSON output hard rules" in system_prompt
+    assert system_prompt == "prompt\n/no_think"
 
 
 def test_service_raises_translation_error_when_backend_fails():
@@ -509,4 +492,4 @@ def test_service_raises_translation_error_when_backend_fails():
     backend, _ = _resilient(session)
 
     with pytest.raises(TranslationError, match="timeout"):
-        _service(backend).translate_article("global", "原文", "原文 본문")
+        _service(backend).translate_article("原文", "原文 본문")

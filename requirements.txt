@@ -3,7 +3,7 @@ akshare
 pandas
 hanja
 opencc-python-reimplemented
-apscheduler==3.10.4
+apscheduler==3.10.4   # 4.x는 API 비호환이라 고정한다. 올리려면 스케줄러 조립을 다시 쓴다.
 python-dotenv
 requests
 tenacity

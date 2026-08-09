@@ -23,17 +23,8 @@ def _install_services(app) -> None:
 
     registry = app.bot_data["news_registry"]
 
-    async def collect_research_news(
-        translator,
-        translate_semaphore,
-        **kwargs,
-    ):
-        return await collect_global_market_news_items(
-            translator,
-            translate_semaphore,
-            registry,
-            **kwargs,
-        )
+    async def collect_research_news(**kwargs):
+        return await collect_global_market_news_items(registry, **kwargs)
 
     app.bot_data["research_news_collector"] = collect_research_news
 

@@ -21,10 +21,7 @@ from core.config import (
     RESEARCH_US_CANDIDATE_LIMIT,
     RESEARCH_US_CANDIDATES_ENABLED,
     RESEARCH_US_SCREENERS,
-    WENCAI_CANDIDATE_LIMIT,
-    WENCAI_ENABLED,
 )
-from research.candidates import _extract_research_cn_patterns
 from stocks import StockDatabase
 from stocks.universe import stock_key
 
@@ -109,69 +106,6 @@ def build_sector_candidates(
             )
             if len(candidates) >= limit:
                 return candidates
-    return candidates
-
-
-def build_wencai_candidates(
-    market_view: str,
-    stock_db: StockDatabase,
-    watchlist: dict[str, str],
-    limit: int = WENCAI_CANDIDATE_LIMIT,
-    query_override: str = "",
-) -> list[dict[str, Any]]:
-    """동화순 问财 자연어 스크리닝(비공식 API, 기본 비활성).
-
-    pywencai가 설치되어 있지 않거나 호출이 실패하면 빈 목록을 반환한다.
-    """
-    if not WENCAI_ENABLED:
-        return []
-    try:
-        import pywencai
-    except ImportError:
-        logger.warning("[DISCOVERY] WENCAI_ENABLED=true지만 pywencai가 없습니다. pip install pywencai")
-        return []
-
-    query = query_override.strip()
-    if not query:
-        patterns = _extract_research_cn_patterns(market_view)
-        if not patterns:
-            logger.info("[DISCOVERY] wencai 쿼리를 만들 중국어 키워드가 없어 건너뜁니다.")
-            return []
-        query = f"{' '.join(patterns[:3])} 相关上市公司"
-
-    try:
-        df = pywencai.get(query=query, loop=False)
-    except Exception as e:
-        logger.warning("[DISCOVERY] wencai 조회 실패: %s", e)
-        return []
-    if df is None or getattr(df, "empty", True):
-        return []
-
-    code_col = next((c for c in df.columns if "代码" in str(c)), None)
-    if code_col is None:
-        return []
-
-    candidates: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
-        raw = str(row[code_col])
-        code = raw.split(".")[0].strip().zfill(6)
-        if not code.isdigit() or code in watchlist:
-            continue
-        display_name = stock_db.get_display_name(code)
-        if not display_name:
-            continue
-        candidates.append(
-            _candidate_entry(
-                code,
-                display_name,
-                stock_db.get_market(code) or "CN",
-                watchlist,
-                relation_keyword="问财",
-                relation_reason=f"问财 스크리닝 '{query}' 결과",
-            )
-        )
-        if len(candidates) >= limit:
-            break
     return candidates
 
 
@@ -334,11 +268,9 @@ def collect_extra_candidates(
     quote_service,
     stock_db: StockDatabase,
     watchlist: dict[str, str],
-    market_view: str,
 ) -> list[dict[str, Any]]:
     """중화권·미국·한국 발굴 후보를 시장 균형을 맞춰 반환한다(블로킹)."""
     cn_candidates = build_sector_candidates(quote_service, stock_db, watchlist)
-    cn_candidates += build_wencai_candidates(market_view, stock_db, watchlist)
     groups = [
         cn_candidates,
         build_us_candidates(stock_db, watchlist),

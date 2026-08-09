@@ -23,7 +23,6 @@ from core.config import (
     CLOUDFLARE_API_TOKEN,
     CLOUDFLARE_TRANSLATION_MODEL,
     CLOUDFLARE_TRANSLATION_TIMEOUT,
-    NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
     PROMPT_DIR,
     TRANSLATION_NUM_PREDICT,
 )
@@ -81,22 +80,18 @@ def service() -> TranslationService:
         enabled=True,
         prompt_dir=PROMPT_DIR,
         num_predict=TRANSLATION_NUM_PREDICT,
-        brief_content_limit=NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
     )
 
 
 @pytest.mark.parametrize(("title", "content", "must_keep"), SAMPLES)
 def test_cloudflare_translation_contract(service, title, content, must_keep):
-    result = service.translate_article("global", title, content)
+    result = service.translate_article(title, content)
 
     assert re.search(r"[가-힣]", result.title), result.title
     assert re.search(r"[가-힣]", result.content), result.content
     # 완결된 단신이어야 하며 말줄임으로 끊기지 않는다.
     assert not result.content.rstrip().endswith(("...", "…"))
-    tolerated = NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS + max(
-        10, round(NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS * 0.1)
-    )
-    assert len(result.content) <= tolerated, len(result.content)
+    assert len(result.content) <= 190, len(result.content)
 
     combined = f"{result.title} {result.content}"
     missing = [token for token in must_keep if token not in combined]

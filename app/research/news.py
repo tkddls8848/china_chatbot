@@ -6,7 +6,7 @@ NewsSourceRegistry를 공유해 소스 페일오버를 그대로 따른다.
 수집은 시장 균형을 맞춘다. 소스 우선순위대로 상한까지 채우면 첫 소스
 (중화권)가 전부 가져가 미국·한국 뉴스가 분석 입력에 들어가지 못하므로,
 기사를 시장별로 모은 뒤 RESEARCH_NEWS_MARKETS 순서로 라운드로빈 선택한다.
-번역은 선택된 기사에만 수행한다(LLM 호출 수 = 최종 아이템 수).
+분석 모델이 다국어를 직접 읽으므로 별도 번역 호출은 하지 않는다.
 """
 
 import asyncio
@@ -20,15 +20,9 @@ from core.config import (
     RESEARCH_NEWS_GLOBAL_LIMIT,
     RESEARCH_NEWS_MARKETS,
     RESEARCH_NEWS_MAX_ITEMS,
-    RESEARCH_TRANSLATE_NEWS,
 )
 from news.registry import NewsSourceRegistry, SourceSpec
-from news.utils import (
-    filter_recent_articles,
-    is_timeout_error,
-    translate_article,
-)
-from llm.translator import TranslationService
+from news.utils import filter_recent_articles
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +42,6 @@ def _make_news_item(
     content: str,
     published_at: str,
     url: str = "",
-    mentioned_stocks: list[str] | None = None,
-    theme_candidates: list[dict[str, Any]] | None = None,
-    sentiment: float | None = None,
     market: str = "",
 ) -> dict[str, Any]:
     # 시나처럼 제목 없이 본문만 오는 소스가 있다. 번역을 켜면 모델이 제목을
@@ -60,15 +51,10 @@ def _make_news_item(
         "id": f"{source}:{published_at}:{title[:30]}",
         "source": source,
         "market": market,
-        "ticker": "",
-        "name": "",
         "title": title[:240],
         "content": content[:RESEARCH_NEWS_CONTENT_MAX_CHARS],
         "published_at": published_at,
         "url": url,
-        "mentioned_stocks": mentioned_stocks or [],
-        "theme_candidates": theme_candidates or [],
-        "sentiment": sentiment,
     }
 
 
@@ -150,20 +136,11 @@ async def _collect_articles_by_market(
 
 
 async def collect_global_market_news_items(
-    translator: TranslationService | None = None,
-    translate_semaphore: asyncio.Semaphore | None = None,
     registry: NewsSourceRegistry | None = None,
     max_items: int = RESEARCH_NEWS_MAX_ITEMS,
     markets: tuple[str, ...] | list[str] = RESEARCH_NEWS_MARKETS,
-    translate: bool = RESEARCH_TRANSLATE_NEWS,
 ) -> list[dict[str, Any]]:
-    """레지스트리의 활성 소스에서 시장 균형을 맞춰 분석 입력 뉴스를 만든다.
-
-    translate=False면 번역 LLM을 호출하지 않고 원문을 그대로 담는다. 분석
-    모델은 다국어를 읽고, 종목명 매칭도 원문(중국어 cn_name·영문명)에서 더 잘
-    걸린다. 대신 번역이 함께 주던 mentioned_stocks·theme_candidates·sentiment는
-    비어 있게 된다.
-    """
+    """레지스트리에서 시장 균형을 맞춘 원문 분석 입력을 만든다."""
     if registry is None:
         logger.warning("[RESEARCH] news registry가 없어 전역 뉴스 수집을 건너뜁니다.")
         return []
@@ -174,49 +151,21 @@ async def collect_global_market_news_items(
 
     selected = select_balanced_articles(buckets, max_items, markets)
     logger.info(
-        "[RESEARCH] 뉴스 후보 시장 분포: %s → 선택 %d건 (%s)",
+        "[RESEARCH] 뉴스 후보 시장 분포: %s → 선택 %d건",
         {market: len(rows) for market, rows in buckets.items()},
         len(selected),
-        "번역본" if translate else "원문",
     )
 
     news_items: list[dict[str, Any]] = []
     for spec, article in selected:
-        title = article.title
-        content = article.content
         market = _article_market(article, spec)
-        mentioned_stocks: list[str] = []
-        theme_candidates: list[dict[str, Any]] = []
-        sentiment: float | None = None
-        if translate and translator is not None and translate_semaphore is not None:
-            try:
-                translated = await translate_article(
-                    translator,
-                    translate_semaphore,
-                    spec.prompt_key,
-                    title,
-                    content,
-                )
-                title = translated.title
-                content = translated.content
-                mentioned_stocks = translated.mentioned_stocks
-                theme_candidates = translated.theme_candidates
-                sentiment = translated.sentiment
-            except Exception as e:
-                logger.error("[RESEARCH] %s translation failed: %s", spec.key, e)
-                if is_timeout_error(e):
-                    return news_items[:max_items]
-                continue
         news_items.append(
             _make_news_item(
                 spec.label,
-                title,
-                content,
+                article.title,
+                article.content,
                 article.published_at,
                 article.url,
-                mentioned_stocks=mentioned_stocks,
-                theme_candidates=theme_candidates,
-                sentiment=sentiment,
                 market=market,
             )
         )

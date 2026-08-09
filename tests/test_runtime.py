@@ -4,13 +4,12 @@ import json
 import threading
 from types import SimpleNamespace
 
-import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import bot
 from bot import _acquire_single_instance_lock
 from core import workers
-from llm.market_view import MarketViewAnalyzer, MarketViewError, MarketViewManager
+from llm.market_view import MarketViewAnalyzer, MarketViewManager
 from watchlist.manager import WatchlistManager
 
 
@@ -30,43 +29,6 @@ def test_new_watchlist_starts_empty(tmp_path):
 
     assert asyncio.run(manager.get_all()) == {}
     assert json.loads(state_file.read_text(encoding="utf-8")) == {}
-
-
-def test_existing_watchlist_uses_injected_code_resolver(tmp_path):
-    state_file = tmp_path / "watchlist.json"
-    state_file.write_text(
-        json.dumps(
-            {
-                "CN:SH:600519": "Legacy Moutai",
-                "HK:HKEX:00700": "Legacy Tencent",
-                "aapl": "Legacy Apple",
-                "US:NASDAQ:AAPL": "Canonical Apple",
-                "005930": "Samsung",
-                "unknown": "Keep unresolved",
-            }
-        ),
-        encoding="utf-8",
-    )
-    aliases = {
-        "CN:SH:600519": "600519",
-        "HK:HKEX:00700": "00700",
-        "aapl": "US:NASDAQ:AAPL",
-        "US:NASDAQ:AAPL": "US:NASDAQ:AAPL",
-        "005930": "KR:KOSPI:005930",
-    }
-
-    manager = WatchlistManager(state_file, code_resolver=aliases.get)
-
-    assert asyncio.run(manager.get_all()) == {
-        "600519": "Legacy Moutai",
-        "00700": "Legacy Tencent",
-        "US:NASDAQ:AAPL": "Canonical Apple",
-        "KR:KOSPI:005930": "Samsung",
-        "unknown": "Keep unresolved",
-    }
-    assert json.loads(state_file.read_text(encoding="utf-8")) == asyncio.run(
-        manager.get_all()
-    )
 
 
 def test_watchlist_add_and_remove_use_injected_code_resolver(tmp_path):
@@ -140,25 +102,6 @@ def test_non_urgent_workers_are_selected_round_robin(monkeypatch):
     assert names == expected
 
 
-def _analyzer_with_timeout(seconds: int) -> MarketViewAnalyzer:
-    analyzer = object.__new__(MarketViewAnalyzer)
-    analyzer._timeout = seconds
-    return analyzer
-
-
-def test_remaining_timeout_uses_shared_research_budget(monkeypatch):
-    analyzer = _analyzer_with_timeout(300)
-    monkeypatch.setattr("llm.market_view.time.monotonic", lambda: 120.0)
-    assert analyzer._remaining_timeout(300.0) == 180.0
-
-
-def test_remaining_timeout_rejects_expired_budget(monkeypatch):
-    analyzer = _analyzer_with_timeout(300)
-    monkeypatch.setattr("llm.market_view.time.monotonic", lambda: 301.0)
-    with pytest.raises(MarketViewError, match="timed out"):
-        analyzer._remaining_timeout(300.0)
-
-
 def test_analysis_request_passes_prompt_and_output_budget():
     """분석 요청이 프롬프트·출력 상한·요청별 타임아웃을 백엔드로 넘기는지 확인한다."""
     captured = {}
@@ -175,31 +118,14 @@ def test_analysis_request_passes_prompt_and_output_budget():
     analyzer._backend = _Backend()
     analyzer._prompt = "prompt"
     analyzer._num_predict = 4096
+    analyzer._timeout = 600
 
-    analyzer._request_analysis({"market_view": "AI"}, timeout=600)
+    analyzer._request_analysis({"market_view": "AI"})
 
     assert captured["max_tokens"] == 4096
     assert captured["timeout"] == 600
     assert captured["system_prompt"] == "prompt"
     assert "AI" in captured["user_prompt"]
-
-
-def test_analysis_prepends_brace_when_response_omits_it():
-    """모델이 여는 중괄호를 빠뜨려도 JSON으로 복구한다."""
-
-    class _Backend:
-        name = "cloudflare"
-        model = "model"
-
-        def generate(self, **kwargs):
-            return '"summary":"ok"}'
-
-    analyzer = object.__new__(MarketViewAnalyzer)
-    analyzer._backend = _Backend()
-    analyzer._prompt = "prompt"
-    analyzer._num_predict = 1024
-
-    assert analyzer._request_analysis({}) == '{"summary":"ok"}'
 
 
 def test_analysis_payload_includes_new_action_cap():
@@ -209,7 +135,6 @@ def test_analysis_payload_includes_new_action_cap():
     analyzer._remove_relevance_threshold = 0.35
     analyzer._max_new_actions = 4
     analyzer._max_actions = 6
-    analyzer._verification_enabled = False
     captured = {}
 
     def request(payload, **kwargs):
@@ -220,72 +145,6 @@ def test_analysis_payload_includes_new_action_cap():
     analyzer.analyze("AI", {}, [], [])
     assert captured["max_new_actions"] == 4
     assert captured["max_actions"] == 6
-
-
-def test_truncated_analysis_recovers_complete_actions():
-    analyzer = object.__new__(MarketViewAnalyzer)
-    analyzer._max_new_actions = 4
-    analyzer._max_actions = 6
-    raw = (
-        '{"summary":"요약","actions":['
-        '{"ticker":"US:NASDAQ:AMZN","name":"Amazon","action":"add",'
-        '"confidence":0.85,"relevance":0.9,"reason":"강세",'
-        '"evidence":[]},'
-        '{"ticker":"US:NASDAQ:MSFT","name":"Microsoft","action":"add",'
-        '"confidence":0.8,"rel'
-    )
-
-    result = analyzer._parse_analysis(
-        raw,
-        watchlist={},
-        candidate_universe=[
-            {"code": "US:NASDAQ:AMZN"},
-            {"code": "US:NASDAQ:MSFT"},
-        ],
-    )
-
-    assert result["summary"] == "요약"
-    assert [item["ticker"] for item in result["actions"]] == ["US:NASDAQ:AMZN"]
-    assert "완성된 액션 1개" in result["risks"][0]
-
-
-def test_market_view_history_is_migrated_and_saved_as_compact_summaries(tmp_path):
-    state_file = tmp_path / "market_research.json"
-    legacy_results = [
-        {
-            "generated_at": f"2026-07-1{index}T10:00:00",
-            "summary": str(index) * 400,
-            "actions": [
-                {"ticker": "AAPL", "action": "add", "reason": "긴 근거"},
-                {"ticker": "TSLA", "action": "keep", "reason": "긴 근거"},
-            ],
-            "risks": ["전체 결과에만 필요한 필드"],
-        }
-        for index in range(3)
-    ]
-    state_file.write_text(
-        json.dumps(
-            {
-                "sight": "AI",
-                "updated_at": "2026-07-19T10:00:00",
-                "last_result": legacy_results[-1],
-                "history": legacy_results,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    manager = MarketViewManager(state_file, history_limit=2)
-    history = manager.get_history_summaries()
-    persisted = json.loads(state_file.read_text(encoding="utf-8"))
-
-    assert len(history) == 2
-    assert len(history[0]["summary"]) == 300
-    assert history[0]["actions"] == [{"ticker": "AAPL", "action": "add"}]
-    assert set(persisted["history"][0]) == {"generated_at", "summary", "actions"}
-    assert "last_result" not in persisted
-    assert "risks" not in persisted["history"][0]
-    assert manager.get_last_result() == history[-1]
 
 
 def test_market_view_change_and_clear_remove_previous_analysis_context(tmp_path):

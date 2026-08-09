@@ -52,7 +52,9 @@ def test_watchlist_quotes_split_providers_by_market(monkeypatch):
     monkeypatch.setattr(
         service,
         "_fetch_tencent_quotes",
-        lambda symbols: {"600519": {"price": 1253.0, "pct_change": -0.48, "amount": 1.0}},
+        lambda symbols: {
+            "600519": {"price": 1253.0, "pct_change": -0.48, "amount": 1.0}
+        },
     )
     monkeypatch.setattr(
         service,
@@ -60,7 +62,9 @@ def test_watchlist_quotes_split_providers_by_market(monkeypatch):
         lambda symbols: {"AAPL": {"price": 200.0, "pct_change": 1.0, "amount": None}},
     )
 
-    quotes = service.get_watchlist_quotes(["600519", "US:NASDAQ:AAPL", "KR:KOSPI:005930"])
+    quotes = service.get_watchlist_quotes(
+        ["600519", "US:NASDAQ:AAPL", "KR:KOSPI:005930"]
+    )
 
     assert set(quotes) == {"600519", "US:NASDAQ:AAPL"}
     assert quotes["US:NASDAQ:AAPL"]["price"] == 200.0
@@ -113,10 +117,14 @@ def test_parse_tencent_quotes_treats_zero_price_as_missing():
 
 def test_parse_sina_moneyflow_computes_main_net_inflow():
     payload = {
-        "r0_in": "300", "r0_out": "100",
-        "r1_in": "200", "r1_out": "150",
-        "r2_in": "50", "r2_out": "50",
-        "r3_in": "25", "r3_out": "25",
+        "r0_in": "300",
+        "r0_out": "100",
+        "r1_in": "200",
+        "r1_out": "150",
+        "r2_in": "50",
+        "r2_out": "50",
+        "r3_in": "25",
+        "r3_out": "25",
     }
     flow = parse_sina_moneyflow(payload)
     assert flow["main_net_inflow"] == (300 + 200) - (100 + 150)
@@ -125,8 +133,3 @@ def test_parse_sina_moneyflow_computes_main_net_inflow():
 
 def test_parse_sina_moneyflow_rejects_incomplete_payload():
     assert parse_sina_moneyflow({"r0_in": "1"}) is None
-
-
-def test_hot_rank_disabled_by_default_without_network():
-    # 인기순위 API는 해외 IP 차단 → 기본 비활성으로 네트워크 호출 없이 빈 값
-    assert QuoteService().get_hot_rank_hits(["600519"]) == []

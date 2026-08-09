@@ -1,8 +1,11 @@
-"""국가별 뉴스 감성 차트 명령 구현."""
+"""국가별 뉴스 감성 차트 명령 구현.
+
+차트는 기사별 감성을 매번 평균하지 않고 `MarketDigestStore`의 일별 확정값을
+읽는다. 확정된 날(`final=True`)은 다시 계산하지 않으므로 같은 기간을 다시
+조회해도 값이 변하지 않는다.
+"""
 
 import logging
-from datetime import datetime, timedelta
-
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -12,13 +15,16 @@ from core.config import (
     MARKET_CHART_LOOKBACK_DAYS,
     MARKET_CHART_MIN_ARTICLES,
     MARKET_CHART_MIN_DAYS,
+    MARKET_DIGEST_ARTICLES_PER_DAY,
+    MARKET_DIGEST_MAX_CALLS_PER_REQUEST,
+    MARKET_DIGEST_MIN_ARTICLES,
     NEWS_MARKET_BACKFILL_QUERIES,
 )
 from core.menu_status import set_menu_button_text
 from core.workers import run_non_urgent
 from features.market_sentiment.chart import market_label, render_market_chart
-from news import backfill_market_history
-from state import NewsLog, aggregate_market_sentiment, market_history_gaps
+from news import backfill_market_digests
+from state import MarketDigestStore, market_history_gaps
 
 logger = logging.getLogger(__name__)
 
@@ -60,27 +66,26 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await message.reply_text("조회 기간은 1~30일로 지정해 주세요.")
         return
 
-    news_log: NewsLog | None = context.bot_data.get("news_log")
-    if news_log is None:
-        await message.reply_text("시장 감성 로그를 아직 준비하지 못했습니다.")
+    store: MarketDigestStore | None = context.bot_data.get("market_digest_store")
+    if store is None:
+        await message.reply_text("시장 감성 캐시를 아직 준비하지 못했습니다.")
         return
     required_markets = set(MARKET_CHART_MARKETS)
-    start_date = datetime.now().date() - timedelta(days=days - 1)
-    entries = await news_log.snapshot_since_date(start_date)
-    markets = aggregate_market_sentiment(entries, start_date=start_date)
+    markets = await store.series(required_markets, days)
     gaps = market_history_gaps(
-        markets, required_markets, MARKET_CHART_MIN_ARTICLES, min(days, MARKET_CHART_MIN_DAYS)
-    )
-    missing_history_days = await news_log.missing_history_days(
+        markets,
         required_markets,
-        days,
+        MARKET_CHART_MIN_ARTICLES,
+        min(days, MARKET_CHART_MIN_DAYS),
+        MARKET_DIGEST_MIN_ARTICLES,
     )
+    missing_days = await store.missing_digest_days(required_markets, days)
     backfill_days = {
         market: _spread_backfill_days(
             missing,
             MARKET_CHART_BACKFILL_DAYS_PER_REQUEST,
         )
-        for market, missing in missing_history_days.items()
+        for market, missing in missing_days.items()
     }
     backfill_markets = {
         market for market, market_days in backfill_days.items() if market_days
@@ -95,18 +100,18 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _set_market_status(message, callback_data, None, "◐ 데이터 점검 중")
     else:
         status = await message.reply_text(
-            "차트용 과거 뉴스·감성 데이터를 점검하는 중입니다..."
+            "차트용 일별 시장 감성을 점검하는 중입니다..."
         )
     try:
         if needs_backfill:
-            translator = context.bot_data.get("translator")
-            semaphore = context.bot_data.get("translate_semaphore")
-            if translator is None or semaphore is None:
+            analyzer = context.bot_data.get("market_digest_analyzer")
+            semaphore = context.bot_data.get("market_digest_semaphore")
+            if analyzer is None or semaphore is None:
                 await _set_market_status(
                     message,
                     callback_data,
                     status,
-                    "⚠️ 수집기 준비 안 됨",
+                    "⚠️ 분석기 준비 안 됨",
                 )
                 return
             await _set_market_status(
@@ -115,20 +120,24 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 status,
                 "◓ 과거 뉴스 분석 중",
             )
-            await backfill_market_history(
-                news_log,
-                translator,
+            await backfill_market_digests(
+                store,
+                analyzer,
                 semaphore,
                 backfill_markets,
                 NEWS_MARKET_BACKFILL_QUERIES,
-                days,
-                max_articles_per_day=1,
-                days_by_market=backfill_days,
+                backfill_days,
+                articles_per_day=MARKET_DIGEST_ARTICLES_PER_DAY,
+                min_articles=MARKET_DIGEST_MIN_ARTICLES,
+                max_calls=MARKET_DIGEST_MAX_CALLS_PER_REQUEST,
             )
-            entries = await news_log.snapshot_since_date(start_date)
-            markets = aggregate_market_sentiment(entries, start_date=start_date)
+            markets = await store.series(required_markets, days)
             gaps = market_history_gaps(
-                markets, required_markets, MARKET_CHART_MIN_ARTICLES, min(days, MARKET_CHART_MIN_DAYS)
+                markets,
+                required_markets,
+                MARKET_CHART_MIN_ARTICLES,
+                min(days, MARKET_CHART_MIN_DAYS),
+                MARKET_DIGEST_MIN_ARTICLES,
             )
         ready_markets = {market: stats for market, stats in markets.items() if market not in gaps}
         if len(ready_markets) < 2:
@@ -158,11 +167,21 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"{market_label(market)} {stats['avg_sentiment']:+.2f} ({stats['count']})"
             for market, stats in sorted(ready_markets.items(), key=lambda item: item[1]["avg_sentiment"], reverse=True)
         )
+        # 하루 평균 표본 수를 함께 노출한다. 표본이 얕으면 선이 출렁이므로
+        # 값만 보여 주면 신뢰도를 오해하기 쉽다.
+        sample_note = ""
+        day_counts = [
+            point["count"]
+            for stats in ready_markets.values()
+            for point in stats["daily"]
+        ]
+        if day_counts:
+            sample_note = f"\n하루 평균 표본 {sum(day_counts) / len(day_counts):.0f}건"
         await message.reply_photo(
             photo=image,
             caption=(
-                f"국가·증시별 뉴스 감성 — 최근 {days}일\n{ranking}\n\n"
-                "점수는 기사 단위 분위기 지표(-1~+1)이며 투자 조언이 아닙니다."
+                f"국가·증시별 뉴스 감성 — 최근 {days}일\n{ranking}{sample_note}\n\n"
+                "점수는 하루치 헤드라인을 종합한 분위기 지표(-1~+1)이며 투자 조언이 아닙니다."
             ),
         )
         if callback_data:

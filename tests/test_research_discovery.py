@@ -29,7 +29,6 @@ def _spec(key: str, market: str, count: int = 5) -> SourceSpec:
     return SourceSpec(
         key=key,
         label=key,
-        prompt_key="global",
         fetch=lambda: [_article(key, i, market) for i in range(count)],
         market=market,
     )
@@ -63,7 +62,6 @@ def test_mixed_source_articles_are_bucketed_per_article():
     mixed = SourceSpec(
         key="gnews",
         label="gnews",
-        prompt_key="global",
         fetch=lambda: [
             _article("gnews", 0, "CN"),
             _article("gnews", 1, "KR"),
@@ -81,7 +79,6 @@ def test_untagged_source_articles_still_collected():
     untagged = SourceSpec(
         key="rss:mystery",
         label="mystery",
-        prompt_key="global",
         fetch=lambda: [_article("mystery", 0)],
         market="",
     )
@@ -96,7 +93,7 @@ def test_failed_source_is_recorded_and_skipped():
         raise RuntimeError("source down")
 
     broken = SourceSpec(
-        key="futu", label="futu", prompt_key="futu", fetch=boom, market="CN"
+        key="futu", label="futu", fetch=boom, market="CN"
     )
     registry = NewsSourceRegistry([broken, _spec("gnews_us", "US")])
 
@@ -109,31 +106,22 @@ def test_failed_source_is_recorded_and_skipped():
 
 
 def test_raw_articles_are_used_without_translation():
-    class _ExplodingTranslator:
-        def translate_article(self, *args, **kwargs):  # pragma: no cover - 호출되면 실패
-            raise AssertionError("translate=False인데 번역을 호출했다")
-
     registry = NewsSourceRegistry([_spec("futu", "CN")])
     items = asyncio.run(
         research_news.collect_global_market_news_items(
-            translator=_ExplodingTranslator(),
-            translate_semaphore=asyncio.Semaphore(1),
             registry=registry,
             max_items=2,
-            translate=False,
         )
     )
 
     assert [item["title"] for item in items] == ["futu headline 0", "futu headline 1"]
-    assert all(item["mentioned_stocks"] == [] for item in items)
-    assert all(item["sentiment"] is None for item in items)
+    assert all("mentioned_stocks" not in item for item in items)
 
 
 def test_title_falls_back_to_content_for_titleless_sources():
     titleless = SourceSpec(
         key="sina",
         label="sina",
-        prompt_key="global",
         fetch=lambda: [
             GlobalArticle(
                 article_id="sina:1",
@@ -282,7 +270,6 @@ def test_extra_candidates_interleave_markets(monkeypatch):
         "build_sector_candidates",
         lambda *a, **k: [entry(f"60000{i}", "CN") for i in range(5)],
     )
-    monkeypatch.setattr(discovery, "build_wencai_candidates", lambda *a, **k: [])
     monkeypatch.setattr(
         discovery,
         "build_us_candidates",
@@ -294,7 +281,7 @@ def test_extra_candidates_interleave_markets(monkeypatch):
         lambda *a, **k: [entry("KR:KOSPI:005930", "KR")],
     )
 
-    extras = discovery.collect_extra_candidates(None, None, {}, "반도체")
+    extras = discovery.collect_extra_candidates(None, None, {})
 
     # 앞에서 잘려도 세 시장이 모두 살아남아야 한다.
     assert [c["market"] for c in extras[:3]] == ["CN", "US", "KR"]

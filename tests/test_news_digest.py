@@ -60,7 +60,7 @@ def _prepared_rows(count, *, article_chars, source_key="futu"):
     from news.registry import SourceSpec
     from llm.translator import TranslationResult
 
-    spec = SourceSpec(key=source_key, label="푸투", prompt_key="futu", fetch=lambda: [])
+    spec = SourceSpec(key=source_key, label="푸투", fetch=lambda: [])
     rows = []
     for index in range(count):
         rows.append(
@@ -73,7 +73,7 @@ def _prepared_rows(count, *, article_chars, source_key="futu"):
                     published_at="2026-08-01 10:00:00",
                 ),
                 text="가" * article_chars,
-                translated=TranslationResult("제목", "본문", [], []),
+                translated=TranslationResult("제목", "본문", []),
             )
         )
     return rows

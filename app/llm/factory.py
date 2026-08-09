@@ -19,7 +19,11 @@ from core.config import (
     CLOUDFLARE_MAX_ATTEMPTS,
     CLOUDFLARE_TRANSLATION_MODEL,
     CLOUDFLARE_TRANSLATION_TIMEOUT,
-    NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
+    MARKET_DIGEST_COUNT_TOLERANCE_RATIO,
+    MARKET_DIGEST_ENABLED,
+    MARKET_DIGEST_NUM_PREDICT,
+    MARKET_DIGEST_PROMPT_FILE,
+    MARKET_DIGEST_TIMEOUT,
     PROMPT_DIR,
     RESEARCH_ANALYSIS_ENABLED,
     RESEARCH_ANALYSIS_NUM_PREDICT,
@@ -27,13 +31,12 @@ from core.config import (
     RESEARCH_ANALYSIS_TIMEOUT,
     RESEARCH_MAX_NEW_ACTIONS,
     RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
-    RESEARCH_VERIFICATION_ENABLED,
-    RESEARCH_VERIFICATION_PROMPT_FILE,
     TRANSLATION_ENABLED,
     TRANSLATION_NUM_PREDICT,
 )
 from llm.backends import CloudflareWorkersAIBackend, LLMBackend, ResilientBackend
 from llm.briefing_writer import BriefingWriter
+from llm.market_digest import MarketDigestAnalyzer
 from llm.market_view import MarketViewAnalyzer
 from llm.translator import TranslationService
 
@@ -68,7 +71,6 @@ def build_translation_service() -> TranslationService:
         enabled=TRANSLATION_ENABLED,
         prompt_dir=PROMPT_DIR,
         num_predict=TRANSLATION_NUM_PREDICT,
-        brief_content_limit=NEWS_GLOBAL_TRANSLATED_CONTENT_MAX_CHARS,
     )
 
 
@@ -86,8 +88,20 @@ def build_market_view_analyzer() -> MarketViewAnalyzer:
         prompt_file=RESEARCH_ANALYSIS_PROMPT_FILE,
         max_new_actions=RESEARCH_MAX_NEW_ACTIONS,
         remove_relevance_threshold=RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
-        verification_enabled=RESEARCH_VERIFICATION_ENABLED,
-        verification_prompt_file=RESEARCH_VERIFICATION_PROMPT_FILE,
+    )
+
+
+def build_market_digest_analyzer() -> MarketDigestAnalyzer:
+    return MarketDigestAnalyzer(
+        backend=build_backend(
+            "market_digest",
+            model=CLOUDFLARE_ANALYSIS_MODEL,
+            timeout=MARKET_DIGEST_TIMEOUT,
+        ),
+        enabled=MARKET_DIGEST_ENABLED,
+        prompt_file=MARKET_DIGEST_PROMPT_FILE,
+        num_predict=MARKET_DIGEST_NUM_PREDICT,
+        count_tolerance_ratio=MARKET_DIGEST_COUNT_TOLERANCE_RATIO,
     )
 
 

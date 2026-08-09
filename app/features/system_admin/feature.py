@@ -17,7 +17,8 @@ FEATURE = FeatureSpec(
         CommandSpec("help", "명령어 안내", cmd_help),
     ),
     menus=(
-        MenuSpec("⚙️ 시스템", "nav:system", 2, "⚙️ 관리", 2),
+        # 하단 고정 메뉴는 리서치·브리핑과 같은 줄(1행)에 둔다.
+        MenuSpec("⚙️ 시스템", "nav:system", 2, "⚙️ 관리", 1),
         MenuSpec("❔ 도움말", "nav:help", 3),
     ),
 )

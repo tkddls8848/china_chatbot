@@ -14,7 +14,6 @@ from telegram import Bot
 from telegram.ext import Application
 
 from core.config import (
-    GLOBAL_NEWS_BATCH_SIZE,
     NEWS_DIGEST_MESSAGE_MAX_CHARS,
     NEWS_GLOBAL_LIMIT,
     NEWS_LIVE_MAX_AGE_HOURS,
@@ -36,7 +35,6 @@ from news.utils import (
     is_timeout_error,
     normalize_stock_code,
     publication_time_naive,
-    select_rotating_batch,
     signal_codes,
     translate_article,
 )
@@ -166,7 +164,6 @@ async def prepare_global_source(
             translated = await translate_article(
                 translator,
                 translate_semaphore,
-                spec.prompt_key,
                 article.title,
                 article.content,
             )
@@ -387,22 +384,12 @@ async def _fetch_all(app: Application) -> None:
     news_log: NewsLog | None = app.bot_data.get("news_log")
     watchlist = await wm.get_all()
 
-    # 기본 설정에서는 쿨다운 중이 아닌 모든 소스를 한 주기에 함께 처리한다.
-    # GLOBAL_NEWS_BATCH_SIZE가 양수면 이전처럼 일부 소스를 회전 처리한다.
-    active_specs = registry.active_specs()
-    if not active_specs:
+    selected_specs = registry.active_specs()
+    if not selected_specs:
         logger.warning("[GLOBAL] 사용 가능한 전역 뉴스 소스가 없습니다(전부 쿨다운).")
-    cursor = app.bot_data.get("global_news_cursor", 0)
-    selected_specs, next_cursor = select_rotating_batch(
-        active_specs, cursor, GLOBAL_NEWS_BATCH_SIZE
-    )
-    app.bot_data["global_news_cursor"] = next_cursor
     logger.info(
-        "[GLOBAL] 이번 주기 처리 소스 %d/%d (커서 %d->%d): %s",
+        "[GLOBAL] 이번 주기 처리 소스 %d개: %s",
         len(selected_specs),
-        len(active_specs),
-        cursor,
-        next_cursor,
         ", ".join(spec.key for spec in selected_specs),
     )
     prepared_groups = await asyncio.gather(

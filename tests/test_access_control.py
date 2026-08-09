@@ -8,7 +8,6 @@ from features import ALL_FEATURES, build_feature_registry
 from handlers.navigation import (
     handle_menu_callback,
     handle_menu_text,
-    persistent_menu,
     research_menu,
 )
 from handlers.commands import configure_telegram_menu

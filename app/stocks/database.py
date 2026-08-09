@@ -180,9 +180,7 @@ class StockDatabase:
         if self._cache_file.exists():
             try:
                 self.load()
-                if any(entry.get("schema_version") == 3 for entry in self._db.values()):
-                    return
-                logger.info("[StockDB] legacy schema detected; rebuilding universe")
+                return
             except Exception as e:
                 logger.warning("[StockDB] 캐시 로드 실패, 재빌드: %s", e)
         try:

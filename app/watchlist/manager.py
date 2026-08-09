@@ -28,29 +28,6 @@ class WatchlistManager:
             )
         else:
             self._watchlist = json.loads(self._file_path.read_text(encoding="utf-8"))
-            self._normalize_loaded_codes()
-
-    def _normalize_loaded_codes(self) -> None:
-        if self._code_resolver is None:
-            return
-        normalized: dict[str, str] = {}
-        changed = False
-        for code, name in self._watchlist.items():
-            canonical = self._canonical_code(code)
-            if canonical in normalized:
-                if code == canonical:
-                    normalized[canonical] = name
-                changed = True
-                continue
-            normalized[canonical] = name
-            changed = changed or canonical != code
-        if not changed:
-            return
-        self._watchlist = normalized
-        self._file_path.write_text(
-            json.dumps(self._watchlist, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
 
     def _canonical_code(self, code: str) -> str:
         if self._code_resolver is None:

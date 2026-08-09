@@ -13,7 +13,6 @@ from core.config import (
     RUNTIME_LOCK_FILE,
     TELEGRAM_BOT_TOKEN,
 )
-from core.data_layout import migrate_legacy_data_files
 from features import build_feature_registry
 from handlers.commands import configure_telegram_menu
 from webadmin.server import start_web_admin, stop_web_admin
@@ -50,7 +49,7 @@ def _acquire_single_instance_lock(lock_file: Path):
 
 # ── 진입점 ────────────────────────────────────────────
 
-async def _handle_update_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _handle_update_error(_update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("[TELEGRAM] update processing failed: %s", context.error, exc_info=context.error)
 
 
@@ -86,9 +85,6 @@ def main() -> None:
     if _SINGLE_INSTANCE_LOCK is None:
         logger.error("이미 실행 중인 봇 인스턴스가 있어 시작하지 않습니다.")
         return
-
-    # 서비스가 파일을 만들기 전에 레거시 평면 배치 데이터를 새 위치로 옮긴다.
-    migrate_legacy_data_files()
 
     feature_registry = build_feature_registry(FEATURES_ENABLED)
     app = (

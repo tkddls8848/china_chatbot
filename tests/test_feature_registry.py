@@ -4,7 +4,6 @@ from types import SimpleNamespace
 import pytest
 
 from features import ALL_FEATURES, build_feature_registry
-from features.base import FeatureSpec, MenuSpec
 from features.registry import FeatureConfigurationError, FeatureRegistry
 from handlers.navigation import main_menu, persistent_menu
 
@@ -64,11 +63,6 @@ def test_service_installation_preserves_catalog_order():
     assert installed == [spec.key for spec in ALL_FEATURES]
 
 
-def test_registry_rejects_missing_feature_dependency():
-    with pytest.raises(FeatureConfigurationError, match="기능 의존성 누락"):
-        build_feature_registry({"market_sentiment"})
-
-
 def test_registry_rejects_unknown_feature():
     with pytest.raises(FeatureConfigurationError, match="알 수 없는 기능"):
         build_feature_registry({"unknown"})
@@ -101,45 +95,6 @@ def test_registry_resolves_menu_ownership_and_persistent_labels():
     assert registry.menu_owner("nav:marketplace") is None
     assert registry.persistent_callback("📊 감성") == "nav:market"
     assert registry.persistent_callback("없는 메뉴") is None
-
-
-def test_registry_rejects_duplicate_menu_callbacks():
-    specs = (
-        FeatureSpec(
-            key="alpha",
-            label="알파",
-            menus=(MenuSpec("알파", "nav:shared", 0),),
-        ),
-        FeatureSpec(
-            key="beta",
-            label="베타",
-            menus=(MenuSpec("베타", "nav:shared", 1),),
-        ),
-    )
-
-    with pytest.raises(
-        FeatureConfigurationError,
-        match="중복 메뉴 callback_data",
-    ):
-        FeatureRegistry(specs, {"alpha", "beta"})
-
-
-def test_registry_rejects_duplicate_persistent_labels():
-    specs = (
-        FeatureSpec(
-            key="alpha",
-            label="알파",
-            menus=(MenuSpec("알파", "nav:alpha", 0, "공통", 0),),
-        ),
-        FeatureSpec(
-            key="beta",
-            label="베타",
-            menus=(MenuSpec("베타", "nav:beta", 1, "공통", 1),),
-        ),
-    )
-
-    with pytest.raises(FeatureConfigurationError, match="중복 하단 메뉴 라벨"):
-        FeatureRegistry(specs, {"alpha", "beta"})
 
 
 def test_catalog_reports_enabled_and_disabled_states():

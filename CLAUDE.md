@@ -1,178 +1,81 @@
-# CLAUDE.md
+# Stock Chatbot 개발 가이드
 
-AI 코딩 도구를 위한 프로젝트 컨텍스트. 코드만 읽어서는 알 수 없는 결정·규칙을 우선 기록한다.
-버그를 고치면서 새 규칙이 드러나면 이 문서에 한 줄 추가한다.
+개인 운영용 Telegram 주식 봇이다. 중국·홍콩·미국·한국 뉴스, 종목 DB,
+관심종목, 시장 감성, 리서치, 브리핑을 제공한다. 현재 데이터 형식과 현재 설정만
+지원하며 과거 형식 마이그레이션이나 비활성 대체 경로를 추가하지 않는다.
 
-## 프로젝트 개요
+## 실행과 검증
 
-텔레그램 봇. 중국·홍콩·한국·글로벌 시장 뉴스를 수집해 Cloudflare Workers AI로 번역·감성 분석하고,
-관심종목 관리·시장 감성 차트·리서치 후보 관리·브리핑을 제공한다. 개발자 1인 프로젝트이며
-**Windows에서 개발하고 리눅스 VM에 배포**하므로 코드는 항상 크로스 플랫폼이어야 한다(예: `bot.py`의
-msvcrt/fcntl 분기, 경로는 `pathlib` 사용).
+```powershell
+.\venv\Scripts\python.exe app\bot.py
+.\venv\Scripts\python.exe -m pytest -q
+.\venv\Scripts\python.exe -m ruff check app tests
+```
 
-## 실행과 테스트
+- Python 3.11+, `requirements.txt`, 개발 도구는 `requirements-dev.txt`.
+- `app/`가 import root다. 내부 import는 `from core...`, `from news...` 형식을 쓴다.
+- 테스트는 외부 API를 mock하며 Cloudflare smoke test는 기본 제외다.
+- 파일 수정 뒤 관련 테스트와 전체 pytest를 실행한다.
 
-- 실행: `python app/bot.py` — `app/`이 import 루트다. 모듈은 `from core.config import ...`
-  형태로 import 하며 `app.` 접두사를 붙이지 않는다.
-- 테스트: `python -m pytest -q` — `tests/conftest.py`가 `app/` import 경로,
-  더미 Telegram 환경 변수와 워크스페이스 로컬 임시 디렉터리를 공통 설정한다.
-- `cloudflare_smoke` 마커가 붙은 테스트는 **실제 계정과 무료 할당량을 쓴다.**
-  `RUN_CLOUDFLARE_SMOKE=1`과 자격증명이 없으면 skip되므로 기본 실행은 안전하다.
-- 봇은 `data/runtime/bot.lock`으로 단일 인스턴스를 강제한다.
+## 구조
 
-## 설정 원칙
+```text
+app/bot.py             조립, Telegram 앱, 스케줄러
+app/core/              설정, 런타임, 워커
+app/features/          기능 등록과 명령 핸들러
+app/handlers/          콜백 라우팅, 메뉴 구성, 인라인 네비게이션
+app/news/              소스, 수집 파이프라인, 감성
+app/llm/               Cloudflare 백엔드와 분석기
+app/research/          뉴스 수집, 후보 발굴, 리서치 실행
+app/briefing/          브리핑·성적표 생성과 A주 거래일 캘린더
+app/stocks/            종목 DB와 시세
+app/state/             발송·뉴스·시장 감성 상태
+app/watchlist/         관심종목 상태
+app/webadmin/          관리 웹 대시보드
+prompts/               모델 프롬프트
+iac/terraform/         Lightsail 배포
+tests/                 자동화 테스트
+```
 
-- `.env`가 모든 설정의 유일한 원본. `app/core/config.py`에서만 읽고, 다른 모듈은
-  `os.environ`에 직접 접근하지 않는다. 새 설정은 반드시 `config.py` 상수 + `.env.example`
-  항목으로 추가한다.
-- `data/`는 설정이 아닌 수집 데이터 전용이며, **소유 기능 키의 하위 디렉토리**에 둔다
-  (`data/news/`, `data/watchlist/`, `data/instruments/`, `data/signal_scoring/`,
-  `data/research/`, `data/runtime/`). 레거시 평면 배치는 시작 시
-  `core/data_layout.py`가 1회 이동시킨다. 새 데이터 파일도 이 규칙을 따른다.
-- **런타임 설정 오버라이드는 없다.** `/system`은 조회 전용(`/system [features]`)이고,
-  값을 바꾸려면 `.env`를 고치고 재시작한다. 로컬 추론 시절의 `/system gpu`와
-  `core/system_control.py`는 Cloudflare 단독 전환 때 제거했다.
+기능 카탈로그 순서는 의존 순서다. `FeatureSpec`을 추가할 때 명령, 메뉴,
+callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기본값과
+`.env.example`을 함께 갱신한다.
 
-## 아키텍처: 기능 레지스트리
+## 현재 동작 가정
 
-- 기능 단위는 `app/features/<키>/feature.py`의 `FeatureSpec`(base.py) 선언이 단일 조립
-  지점이다. 명령어·인라인 메뉴·콜백 접두사·스케줄 잡·데이터 파일을 여기에 선언하고
-  `features/__init__.py`의 `ALL_FEATURES`에 등록한다. 카탈로그는 `app/features/README.md`.
-- 활성 목록은 `.env`의 `FEATURES_ENABLED`. 의존 기능이 빠지면 시작 단계에서
-  `FeatureConfigurationError`로 실패한다(불완전 조합 방지가 의도).
-- 콜백 디스패치: `CallbackSpec.handler`는 처리했으면 `True`를 반환한다. `False`면 같은
-  접두사를 선언한 다음 기능으로 넘어간다.
-- `handlers/navigation.py`의 `_context()` 프록시는 메뉴 버튼을 명령 핸들러로 위임할 때
-  쓰는 가짜 컨텍스트다. **`user_data` 등 핸들러가 쓰는 속성을 반드시 전달해야 한다** —
-  과거에 `user_data` 누락으로 `/add`가 AttributeError를 낸 적이 있다.
-- 메뉴 편집 시 내용이 동일하면 텔레그램이 `BadRequest("Message is not modified")`를
-  던진다. 이는 오류가 아니므로 무시한다(`cmd_menu` 참조).
+- 뉴스 주기마다 `NEWS_GLOBAL_SOURCES`와 RSS 소스를 모두 실행한다.
+- 일반 뉴스는 번역하지만 리서치 입력은 원문을 사용한다.
+- 리서치 후보는 관심종목, 원문 종목명 매칭, 중화권 섹터, 미국 스크리너,
+  한국 등락률에서 만든다. 분석 action은 `add`, `remove`, `watch`만 허용한다.
+- 리서치 상태는 `history`, `sight`, `updated_at` 형식만 읽고 쓴다.
+- 관심종목과 발송 이력도 현재 JSON 형식만 지원한다.
+- `/market`은 기사별 번역 대신 시장·일자별 헤드라인 다이제스트를 분석한다.
+  완료된 과거 일자는 저장 결과를 재사용하고 오늘만 다시 계산한다.
+- 종목 canonical code는 시장마다 형식이 다르다. CN·HK는 **접두사 없는 숫자 코드**
+  (`600519`, `00700`)이고, US·KR만 `US:NASDAQ:AAPL`·`KR:KOSPI:005930` 형식이다
+  (`stocks/universe.py`의 `stock_key`). KR 6자리는 A주 코드와 겹치므로 US·KR에만
+  거래소를 붙인다 — 코드 문자열만으로 시장을 단정하지 않는다.
 
-## 시장·티커 규칙
+## 변경 원칙
 
-- 종목 코드 형식: 중국 A주 6자리(상하이 `6xxxxx`, 선전 `000~003`/`300`/`301` 시작),
-  홍콩 5자리 숫자, 한국 6자리 숫자, 미국은 알파벳 티커.
-- 미국·한국 종목의 정식 키는 `US:NASDAQ:AAPL` / `KR:KOSPI:005930` 형태다. **한국 6자리
-  코드는 A주 코드와 형식이 겹치므로** 코드만으로 시장을 단정하지 말고 거래소가 담긴
-  키를 쓴다(`stocks/universe.py`의 `stock_key`). 시세도 이 키로 나뉜다: A주·홍콩은
-  텐센트, 미국·한국은 Yahoo(`quotes.yahoo_symbol`).
-## 리서치는 시장 균형이 기본값이다
+- 환경 변수는 `app/core/config.py`에서만 읽고 `.env.example`에 현재 키를 기록한다.
+- 상태 파일은 `data/<feature>/`에 둔다. 설정은 상태 파일에 저장하지 않는다.
+- 번역·분석·브리핑은 Cloudflare Workers AI만 사용한다. 비밀값은 `.env`에만 두고
+  로그나 예외에 포함하지 않는다.
+- LLM JSON은 필수 필드를 엄격히 검사하고 현재 응답 envelope만 처리한다.
+- 외부 소스 하나의 실패가 전체 뉴스 주기를 중단시키지 않도록 소스 단위로 격리한다.
+- 새 호환 분기, 사용하지 않는 설정 플래그, 계획 문서, 중복 helper를 만들지 않는다.
+- 모듈은 한 책임을 유지하되 한두 함수만 담는 무의미한 파일 분할은 피한다.
+- **시각은 `core/clock.py`의 `now()`·`today()`만 쓴다.** `datetime.now()`·`date.today()`는
+  호스트 타임존을 따라가서 서버를 다른 타임존에 올리면 `/market`의 하루 경계와 보존
+  기간이 통째로 밀린다. ruff의 `DTZ` 규칙이 이걸 막는다(테스트는 예외).
+  저장된 타임스탬프를 `now()`와 비교할 때는 `ensure_kst()`로 감싼다 — aware 전환
+  이전에 쓴 `data/` 파일에는 오프셋이 없어 그냥 비교하면 TypeError로 죽는다.
+  예외는 둘뿐이다: Cloudflare 할당량 리셋은 UTC 00시 기준이고
+  (`llm/backends.py`), 기사 시각은 소스 타임존을 `news/utils.py`가 KST로 변환한다.
 
-중국·홍콩·미국·한국을 함께 다루므로, **우선순위 순서대로 상한까지 채우는 코드는
-곧 중화권 전용이 된다.** 과거에 리서치 뉴스가 첫 소스(futu)로만 채워져 미국·한국
-종목이 추천에 오르지 못한 적이 있다. 상한이 걸리는 자리마다 시장 회전을 넣는다.
+## 배포
 
-- 뉴스 수집(`research/news.py`): 소스를 동시에 조회해 시장별 버킷을 만든 뒤
-  `RESEARCH_NEWS_MARKETS` 순서로 라운드로빈 선택하고, **선택된 기사만 번역**한다.
-  시장 태그는 기사의 `extra["market"]`(혼합 소스 gnews) → `SourceSpec.market` 순.
-- 후보 발굴(`research/discovery.py`): 중화권(섹터·问财)·미국(yfinance 프리셋
-  스크리너)·한국(FDR KRX 등락률) 결과를 `_interleave_by_market`으로 번갈아 배치한다.
-  호출부가 앞에서 자르므로 **순서 자체가 균형 장치**다.
-- 후보 universe 상한(`RESEARCH_MAX_CANDIDATES`)은 뉴스·키워드 후보가 다 먹으므로
-  `RESEARCH_DISCOVERY_RESERVED_SLOTS`만큼 발굴 후보 자리를 남긴다.
-- 입력 크기가 곧 비용이다. 원격 모델이라 컨텍스트 크기를 고를 수 없으므로 로컬 시절의
-  `RESEARCH_CTX_MAX`는 제거했고, 대신 `_request_analysis()`가 **기사 수·문자 수·추정
-  입력 토큰을 로그에 남긴다**(`[MarketView] 분석 입력:`). 기사 6건
-  (`RESEARCH_NEWS_MAX_ITEMS`) + 후보 10개, 중국어 원문 기준 본문 240자
-  (`RESEARCH_NEWS_CONTENT_MAX_CHARS`)가 실측 기준선이다. 늘릴 때는 이 로그와
-  `usage.neurons`를 함께 본다.
-- **리서치 입력은 기본적으로 번역하지 않는다**(`RESEARCH_TRANSLATE_NEWS=false`). 분석
-  모델이 다국어를 읽고, 종목명 매칭도 원문(cn_name·영문명)에서 더 잘 걸린다. 대신 번역
-  파이프라인이 함께 주던 `mentioned_stocks`·`theme_candidates`·`sentiment`가 비므로,
-  켜고 끌 때 후보 구성이 달라진다는 점을 기억한다.
-
-## 후보는 근거 강도 순이다 (노이즈가 상한을 먹지 않게)
-
-종목 DB가 15,000개라 **이름 문자열이 겹치는 후보는 언제나 수백 개가 나온다.** 근거 없는
-후보가 상한(`RESEARCH_MAX_CANDIDATES`)을 채워 진짜 후보를 밀어낸 사례가 반복됐다.
-
-- 등급: 관심종목 > LLM이 코드를 명시(mentioned_stocks·테마 codes) > 뉴스 본문 종목명
-  매칭 > 시장 데이터 발굴 > 이름이 주제 키워드와 겹침. 마지막 등급
-  (`RESEARCH_KEYWORD_CANDIDATES_ENABLED`)은 **기본 비활성**이고, 이름 매칭으로만 걸린
-  테마 후보도 `RESEARCH_THEME_PATTERN_CANDIDATE_LIMIT`로 제한한다.
-- 영문명 매칭에는 두 겹의 방어가 있다(`_build_name_matcher`). 종목 DB에서 여러 종목이
-  공유하는 토큰은 빈도로 걸러내고(`RESEARCH_NAME_TOKEN_MAX_FREQUENCY`, 실측 tech=29·
-  energy=83 vs apple=1), DB에선 드물지만 영어 기사에선 흔한 단어(Daily, Home) 때문에
-  **여러 단어 이름은 토큰 2개 이상**이 같은 기사에 나와야 인정한다. 한 단어 이름
-  (Alphabet)은 1개로 충분하다.
-- 중국어·한국어 이름은 통째로 매칭하며 한글은 앞글자 경계를 요구한다("이닉스"가
-  "하이닉스"에 걸리는 오탐 방지).
-
-## 외부 의존성의 알려진 함정
-
-- **pandas**: 3.0의 문자열 추론 변경이 일부 AkShare 응답의 정규식 처리를 깨뜨려
-  `config.py`에서 `future.infer_string=False`로 고정했다. 제거하지 말 것.
-- **apscheduler**: `3.10.4`로 고정(4.x는 API 비호환).
-- **동방재부 인기순위 API**(`QUANT_HOT_RANK_ENABLED`): 해외 IP에서 차단되므로 기본
-  비활성. 활성화 실패를 버그로 오인하지 말 것.
-- **pywencai**(问财 스크리닝): 비공식 API라 선택 설치·기본 비활성(`WENCAI_ENABLED`).
-- **yfinance 프리셋 스크리너**(`yf.screen`, 미국 후보 발굴): 1.5+ 전용 API이며 ETF·펀드가
-  섞여 오므로 `quoteType == EQUITY`만 받는다. 실패는 빈 목록으로 흘린다.
-- **FinanceDataReader**: `StockListing("KRX")`의 등락률 컬럼명이 버전마다 다르고
-  오타(`ChagesRatio`)가 섞여 있어 후보 컬럼을 순서대로 찾는다.
-- 뉴스·시세 소스는 실패해도 다른 기능이 계속 동작해야 한다. 소스별 실패 임계·쿨다운
-  (`NEWS_SOURCE_FAILURE_THRESHOLD`/`COOLDOWN`)이 있으므로 새 소스도 같은 패턴을 따른다.
-- 감성 점수는 별도 모델이 아니라 번역 파이프라인(`app/llm/translator.py`)이 번역과
-  함께 산출한다. 프롬프트는 `prompts/*_ko.txt`이며 소스별로 분리되어 있다.
-
-## LLM은 Cloudflare Workers AI 하나뿐이다 (로컬 추론 없음)
-
-번역·시황 분석·브리핑이 모두 원격 Cloudflare를 쓴다. 로컬 Ollama 구현은 2026-08-02에
-완전히 제거했다 — 무료 호스팅(1~2GB RAM, GPU 없음)에서 로컬 추론이 불가능하고,
-실측상 로컬 4B가 금액을 10배 틀리는 등 품질도 원격 30B보다 나빴다.
-**로컬 폴백을 되살리지 말 것.** 되살리려면 호스팅부터 다시 골라야 한다.
-
-- 서비스 클래스는 프롬프트 구성·검증만 한다. HTTP 호출은 `app/llm/backends.py`가
-  맡고, 조립은 `app/llm/factory.py`의 `build_*()` 한 곳에서만 한다. 기능에서
-  `TranslationService(...)`·`MarketViewAnalyzer(...)`·`BriefingWriter(...)`를 직접
-  만들지 않는다.
-- **Cloudflare Qwen3에는 `/no_think`가 필수다.** 추론 모델인데 이 엔드포인트에는
-  thinking을 끄는 옵션이 없어서, 그냥 두면 thinking이 `max_tokens`를 전부 먹고
-  `finish_reason=length`로 content가 잘린다(실측: reasoning 3,510자 / content 14자,
-  34 Neurons). 시스템 프롬프트 끝에 `/no_think`를 붙이면 정상 JSON이 오고 기사당
-  8 Neurons로 떨어진다. `chat_template_kwargs.enable_thinking=false`는 content를
-  아예 비우므로 대안이 아니다. 추론 모델을 새로 붙일 때 같은 함정을 확인한다.
-- **assistant prefill은 쓸 수 없다.** OpenAI 호환 엔드포인트는 prefill을
-  continuation이 아니라 완료된 대화로 보고 빈 응답을 준다(실측 completion_tokens=2).
-  `_request_analysis()`는 응답이 `{`로 시작하지 않을 때만 보정하는 방식으로 대응한다.
-- `ResilientBackend`가 재시도와 회로 차단을 담당한다. 폴백 공급자는 없으므로 회로가
-  열리면 **명시적 실패**로 끝난다(요청이 조용히 사라지지 않는다). 무료 할당량 소진은
-  다음 UTC 00시까지, 인증(401/403)·요청 형식(400/422) 오류는 재시작 전까지 연다.
-  소진 뒤에도 계속 두드리면 기사마다 무의미한 왕복만 쌓이므로 회로를 빼지 말 것.
-- **API 토큰·기사 원문을 로그나 예외 문자열에 넣지 않는다.** 외부 응답을 옮길 때는
-  `_truncate()`로 자르고 `_redact()`로 토큰을 마스킹한다.
-- **출력 길이는 상한이 아니라 프롬프트가 정한다.** `at most N`만 주면 모델은 상한보다
-  훨씬 짧게 쓴다(실측: 상한 500자에서 77~105자, 8.9 Neurons). 목표 구간
-  (`about X to Y`)과 담을 항목을 함께 지시하면 112자·10.3 Neurons로 늘어난다.
-  **현재는 비용 때문에 의도적으로 상한만 둔다.** 분량을 늘려야 하면 여기가 손잡이다.
-  단 원문에 정보가 없으면 무엇을 지시해도 짧게 나온다(본문 없는 RSS 기사).
-- 과금 단위는 추정하지 않는다. 응답의 `usage.neurons`를 그대로 로그에 남기므로
-  `grep neurons=`로 일일 소모를 합산한다. 무료 한도는 하루 10,000, UTC 00시 리셋.
-- 할당량이 소진되면 그날 뉴스 다이제스트는 비고 `/research`는 실패하지만, 브리핑은
-  `_write_llm_comment()`가 실패를 삼켜 **데이터 전용 브리핑으로 자동 degrade**한다.
-
-## 배포는 Lightsail + Terraform이다
-
-인프라·부트스트랩은 `iac/terraform/`에 코드화되어 있고, 실행 절차와 함정은
-`iac/terraform/README.md`, 설계 근거·비용은 `docs/deployment-lightsail-plan.md`에 있다.
-코드에서 읽어낼 수 없는 두 가지만 옮겨 둔다.
-
-- **부트스트랩은 봇을 기동하지 않는다.** `data/runtime/bot.lock`은 머신 단위라 다른
-  호스트의 중복 기동을 막지 못하고, 같은 토큰으로 두 프로세스가 `getUpdates`를 치면
-  텔레그램이 `Conflict`를 반환해 양쪽이 번갈아 죽는다. 전환은 반드시 "로컬 정지 →
-  서버 기동" 순서로 사람이 한다.
-- **`user_data` 변경은 `ignore_changes`로 막혀 있다.** 바뀌면 인스턴스가 재생성되는데
-  그 디스크에 `data/`가 들어 있기 때문이다. 부트스트랩을 실제로 다시 적용하려면 SSH로
-  해당 단계를 직접 실행한다.
-
-## 문서 위치
-
-- 저장소의 `docs/`에는 설계 문서 2건(`cloudflare-workers-ai-translation-plan.md`,
-  `deployment-lightsail-plan.md`)만 있다. 그 밖의 작업 문서·에러 기록은 **개발자 로컬에만
-  있고 저장소에 없다.** 원격 AI 세션에서는 볼 수 없으므로, 지속 가치가 있는 결정은 이
-  파일이나 코드 주석으로 옮겨 기록한다.
-- 기능 키 `signal_scoring`은 이름과 달리 **채점 기능이 아니다.** 신호 성과 채점은
-  제거했고 지금은 `/view`(뉴스 감성 집계 뷰)만 남았다. 키와 데이터 경로
-  (`data/signal_scoring/prediction_log.jsonl`)는 기존 배포 호환을 위해 유지한다.
-- 관리 웹(web_admin)은 `WEB_ADMIN_PASSWORD` 미지정 시 기능이 켜져 있어도 기동을
-  건너뛴다(의도된 안전장치).
+Lightsail 운영 절차는 `iac/terraform/README.md`가 유일한 배포 문서다. 부트스트랩은
+봇을 자동 기동하지 않는다. 동일 Telegram 토큰의 중복 polling을 피하도록 로컬을
+정지한 뒤 서버를 기동한다.

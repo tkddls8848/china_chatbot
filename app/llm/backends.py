@@ -145,7 +145,6 @@ class CloudflareWorkersAIBackend:
             raise ValueError(
                 "CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required"
             )
-        self._account_id = account_id
         self._api_token = api_token
         self.model = model
         self._url = (
@@ -244,12 +243,7 @@ class CloudflareWorkersAIBackend:
     def _extract_content(data: Any) -> str | None:
         if not isinstance(data, dict):
             return None
-        # OpenAI 호환 엔드포인트는 최상위에 choices를 두지만, 게이트웨이를
-        # 거치면 v4 공통 봉투(result)에 감싸여 오는 사례가 있다.
-        payload = data
-        if "choices" not in payload and isinstance(payload.get("result"), dict):
-            payload = payload["result"]
-        choices = payload.get("choices")
+        choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
             return None
         first = choices[0]
@@ -280,10 +274,7 @@ class CloudflareWorkersAIBackend:
 
     @staticmethod
     def _usage(data: Any) -> TokenUsage:
-        payload = data if isinstance(data, dict) else {}
-        if "usage" not in payload and isinstance(payload.get("result"), dict):
-            payload = payload["result"]
-        usage = payload.get("usage")
+        usage = data.get("usage") if isinstance(data, dict) else None
         if not isinstance(usage, dict):
             return TokenUsage()
         prompt_tokens = usage.get("prompt_tokens")

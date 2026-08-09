@@ -4,7 +4,6 @@ from core.config import (
     QUANT_CACHE_TTL_MINUTES,
     QUANT_CONTEXT_ENABLED,
     QUANT_FAILURE_COOLDOWN_MINUTES,
-    QUANT_HOT_RANK_ENABLED,
     QUANT_SECTOR_TOP_N,
 )
 from features.base import FeatureSpec
@@ -17,7 +16,6 @@ def _install_services(app) -> None:
         cache_ttl_minutes=QUANT_CACHE_TTL_MINUTES,
         sector_top_n=QUANT_SECTOR_TOP_N,
         failure_cooldown_minutes=QUANT_FAILURE_COOLDOWN_MINUTES,
-        hot_rank_enabled=QUANT_HOT_RANK_ENABLED,
     )
 
 FEATURE = FeatureSpec(
