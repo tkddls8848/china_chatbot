@@ -40,13 +40,13 @@ variable "blueprint_id" {
 variable "instance_name" {
   description = "Lightsail 인스턴스 이름. 정적 IP·키페어 이름의 접두사로도 쓰인다."
   type        = string
-  default     = "china-chatbot"
+  default     = "stock-chatbot"
 }
 
 variable "service_name" {
   description = "systemd 유닛 이름 (journalctl -u <이름>)."
   type        = string
-  default     = "china-chatbot"
+  default     = "stock-chatbot"
 }
 
 variable "app_user" {
@@ -58,7 +58,7 @@ variable "app_user" {
 variable "app_dir_name" {
   description = "홈 디렉터리 아래 체크아웃 경로 (/home/<app_user>/<app_dir_name>)."
   type        = string
-  default     = "china_chatbot"
+  default     = "stock_chatbot"
 }
 
 # ---------------------------------------------------------------------------
@@ -72,7 +72,7 @@ variable "repo_url" {
     배포 키를 등록하고 수동으로 clone 한다.
   EOT
   type        = string
-  default     = "https://github.com/tkddls8848/china_chatbot.git"
+  default     = "https://github.com/tkddls8848/stock_chatbot.git"
 }
 
 variable "repo_ref" {
@@ -134,7 +134,7 @@ variable "swap_size" {
 }
 
 variable "timezone" {
-  description = "인스턴스 타임존. UTC로 두면 장중·마감 브리핑이 9시간 어긋난다."
+  description = "인스턴스 타임존. 앱의 '지금'은 core/clock.py가 KST로 고정하므로 하루 경계는 이 값과 무관하지만, 로그·journalctl 시각과 cron 백업 시각은 이 값을 따른다."
   type        = string
   default     = "Asia/Seoul"
 }
@@ -177,7 +177,7 @@ variable "tags" {
   description = "모든 리소스에 붙일 태그."
   type        = map(string)
   default = {
-    Project   = "china-chatbot"
+    Project   = "stock-chatbot"
     ManagedBy = "terraform"
   }
 }

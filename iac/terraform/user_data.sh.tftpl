@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# china_chatbot Lightsail 부트스트랩.
+# stock_chatbot Lightsail 부트스트랩.
 # cloud-init이 최초 부팅 때 root로 1회 실행한다. 재실행하려면 SSH로 접속해
 # `sudo bash /var/lib/cloud/instance/scripts/part-001`을 직접 돌린다.
 #
 # 이 스크립트는 봇을 **기동하지 않는다.** 이유는 아래 8절 참조.
 
 set -euo pipefail
-exec > >(tee -a /var/log/china-chatbot-bootstrap.log) 2>&1
+exec > >(tee -a /var/log/stock-chatbot-bootstrap.log) 2>&1
 
 APP_USER="${app_user}"
 APP_DIR="${app_dir}"
@@ -18,7 +18,7 @@ SWAP_SIZE="${swap_size}"
 TIMEZONE="${timezone}"
 BACKUP_RETENTION_DAYS="${backup_retention_days}"
 
-MARKER_DIR=/var/lib/china-chatbot
+MARKER_DIR=/var/lib/stock-chatbot
 mkdir -p $MARKER_DIR
 
 echo "[bootstrap] 시작 $(date -Is)"
@@ -113,7 +113,7 @@ fi
 # --------------------------------------------------------------------------
 cat > /etc/systemd/system/$SERVICE_NAME.service <<UNIT
 [Unit]
-Description=China Chatbot (Telegram)
+Description=Stock Chatbot (Telegram)
 After=network-online.target
 Wants=network-online.target
 
@@ -152,13 +152,13 @@ echo "[bootstrap] systemd 유닛 $SERVICE_NAME.service 설치 (기동은 하지 
 # 상태는 전부 data/ 하위 JSON이고 DB가 없어 tar 하나면 충분하다.
 # Lightsail 자동 스냅샷과 별개로, 파일 단위 복구용이다.
 # --------------------------------------------------------------------------
-cat > /etc/cron.d/china-chatbot-backup <<CRON
+cat > /etc/cron.d/stock-chatbot-backup <<CRON
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 # 매일 03:00 KST — Lightsail 자동 스냅샷(04:00 KST)보다 먼저 돌아 스냅샷에 포함된다.
 0 3 * * * $APP_USER tar czf /home/$APP_USER/backup-\$(date +\%F).tgz -C $APP_DIR data && find /home/$APP_USER -maxdepth 1 -name 'backup-*.tgz' -mtime +$BACKUP_RETENTION_DAYS -delete
 CRON
-chmod 644 /etc/cron.d/china-chatbot-backup
+chmod 644 /etc/cron.d/stock-chatbot-backup
 echo "[bootstrap] 백업 cron 등록 (보관 $BACKUP_RETENTION_DAYS일)"
 
 # --------------------------------------------------------------------------

@@ -1,6 +1,6 @@
-# China Chatbot
+# Stock Chatbot
 
-텔레그램에서 중국·홍콩·한국·글로벌 시장 뉴스를 수집하고, 번역·감성 분석·관심 종목 관리·브리핑을 제공하는 봇입니다.
+중국·홍콩·한국·글로벌 시장의 뉴스와 종목 정보를 수집하고, 번역·감성 분석·관심 종목 관리·브리핑을 제공하는 주식 시장 정보 텔레그램 봇입니다.
 
 ## 시작하기
 
@@ -29,7 +29,7 @@ CLOUDFLARE_API_TOKEN=<Workers AI 실행 권한 토큰>
 
 - 무료 한도는 **하루 10,000 Neurons**이며 UTC 00시(한국시간 오전 9시)에 리셋됩니다. 실측 기준 기사 1건 번역이 약 8~14 Neurons, 리서치 분석 1회가 약 110 Neurons입니다.
 - 한도가 소진되면 다음 리셋까지 호출을 멈춥니다. 그날 뉴스 다이제스트는 비고 `/research`는 실패하지만, 브리핑은 지수·헤드라인만 담은 데이터 전용 브리핑으로 자동 전환됩니다.
-- 실사용량은 로그에서 바로 확인합니다: `grep 'neurons=' bot.log`
+- 실사용량은 로그에 그대로 남습니다. 로그는 파일이 아니라 표준 오류로 나가므로, 서버에서는 `journalctl -u stock-chatbot | grep neurons=`로, 로컬에서는 `python app\bot.py 2> bot.log`처럼 받아 두고 확인합니다.
 - 한도를 넘겨 쓰려면 Workers Paid 플랜에서 초과분이 1,000 Neurons당 $0.011입니다.
 - API 토큰은 `.env`에만 두고 커밋하지 않습니다. 로그와 예외 메시지에는 토큰이 남지 않습니다.
 
@@ -44,7 +44,7 @@ terraform init; terraform apply
 terraform output cutover_commands                     # 전환 절차
 ```
 
-- 실행 절차와 주의점은 [`iac/terraform/README.md`](iac/terraform/README.md), 설계 근거·비용·롤백 판단은 [`docs/deployment-lightsail-plan.md`](docs/deployment-lightsail-plan.md)에 있습니다.
+- 실행 절차와 주의점은 [`iac/terraform/README.md`](iac/terraform/README.md)에 있습니다.
 - 부트스트랩은 봇을 **기동하지 않습니다.** 같은 토큰으로 두 프로세스가 텔레그램을 폴링하면 양쪽이 번갈아 죽으므로, 전환은 "로컬 정지 → 서버 기동" 순서로 사람이 진행합니다.
 
 ## 테스트
@@ -106,11 +106,11 @@ WEB_ADMIN_PASSWORD=<반드시 지정>
 
 `/stockdb build`는 AkShare에서 중국·홍콩 종목을, FinanceDataReader와 Nasdaq Trader에서 각각 한국·미국 전체 상장종목을 수집합니다.
 
-종목 DB는 `data/instruments/stock_db.json`에 캐시됩니다. FIGI·ISIN 같은 식별자 필드는 기존 데이터 구조 호환성을 위해 빈 값으로 남아 있으며, 외부 식별자 매핑 API는 사용하지 않습니다.
+종목 DB는 `data/instruments/stock_db.json`에 캐시됩니다. 외부 식별자 매핑 API는 사용하지 않습니다.
 
 ## 데이터와 접근 제어
 
-- `data/`에는 관심 종목, 발송 이력, 뉴스·신호 로그, 종목 DB가 코드와 같은 기준으로 **소유 기능별 하위 디렉토리**(`news/`, `watchlist/`, `instruments/`, `signal_scoring/`, `research/`, `runtime/`)에 저장됩니다. 이전 버전의 평면 배치(`data/*.json`) 파일은 봇 시작 시 자동으로 새 위치로 이동합니다.
+- `data/`에는 관심 종목, 발송 이력, 뉴스·신호 로그, 종목 DB가 소유 기능별 하위 디렉토리(`news/`, `watchlist/`, `instruments/`, `signal_scoring/`, `research/`, `runtime/`)에 저장됩니다.
 - `ALLOWED_CHAT_IDS`에 쉼표로 구분한 채팅 ID를 설정하면 해당 채팅에서만 명령을 처리합니다.
 - 뉴스·시세 제공처가 일시적으로 실패해도 다른 기능은 계속 동작하며, 다음 주기에 다시 수집합니다.
 
@@ -121,6 +121,5 @@ app/        봇, 명령 처리, 뉴스·LLM·종목 DB·관심 종목 모듈
 prompts/    번역·리서치·브리핑 프롬프트
 iac/        Lightsail 배포 Terraform 코드
 tests/      자동화 테스트
-docs/       설계 문서 (Cloudflare 전환, Lightsail 배포 계획)
 data/       실행 중 생성되는 상태·캐시 데이터, 소유 기능별 하위 디렉토리 (Git 제외)
 ```

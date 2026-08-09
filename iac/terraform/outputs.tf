@@ -23,7 +23,7 @@ output "web_admin_tunnel_command" {
 
 output "bootstrap_status_command" {
   description = "부트스트랩 진행 상황 확인. 최초 부팅 후 완료까지 5~10분 걸린다."
-  value       = "ssh ${var.app_user}@${aws_lightsail_static_ip.this.ip_address} 'cat /var/lib/china-chatbot/bootstrap-ok 2>/dev/null || sudo tail -30 /var/log/china-chatbot-bootstrap.log'"
+  value       = "ssh ${var.app_user}@${aws_lightsail_static_ip.this.ip_address} 'cat /var/lib/stock-chatbot/bootstrap-ok 2>/dev/null || sudo tail -30 /var/log/stock-chatbot-bootstrap.log'"
 }
 
 output "cutover_commands" {
@@ -33,7 +33,7 @@ output "cutover_commands" {
   EOT
   value       = <<-EOT
     # 0. 부트스트랩 완료 확인
-    ssh ${var.app_user}@${aws_lightsail_static_ip.this.ip_address} 'cat /var/lib/china-chatbot/bootstrap-ok'
+    ssh ${var.app_user}@${aws_lightsail_static_ip.this.ip_address} 'cat /var/lib/stock-chatbot/bootstrap-ok'
 
     # 1. 서버 .env 작성 — TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / ALLOWED_CHAT_IDS /
     #    CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN 을 채운다.

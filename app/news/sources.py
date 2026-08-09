@@ -1,8 +1,6 @@
 """전역/개별 뉴스 원천 fetcher와 소스별 정규화 어댑터.
 
 각 어댑터는 원천 DataFrame/RSS를 GlobalArticle 목록(최신순)으로 변환한다.
-article_id는 기존 전송 이력(sent_ids.json)과의 호환을 위해 CLS/Futu는
-레거시 포맷을 유지한다.
 """
 
 import html
@@ -52,11 +50,6 @@ class GlobalArticle:
 # ── 원천 fetcher ─────────────────────────────────────
 
 @retry_on_network
-def fetch_cls_raw():
-    return ak.stock_info_global_cls()
-
-
-@retry_on_network
 def fetch_futu_raw():
     return ak.stock_info_global_futu()
 
@@ -66,15 +59,10 @@ def fetch_sina_raw():
     return ak.stock_info_global_sina()
 
 
-@retry_on_network
-def fetch_ths_raw():
-    return ak.stock_info_global_ths()
-
-
 def fetch_rss_raw(url: str) -> bytes:
     host = urlparse(url).netloc.lower()
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; ChinaChatbotRSS/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; StockChatbotRSS/1.0)",
         "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
     }
     if host.endswith("mk.co.kr"):
@@ -94,30 +82,6 @@ def _cell(row, key: str) -> str:
     return "" if text.lower() in ("nan", "nat", "none") else text
 
 
-def fetch_cls_articles() -> list[GlobalArticle]:
-    df = fetch_cls_raw()
-    articles = []
-    for _, row in df.iterrows():
-        title = _cell(row, "标题")
-        content = _cell(row, "内容")
-        date = _cell(row, "发布日期")
-        time_ = _cell(row, "发布时间")
-        if not (title or content):
-            continue
-        articles.append(
-            GlobalArticle(
-                # 레거시 ID 포맷 유지(sent_ids 호환)
-                article_id=f"{date} {time_}{title}",
-                title=title,
-                content=content,
-                published_at=time_,
-                published_date=date,
-            )
-        )
-    # CLS는 과거→최신 순이므로 뒤집어 최신순으로 맞춘다.
-    return articles[::-1][:NEWS_SOURCE_ARTICLE_LIMIT]
-
-
 def fetch_futu_articles() -> list[GlobalArticle]:
     df = fetch_futu_raw()
     articles = []
@@ -129,7 +93,6 @@ def fetch_futu_articles() -> list[GlobalArticle]:
             continue
         articles.append(
             GlobalArticle(
-                # 레거시 ID 포맷 유지(sent_ids 호환)
                 article_id=f"{published_at}{content[:20]}",
                 title=title,
                 content=content,
@@ -154,27 +117,6 @@ def fetch_sina_articles() -> list[GlobalArticle]:
                 title="",
                 content=content,
                 published_at=published_at,
-            )
-        )
-    return articles[:NEWS_SOURCE_ARTICLE_LIMIT]
-
-
-def fetch_ths_articles() -> list[GlobalArticle]:
-    df = fetch_ths_raw()
-    articles = []
-    for _, row in df.iterrows():
-        title = _cell(row, "标题")
-        content = _cell(row, "内容")
-        published_at = _cell(row, "发布时间")
-        if not (title or content):
-            continue
-        articles.append(
-            GlobalArticle(
-                article_id=f"ths:{published_at}:{(title or content)[:20]}",
-                title=title,
-                content=content,
-                published_at=published_at,
-                url=_cell(row, "链接"),
             )
         )
     return articles[:NEWS_SOURCE_ARTICLE_LIMIT]

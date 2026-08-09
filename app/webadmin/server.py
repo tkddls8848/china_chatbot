@@ -70,7 +70,7 @@ def build_app(bot_app):
     from fastapi.responses import HTMLResponse
     from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-    api = FastAPI(title="China Chatbot 관리", docs_url=None, redoc_url=None)
+    api = FastAPI(title="Stock Chatbot 관리", docs_url=None, redoc_url=None)
     security = HTTPBasic()
 
     def require_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
@@ -264,7 +264,7 @@ _DASHBOARD_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>China Chatbot 관리</title>
+<title>Stock Chatbot 관리</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -299,7 +299,7 @@ _DASHBOARD_HTML = """<!doctype html>
 </style>
 </head>
 <body>
-<header><h1>🇨🇳 China Chatbot 관리 대시보드</h1></header>
+<header><h1>📈 Stock Chatbot 관리 대시보드</h1></header>
 <main>
   <div class="card">
     <h2>시스템 상태</h2>

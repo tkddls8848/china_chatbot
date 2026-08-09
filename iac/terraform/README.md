@@ -1,7 +1,6 @@
 # Lightsail 배포 (Terraform)
 
-`docs/deployment-lightsail-plan.md`의 Phase 1~2를 코드로 옮긴 것이다. 설계 근거와
-비용·롤백 판단은 그 문서에 있고, 여기에는 실행 방법만 적는다.
+Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정리한 운영 문서다.
 
 ## 이 코드가 하는 일 / 하지 않는 일
 
@@ -26,7 +25,7 @@
    별개 서비스라 거부된다.
 
    ```powershell
-   aws iam create-policy --policy-name ChinaChatbotLightsail --policy-document file://iam-policy.json
+   aws iam create-policy --policy-name StockChatbotLightsail --policy-document file://iam-policy.json
    aws iam attach-user-policy --user-name <내 IAM 사용자> --policy-arn <위 출력의 Arn>
    aws lightsail get-bundles --region ap-northeast-2 --query 'bundles[?bundleId==`micro_3_0`]'   # 확인
    ```
@@ -36,7 +35,7 @@
 3. **SSH 키.** 없으면 만든다. 개인키는 로컬에만 남고, Terraform은 공개키만 등록한다.
 
    ```powershell
-   ssh-keygen -t ed25519 -C china-chatbot-lightsail
+   ssh-keygen -t ed25519 -C stock-chatbot-lightsail
    Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub"   # ssh-ed25519 AAAA... 로 시작
    ```
 
@@ -70,8 +69,8 @@ apply는 1~2분이면 끝나지만 **부트스트랩은 그 뒤로 5~10분 더 �
 terraform output -raw bootstrap_status_command   # 명령을 복사해 실행
 ```
 
-`/var/lib/china-chatbot/bootstrap-ok`에 시각이 찍히면 완료다. 안 나오면
-`sudo tail -50 /var/log/china-chatbot-bootstrap.log`에 실패 지점이 있다.
+`/var/lib/stock-chatbot/bootstrap-ok`에 시각이 찍히면 완료다. 안 나오면
+`sudo tail -50 /var/log/stock-chatbot-bootstrap.log`에 실패 지점이 있다.
 
 ## 전환
 
@@ -93,7 +92,7 @@ terraform output -raw web_admin_tunnel_command   # 실행 후 http://127.0.0.1:8
 비밀번호는 부트스트랩이 무작위로 생성해 서버 `.env`에 넣었다:
 
 ```bash
-grep WEB_ADMIN_PASSWORD ~/china_chatbot/.env
+grep WEB_ADMIN_PASSWORD ~/stock_chatbot/.env
 ```
 
 ## 알아둘 것
@@ -103,6 +102,20 @@ grep WEB_ADMIN_PASSWORD ~/china_chatbot/.env
 `lifecycle { ignore_changes = [user_data] }`로 막아 두었다. 부트스트랩 스크립트를
 실제로 다시 적용하려면 SSH로 해당 단계를 직접 실행하거나, 데이터 유실을 감수하고
 `terraform taint aws_lightsail_instance.this` 후 apply 한다.
+
+**이름 변수를 바꾸면 영향 범위가 셋으로 갈린다.** 2026-08-08 리브랜딩
+(`china-chatbot` → `stock-chatbot`) 때 실측한 구분이다.
+
+| 바뀐 것 | 결과 |
+|---|---|
+| `instance_name` | **인스턴스 교체.** 정적 IP·키페어 이름의 접두사라 파생 리소스도 함께 재구성된다. 기존 배포가 있으면 기본값만 바꾸지 말고 `terraform.tfvars`에 옛 값을 명시해 고정한다. |
+| `tags` | in-place 태그 갱신. `main.tf`에는 참조가 없지만 `versions.tf`의 프로바이더 `default_tags`가 소비하므로 **실제로 적용된다** — 참조가 없다고 오해하기 쉽다. |
+| `service_name`·`app_dir_name`·`repo_url` | 신규 부팅에만 반영된다. `user_data` 안에서만 쓰이는데 그 변경이 아래처럼 무시되기 때문이다. |
+
+그래서 **이미 떠 있는 서버의 이름 변경은 Terraform이 해주지 않는다.** SSH로 직접:
+스냅샷 → `~/<옛 이름>`을 새 이름으로 이동 → 옛 서비스 중지·비활성화 후 새 이름으로
+유닛 설치·`daemon-reload`·`enable --now` → `/var/lib/<이름>` 마커와
+`/var/log/<이름>-bootstrap.log`, `/etc/cron.d/<이름>-backup` 교체 → 검증 후 옛 서비스·cron 제거.
 
 **방화벽 리소스는 규칙 전체를 대체한다.** 22만 선언했으므로 Lightsail이 기본으로
 열어두는 80/443도 닫힌다. 의도된 동작이다. 다만 **콘솔에서 손으로 좁힌 규칙은 다음
@@ -123,16 +136,16 @@ aws lightsail get-blueprints --region ap-northeast-2
 `terraform destroy`는 둘 다 지우므로 이 문제는 생기지 않는다.
 
 **`requirements.lock.txt`.** `requirements.txt`에 버전 핀이 거의 없어서, 부트스트랩이
-설치 직후 `pip freeze` 결과를 `~/china_chatbot/requirements.lock.txt`에 남긴다.
+설치 직후 `pip freeze` 결과를 `~/stock_chatbot/requirements.lock.txt`에 남긴다.
 서버에서만 재현되는 문제를 쫓을 때 이 파일이 유일한 근거다.
 
 ## 갱신과 삭제
 
 ```bash
 # 코드 갱신 (서버에서)
-cd ~/china_chatbot && git pull
+cd ~/stock_chatbot && git pull
 ./venv/bin/pip install -r requirements.txt      # requirements 변경 시에만
-sudo systemctl restart china-chatbot
+sudo systemctl restart stock-chatbot
 ```
 
 ```powershell

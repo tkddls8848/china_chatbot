@@ -9,11 +9,11 @@ bundle_id         = "micro_3_0" # $7/월, 1GB. nano_3_0(512MB)은 pandas를 못 
 blueprint_id      = "ubuntu_24_04"
 
 # --- 이름 ----------------------------------------------------------------
-instance_name = "china-chatbot"
-service_name  = "china-chatbot"
+instance_name = "stock-chatbot"
+service_name  = "stock-chatbot"
 
 # --- 소스 ----------------------------------------------------------------
-repo_url = "https://github.com/tkddls8848/china_chatbot.git"
+repo_url = "https://github.com/tkddls8848/stock_chatbot.git"
 repo_ref = "main"
 
 # --- 접근 제어 -----------------------------------------------------------
