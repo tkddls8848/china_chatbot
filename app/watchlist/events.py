@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from core.clock import ensure_kst, now
 from core.workers import run_non_urgent
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ class WatchlistEventLog:
         async with self._lock:
             self._events.append(
                 {
-                    "ts": datetime.now().isoformat(timespec="seconds"),
+                    "ts": now().isoformat(timespec="seconds"),
                     "event": event,
                     "code": code,
                     "name": name,
@@ -61,12 +62,12 @@ class WatchlistEventLog:
             await asyncio.to_thread(self._file_path.write_text, data, encoding="utf-8")
 
     async def snapshot(self, lookback_days: int = 30) -> list[dict[str, Any]]:
-        cutoff = datetime.now() - timedelta(days=max(1, lookback_days))
+        cutoff = now() - timedelta(days=max(1, lookback_days))
         async with self._lock:
             result = []
             for event in self._events:
                 try:
-                    if datetime.fromisoformat(str(event.get("ts"))) >= cutoff:
+                    if ensure_kst(datetime.fromisoformat(str(event.get("ts")))) >= cutoff:
                         result.append(dict(event))
                 except (TypeError, ValueError):
                     continue

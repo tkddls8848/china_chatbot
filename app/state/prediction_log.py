@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from core.clock import ensure_kst, now
+
 logger = logging.getLogger(__name__)
 
 # 평균 감성이 이 값 이상이면 상승(up), -이 값 이하면 하락(down), 사이면 중립(neutral).
@@ -34,7 +36,7 @@ class PredictionLog:
     ) -> None:
         """신호 1건을 기록한다. 실패해도 뉴스 전송 흐름을 막지 않는다."""
         entry = {
-            "ts": datetime.now().isoformat(timespec="seconds"),
+            "ts": now().isoformat(timespec="seconds"),
             "source": source,
             "title": str(title)[:120],
             "sentiment": sentiment,
@@ -62,7 +64,7 @@ class PredictionLog:
     def _read_recent(self, lookback_days: int) -> list[dict[str, Any]]:
         if not self._file_path.exists():
             return []
-        cutoff = datetime.now() - timedelta(days=max(1, lookback_days))
+        cutoff = now() - timedelta(days=max(1, lookback_days))
         entries: list[dict[str, Any]] = []
         for line in self._file_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -70,7 +72,7 @@ class PredictionLog:
                 continue
             try:
                 entry = json.loads(line)
-                if datetime.fromisoformat(str(entry.get("ts"))) >= cutoff:
+                if ensure_kst(datetime.fromisoformat(str(entry.get("ts")))) >= cutoff:
                     entries.append(entry)
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue

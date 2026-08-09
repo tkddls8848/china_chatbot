@@ -13,7 +13,8 @@
 import json
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
+from core.clock import now
 from typing import Any, Callable
 
 import akshare as ak
@@ -213,10 +214,8 @@ class QuoteService:
         cache_ttl_minutes: int = 10,
         sector_top_n: int = 5,
         failure_cooldown_minutes: int = 15,
-        hot_rank_enabled: bool = False,
     ):
         self._enabled = enabled
-        self._hot_rank_enabled = hot_rank_enabled
         self._cache = _TTLCache(
             ttl_seconds=max(1, cache_ttl_minutes) * 60,
             failure_cooldown_seconds=max(1, failure_cooldown_minutes) * 60,
@@ -403,35 +402,12 @@ class QuoteService:
             logger.warning("[QUANT] %s 구성종목 조회 실패: %s", board_name, e)
             return []
 
-    def get_hot_rank_hits(self, codes: list[str]) -> list[dict[str, Any]]:
-        """동방재부 인기순위에 든 관심종목(해외 IP 차단으로 기본 비활성)."""
-        if not self._enabled or not self._hot_rank_enabled or not codes:
-            return []
-        try:
-            df = self._cache.get_or_fetch("hot_rank", _akshare_retry(ak.stock_hot_rank_em))
-            hits = []
-            for _, row in df.iterrows():
-                raw = str(row.get("代码") or "")
-                code = raw[2:] if raw[:2].upper() in ("SH", "SZ", "BJ") else raw
-                if code in codes:
-                    hits.append(
-                        {
-                            "code": code,
-                            "name": str(row.get("股票名称") or ""),
-                            "rank": int(_safe_float(row.get("当前排名")) or 0),
-                        }
-                    )
-            return hits
-        except Exception as e:
-            logger.warning("[QUANT] 인기순위 조회 실패: %s", e)
-            return []
-
     def get_zt_pool_summary(self) -> dict[str, Any]:
         """오늘 涨停 종목 수와 상위 몇 종목(단기 과열 온도계)."""
         if not self._enabled:
             return {}
         try:
-            date = datetime.now().strftime("%Y%m%d")
+            date = now().strftime("%Y%m%d")
             df = self._cache.get_or_fetch(
                 f"zt_pool:{date}",
                 _akshare_retry(lambda: ak.stock_zt_pool_em(date=date)),
@@ -451,7 +427,7 @@ class QuoteService:
         if not self._enabled or not codes:
             return []
         try:
-            end = datetime.now()
+            end = now()
             start = end - timedelta(days=max(1, lookback_days))
             df = self._cache.get_or_fetch(
                 f"lhb:{end.strftime('%Y%m%d')}",
@@ -509,11 +485,10 @@ class QuoteService:
 
         sectors = self.get_sector_rankings()
         return {
-            "as_of": datetime.now().isoformat(timespec="seconds"),
+            "as_of": now().isoformat(timespec="seconds"),
             "watchlist": watchlist_rows,
             "sector_top": sectors.get("top", []),
             "sector_bottom": sectors.get("bottom", []),
-            "hot_rank_hits": self.get_hot_rank_hits(codes),
             "lhb_hits": self.get_lhb_hits(codes),
             "zt_pool": self.get_zt_pool_summary(),
         }
@@ -573,14 +548,6 @@ def format_quant_summary(context: dict[str, Any], watchlist: dict[str, str]) -> 
     zt_pool = context.get("zt_pool") or {}
     if zt_pool.get("count") is not None:
         lines.append(f"涨停 {zt_pool.get('count', 0)}종목")
-
-    hot_hits = context.get("hot_rank_hits") or []
-    if hot_hits:
-        hot = ", ".join(
-            f"{_html.escape(h['name'] or watchlist.get(h['code'], h['code']))} {h['rank']}위"
-            for h in hot_hits
-        )
-        lines.append(f"인기순위 진입: {hot}")
 
     lhb_hits = context.get("lhb_hits") or []
     if lhb_hits:

@@ -8,6 +8,7 @@
 
 import logging
 from datetime import date, datetime
+from core.clock import today
 
 import akshare as ak
 import pandas as pd
@@ -21,19 +22,19 @@ class TradeCalendar:
         self._loaded_on: date | None = None
 
     def _load(self) -> None:
-        today = date.today()
-        if self._trade_dates is not None and self._loaded_on == today:
+        current_day = today()
+        if self._trade_dates is not None and self._loaded_on == current_day:
             return
         df = ak.tool_trade_date_hist_sina()
         dates = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
         self._trade_dates = {d for d in dates if pd.notna(d)}
-        self._loaded_on = today
+        self._loaded_on = current_day
         logger.info("[Calendar] 거래일 %d일 로드", len(self._trade_dates))
 
     def is_trade_date(self, target: date | datetime | None = None) -> bool:
         """블로킹 호출(to_thread 권장). 조회 실패 시 주중이면 True."""
         if target is None:
-            target = date.today()
+            target = today()
         elif isinstance(target, datetime):
             target = target.date()
         try:

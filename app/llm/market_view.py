@@ -1,9 +1,7 @@
 import json
 import logging
 import math
-import re
-import time
-from datetime import datetime
+from core.clock import now
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +10,7 @@ from llm.backends import LLMBackend, LLMBackendError
 logger = logging.getLogger(__name__)
 
 SIGHT_KEY = "sight"
-_ALLOWED_ACTIONS = frozenset({"add", "keep", "remove", "watch"})
+_ALLOWED_ACTIONS = frozenset({"add", "remove", "watch"})
 _NEW_ACTIONS = frozenset({"add", "watch"})
 
 
@@ -38,8 +36,6 @@ class MarketViewManager:
             self._data = json.loads(self._file_path.read_text(encoding="utf-8"))
             if not isinstance(self._data, dict):
                 raise ValueError("market view state must be an object")
-            if self._normalize_loaded_data():
-                self._persist()
         except Exception as e:
             logger.warning("[MarketView] failed to load state, resetting: %s", e)
             self._data = self._default_data()
@@ -63,7 +59,7 @@ class MarketViewManager:
         if normalized != self.get_sight():
             self._data["history"] = []
         self._data[SIGHT_KEY] = normalized
-        self._data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        self._data["updated_at"] = now().isoformat(timespec="seconds")
         self._persist()
 
     def clear_sight(self) -> None:
@@ -89,11 +85,7 @@ class MarketViewManager:
         history = self._data.get("history")
         if not isinstance(history, list):
             return []
-        return [
-            self._summarize_result(result)
-            for result in history[-self._history_limit :]
-            if isinstance(result, dict)
-        ]
+        return history[-self._history_limit :]
 
     @staticmethod
     def _summarize_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -115,35 +107,6 @@ class MarketViewManager:
             "actions": actions,
         }
 
-    def _normalize_loaded_data(self) -> bool:
-        changed = False
-        defaults = self._default_data()
-        for key, value in defaults.items():
-            if key not in self._data:
-                self._data[key] = value
-                changed = True
-
-        raw_history = self._data.get("history")
-        if not isinstance(raw_history, list):
-            raw_history = []
-            changed = True
-        had_legacy_last_result = "last_result" in self._data
-        legacy_last_result = self._data.pop("last_result", None)
-        if isinstance(legacy_last_result, dict) and not raw_history:
-            raw_history = [legacy_last_result]
-        if had_legacy_last_result:
-            changed = True
-        compact_history = [
-            self._summarize_result(result)
-            for result in raw_history[-self._history_limit :]
-            if isinstance(result, dict)
-        ]
-        if compact_history != self._data.get("history"):
-            self._data["history"] = compact_history
-            changed = True
-        return changed
-
-
 class MarketViewAnalyzer:
     def __init__(
         self,
@@ -154,8 +117,6 @@ class MarketViewAnalyzer:
         prompt_file: Path,
         max_new_actions: int = 4,
         remove_relevance_threshold: float = 0.35,
-        verification_enabled: bool = False,
-        verification_prompt_file: Path | None = None,
     ):
         self._backend = backend
         self._enabled = enabled
@@ -168,10 +129,6 @@ class MarketViewAnalyzer:
         self._max_actions = min(8, max(4, self._max_new_actions + 2))
         self._remove_relevance_threshold = remove_relevance_threshold
         self._prompt = prompt_file.read_text(encoding="utf-8")
-        self._verification_prompt = ""
-        if verification_prompt_file is not None and verification_prompt_file.exists():
-            self._verification_prompt = verification_prompt_file.read_text(encoding="utf-8")
-        self._verification_enabled = verification_enabled and bool(self._verification_prompt)
 
     def analyze(
         self,
@@ -185,11 +142,6 @@ class MarketViewAnalyzer:
         if not self._enabled:
             raise MarketViewError("market view analysis is disabled")
 
-        deadline = (
-            time.monotonic() + self._timeout
-            if self._timeout is not None
-            else None
-        )
         candidates = candidate_universe or []
         payload = {
             "market_view": market_view,
@@ -198,140 +150,24 @@ class MarketViewAnalyzer:
             "candidate_universe": candidates,
             "remove_relevance_threshold": self._remove_relevance_threshold,
             "max_new_actions": self._max_new_actions,
-            "max_actions": getattr(
-                self, "_max_actions", min(8, max(4, self._max_new_actions + 2))
-            ),
+            "max_actions": self._max_actions,
         }
         if quant_context:
             payload["quant_context"] = quant_context
         if previous_analyses:
             payload["previous_analyses"] = previous_analyses
-        raw = self._request_analysis(
-            payload,
-            timeout=self._remaining_timeout(deadline),
-        )
-        result = self._parse_analysis(
+        raw = self._request_analysis(payload)
+        return self._parse_analysis(
             raw,
             watchlist=watchlist,
             candidate_universe=candidates,
         )
-        if self._verification_enabled:
-            result = self._verify_actions(
-                market_view,
-                result,
-                news_items,
-                quant_context,
-                deadline,
-            )
-        return result
-
-    def _verify_actions(
-        self,
-        market_view: str,
-        result: dict[str, Any],
-        news_items: list[dict[str, Any]],
-        quant_context: dict[str, Any] | None,
-        deadline: float | None,
-    ) -> dict[str, Any]:
-        """추가/삭제 후보에 bull/bear 근거를 붙이고 기각(drop) 후보를 걸러낸다.
-
-        검증 호출이 실패하면 1차 결과를 그대로 반환한다(fail-open).
-        """
-        targets = [
-            item for item in result.get("actions", [])
-            if item.get("action") in ("add", "remove")
-        ]
-        if not targets:
-            return result
-
-        payload: dict[str, Any] = {
-            "market_view": market_view,
-            "proposals": [
-                {
-                    "ticker": item.get("ticker"),
-                    "name": item.get("name"),
-                    "action": item.get("action"),
-                    "reason": item.get("reason"),
-                }
-                for item in targets
-            ],
-            "news_titles": [
-                str(item.get("title") or "")[:120] for item in news_items
-            ],
-        }
-        if quant_context:
-            payload["quant_context"] = quant_context
-
-        try:
-            raw = self._request_analysis(
-                payload,
-                prompt=self._verification_prompt,
-                timeout=self._remaining_timeout(deadline),
-            )
-            data = json.loads(self._extract_json_object(raw))
-            verdicts = data.get("verdicts")
-            if not isinstance(verdicts, list):
-                raise MarketViewError("verification JSON verdicts must be a list")
-        except Exception as e:
-            logger.warning("[VERIFY] 검증 패스 실패, 1차 결과 유지: %s", e)
-            return result
-
-        verdict_by_ticker: dict[str, dict[str, Any]] = {}
-        for verdict in verdicts:
-            if isinstance(verdict, dict) and isinstance(verdict.get("ticker"), str):
-                verdict_by_ticker[verdict["ticker"].strip()] = verdict
-
-        kept_actions: list[dict[str, Any]] = []
-        dropped: list[dict[str, Any]] = []
-        for item in result.get("actions", []):
-            if item.get("action") not in ("add", "remove"):
-                kept_actions.append(item)
-                continue
-            verdict = verdict_by_ticker.get(str(item.get("ticker") or "").strip())
-            if verdict is None:
-                kept_actions.append(item)
-                continue
-            item["bull_case"] = str(verdict.get("bull_case") or "").strip()
-            item["bear_case"] = str(verdict.get("bear_case") or "").strip()
-            try:
-                item["verification_confidence"] = min(
-                    1.0, max(0.0, float(verdict.get("confidence")))
-                )
-            except (TypeError, ValueError):
-                pass
-            if str(verdict.get("verdict") or "").strip().lower() == "drop":
-                dropped.append(
-                    {
-                        "ticker": item.get("ticker"),
-                        "name": item.get("name"),
-                        "action": item.get("action"),
-                        "reason": str(verdict.get("bear_case") or verdict.get("reason") or "").strip(),
-                    }
-                )
-                continue
-            kept_actions.append(item)
-
-        result["actions"] = kept_actions
-        if dropped:
-            result["verification_dropped"] = dropped
-        result["verified"] = True
-        return result
-
-    def _remaining_timeout(self, deadline: float | None) -> float | None:
-        if deadline is None:
-            return self._timeout
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise MarketViewError("research analysis timed out")
-        return remaining
 
     def _request_analysis(
         self,
         payload: dict[str, Any],
-        prompt: str | None = None,
-        timeout: float | None = None,
     ) -> str:
-        system_prompt = prompt or self._prompt
+        system_prompt = self._prompt
         payload_text = json.dumps(payload, ensure_ascii=False)
         article_count = len(
             payload.get("news_items")
@@ -354,15 +190,13 @@ class MarketViewAnalyzer:
                 user_prompt=payload_text,
                 max_tokens=self._num_predict,
                 temperature=0.2,
-                timeout=timeout,
+                timeout=self._timeout,
             )
         except LLMBackendError as error:
             raise MarketViewError(str(error)) from error
 
         if not content.strip():
             raise MarketViewError("empty analysis response content")
-        if not content.lstrip().startswith("{"):
-            content = "{" + content
         return content
 
     @staticmethod
@@ -394,17 +228,10 @@ class MarketViewAnalyzer:
         watchlist: dict[str, str] | None = None,
         candidate_universe: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        payload = self._extract_json_object(raw)
         try:
-            data = json.loads(payload)
+            data = json.loads(raw)
         except json.JSONDecodeError as e:
-            logger.error("[ANALYZE] JSON parse failed: %s | raw=%r", e, raw[:300])
-            return self._fallback_partial_analysis(
-                raw,
-                e,
-                watchlist=watchlist,
-                candidate_universe=candidate_universe,
-            )
+            raise MarketViewError(f"invalid analysis JSON: {e}") from e
 
         if not isinstance(data, dict):
             raise MarketViewError("analysis JSON must be an object")
@@ -433,12 +260,12 @@ class MarketViewAnalyzer:
             actions,
             watchlist_codes=list(watchlist) if watchlist is not None else None,
             candidate_codes=candidate_codes,
-            max_new_actions=getattr(self, "_max_new_actions", 4),
+            max_new_actions=self._max_new_actions,
         )
-        normalized_actions = normalized_actions[: getattr(self, "_max_actions", 8)]
+        normalized_actions = normalized_actions[: self._max_actions]
 
         return {
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "generated_at": now().isoformat(timespec="seconds"),
             "summary": summary.strip(),
             "actions": normalized_actions,
             "risks": [str(r).strip() for r in risks if str(r).strip()],
@@ -446,9 +273,7 @@ class MarketViewAnalyzer:
         }
 
     @staticmethod
-    def _normalize_score(value: Any, field: str, *, optional: bool = False) -> float | None:
-        if value is None and optional:
-            return None
+    def _normalize_score(value: Any, field: str) -> float:
         try:
             score = float(value)
         except (TypeError, ValueError) as e:
@@ -459,28 +284,11 @@ class MarketViewAnalyzer:
 
     @staticmethod
     def _canonical_code_index(codes: list[str]) -> dict[str, str]:
-        """Build a case-insensitive exact/suffix index for canonical stock keys.
-
-        `US:NASDAQ:AAPL` and `KR:KOSPI:005930` may be returned by a small model
-        as `AAPL` and `005930`. A suffix is accepted only when it resolves to one
-        supplied canonical key; ambiguous aliases are deliberately rejected.
-        """
-        exact: dict[str, str] = {}
-        suffixes: dict[str, set[str]] = {}
-        for raw_code in codes:
-            canonical = str(raw_code or "").strip()
-            if not canonical:
-                continue
-            token = canonical.upper()
-            exact.setdefault(token, canonical)
-            if ":" in token:
-                suffixes.setdefault(token.rsplit(":", 1)[-1], set()).add(canonical)
-
-        index = dict(exact)
-        for suffix, matches in suffixes.items():
-            if suffix not in index and len(matches) == 1:
-                index[suffix] = next(iter(matches))
-        return index
+        return {
+            code.upper(): code
+            for raw_code in codes
+            if (code := str(raw_code or "").strip())
+        }
 
     @classmethod
     def _normalize_actions(
@@ -493,7 +301,7 @@ class MarketViewAnalyzer:
     ) -> list[dict[str, Any]]:
         """Validate and normalize LLM actions against the supplied universes.
 
-        Candidate scoping applies only to add/watch. Keep/remove are resolved
+        Candidate scoping applies only to add/watch. Remove is resolved
         independently against the current watchlist so a removal cannot be lost
         merely because the candidate universe was truncated.
         """
@@ -558,11 +366,7 @@ class MarketViewAnalyzer:
             if not isinstance(evidence, list):
                 raise MarketViewError("analysis action evidence must be a list")
 
-            relevance = cls._normalize_score(
-                item.get("relevance"),
-                "relevance",
-                optional=True,
-            )
+            relevance = cls._normalize_score(item.get("relevance"), "relevance")
 
             normalized.append(
                 {
@@ -579,7 +383,6 @@ class MarketViewAnalyzer:
                 new_action_count += 1
             seen_tickers.add(canonical_token)
         return normalized
-
     @staticmethod
     def _normalize_view_critique(raw: Any) -> list[dict[str, Any]]:
         """마켓 뷰 반론 항목을 정규화한다.
@@ -615,122 +418,3 @@ class MarketViewAnalyzer:
                 {"point": point, "severity": severity, "evidence": evidence}
             )
         return normalized
-
-    def _fallback_partial_analysis(
-        self,
-        raw: str,
-        error: json.JSONDecodeError,
-        *,
-        watchlist: dict[str, str] | None = None,
-        candidate_universe: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        summary = self._extract_string_field(raw, "summary")
-        if not summary:
-            raise MarketViewError(f"invalid JSON response: {error}") from error
-        actions = self._extract_complete_array_objects(raw, "actions")
-        candidate_codes = (
-            [
-                str(item.get("code") or "").strip()
-                for item in candidate_universe
-                if isinstance(item, dict) and str(item.get("code") or "").strip()
-            ]
-            if candidate_universe is not None
-            else None
-        )
-        try:
-            normalized_actions = self._normalize_actions(
-                actions,
-                watchlist_codes=list(watchlist) if watchlist is not None else None,
-                candidate_codes=candidate_codes,
-                max_new_actions=getattr(self, "_max_new_actions", 4),
-            )[: getattr(self, "_max_actions", 8)]
-        except MarketViewError:
-            normalized_actions = []
-        recovered = (
-            f" 완성된 액션 {len(normalized_actions)}개를 함께 복구했습니다."
-            if normalized_actions
-            else ""
-        )
-        return {
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-            "summary": summary.strip(),
-            "actions": normalized_actions,
-            "risks": [
-                "LLM 응답 JSON이 중간에 잘렸습니다."
-                f"{recovered} 출력 항목 수를 제한해 재발 가능성을 낮췄습니다."
-            ],
-            "view_critique": [],
-        }
-
-    @staticmethod
-    def _extract_complete_array_objects(raw: str, field: str) -> list[dict[str, Any]]:
-        """Return fully formed object items preceding a truncated JSON tail."""
-        match = re.search(rf'"{re.escape(field)}"\s*:\s*\[', raw)
-        if not match:
-            return []
-        decoder = json.JSONDecoder()
-        position = match.end()
-        objects: list[dict[str, Any]] = []
-        while position < len(raw):
-            while position < len(raw) and (
-                raw[position].isspace() or raw[position] == ","
-            ):
-                position += 1
-            if position >= len(raw) or raw[position] == "]":
-                break
-            try:
-                value, position = decoder.raw_decode(raw, position)
-            except json.JSONDecodeError:
-                break
-            if isinstance(value, dict):
-                objects.append(value)
-        return objects
-
-    @staticmethod
-    def _extract_string_field(raw: str, field: str) -> str:
-        pattern = rf'"{re.escape(field)}"\s*:\s*"'
-        match = re.search(pattern, raw)
-        if not match:
-            return ""
-        chars: list[str] = []
-        escaped = False
-        for ch in raw[match.end() :]:
-            if escaped:
-                chars.append(ch)
-                escaped = False
-                continue
-            if ch == "\\":
-                escaped = True
-                continue
-            if ch == '"':
-                break
-            chars.append(ch)
-        return "".join(chars)
-
-    def _extract_json_object(self, text: str) -> str:
-        stripped = text.strip()
-        start = stripped.find("{")
-        if start == -1:
-            return stripped
-        depth = 0
-        in_string = False
-        escape_next = False
-        for i, ch in enumerate(stripped[start:], start):
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == "\\" and in_string:
-                escape_next = True
-                continue
-            if ch == '"':
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return stripped[start : i + 1]
-        return stripped[start:]

@@ -1,5 +1,6 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 
+from core.clock import now
 from news.registry import NewsSourceRegistry, build_source_specs
 
 
@@ -12,14 +13,12 @@ def test_build_source_specs_ignores_unknown_and_duplicates():
     specs = build_source_specs(["futu", "unknown", "futu", "sina"], [("내RSS", "http://x/feed")])
     keys = [spec.key for spec in specs]
     assert keys == ["futu", "sina", "rss:내RSS"]
-    assert specs[2].prompt_key == "global"
 
 
 def test_build_source_specs_supports_google_news_provider():
     specs = build_source_specs(["gnews", "gnews_us", "gnews_kr"], [])
 
     assert [spec.key for spec in specs] == ["gnews", "gnews_us", "gnews_kr"]
-    assert all(spec.prompt_key == "global" for spec in specs)
 
 
 def test_builtin_specs_carry_market_tags():
@@ -71,7 +70,7 @@ def test_cooldown_expires_and_source_returns():
     assert [s.key for s in registry.active_specs()] == ["futu"]
 
     # 쿨다운 만료를 시뮬레이션
-    registry._health["sina"].cooldown_until = datetime.now() - timedelta(seconds=1)
+    registry._health["sina"].cooldown_until = now() - timedelta(seconds=1)
     assert [s.key for s in registry.active_specs()] == ["futu", "sina"]
 
 

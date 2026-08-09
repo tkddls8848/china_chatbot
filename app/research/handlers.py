@@ -3,7 +3,7 @@ import html
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from core.clock import now
 from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -12,7 +12,6 @@ from telegram.ext import ContextTypes
 from core.config import (
     RESEARCH_DISCOVERY_RESERVED_SLOTS,
     RESEARCH_MAX_CANDIDATES,
-    RESEARCH_REMOVE_RELEVANCE_THRESHOLD,
     TELEGRAM_MESSAGE_LIMIT,
 )
 from core.menu_status import set_menu_button_text
@@ -22,7 +21,6 @@ from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
 from llm.market_view import MarketViewError, MarketViewManager
 from stocks import StockDatabase
-from llm.translator import TranslationService
 from watchlist.events import record_watchlist_event
 
 logger = logging.getLogger(__name__)
@@ -121,32 +119,16 @@ def _collect_research_actions(
         if not isinstance(item, dict):
             continue
         action = item.get("action")
-        if action not in {"add", "keep", "remove", "watch"}:
+        if action not in {"add", "remove", "watch"}:
             continue
         confidence = float(item.get("confidence") or 0)
-        raw_relevance = item.get("relevance")
-        relevance = None
-        if raw_relevance is not None:
-            try:
-                relevance = min(1.0, max(0.0, float(raw_relevance)))
-            except (TypeError, ValueError):
-                relevance = None
+        relevance = float(item["relevance"])
 
         code = _normalize_code(str(item.get("ticker") or ""))
         if not code:
             continue
         # LLM이 티커만 답한 경우(AAPL, 005930 등) universe 키로 승격한다.
         code = stock_db.resolve_code(code) or code
-
-        # 현재 관심종목은 LLM이 keep/watch로 응답하더라도 마켓 뷰 관련도가
-        # 기준 미만이면 삭제 후보로 승격한다. 실제 삭제는 사용자의 적용 승인 후 수행한다.
-        low_relevance = (
-            code in watchlist
-            and relevance is not None
-            and relevance < RESEARCH_REMOVE_RELEVANCE_THRESHOLD
-        )
-        if low_relevance:
-            action = "remove"
 
         if action == "add":
             if code in watchlist or code in seen_add:
@@ -163,8 +145,6 @@ def _collect_research_actions(
                     "reason": str(item.get("reason") or "").strip(),
                     "confidence": confidence,
                     "relevance": relevance,
-                    "bull_case": str(item.get("bull_case") or "").strip(),
-                    "bear_case": str(item.get("bear_case") or "").strip(),
                 }
             )
             seen_add.add(code)
@@ -172,12 +152,6 @@ def _collect_research_actions(
             if code not in watchlist or code in seen_remove:
                 continue
             reason = str(item.get("reason") or "").strip()
-            if low_relevance and item.get("action") != "remove":
-                threshold_reason = (
-                    f"마켓 뷰 관련도 {relevance:.0%}가 삭제 기준 "
-                    f"{RESEARCH_REMOVE_RELEVANCE_THRESHOLD:.0%} 미만"
-                )
-                reason = f"{threshold_reason}. {reason}" if reason else threshold_reason
             remove_items.append(
                 {
                     "code": code,
@@ -185,8 +159,6 @@ def _collect_research_actions(
                     "reason": reason,
                     "confidence": confidence,
                     "relevance": relevance,
-                    "bull_case": str(item.get("bull_case") or "").strip(),
-                    "bear_case": str(item.get("bear_case") or "").strip(),
                 }
             )
             seen_remove.add(code)
@@ -201,18 +173,10 @@ def _format_action_lines(items: list[dict[str, Any]]) -> str:
         code = html.escape(str(item["code"]))
         name = html.escape(str(item["name"]))
         confidence = float(item.get("confidence") or 0)
-        relevance = item.get("relevance")
-        scores = [f"판단 {confidence:.0%}"]
-        if relevance is not None:
-            scores.insert(0, f"관련도 {float(relevance):.0%}")
+        relevance = float(item["relevance"])
+        scores = [f"관련도 {relevance:.0%}", f"판단 {confidence:.0%}"]
         suffix = f" - {reason}" if reason else ""
         lines.append(f"- {name} ({code}) [{' · '.join(scores)}]{suffix}")
-        bull_case = str(item.get("bull_case") or "").strip()
-        bear_case = str(item.get("bear_case") or "").strip()
-        if bull_case:
-            lines.append(f"  🐂 {html.escape(bull_case[:120])}")
-        if bear_case:
-            lines.append(f"  🐻 {html.escape(bear_case[:120])}")
     return "\n".join(lines) if lines else "- 없음"
 
 
@@ -232,37 +196,20 @@ def _format_research_result_message(
     remove_lines = _format_action_lines(pending["remove"])
 
     watch_lines = []
-    keep_lines = []
     for item in result.get("actions", []):
         if not isinstance(item, dict):
             continue
         action = item.get("action")
-        if action not in {"watch", "keep"}:
+        if action != "watch":
             continue
         code = html.escape(_normalize_code(str(item.get("ticker") or "")))
         name = html.escape(str(item.get("name") or code))
         reason = html.escape(str(item.get("reason") or ""))
-        relevance = item.get("relevance")
-        line = f"- {name} ({code})"
-        if relevance is not None:
-            line += f" [관련도 {float(relevance):.0%}]"
+        relevance = float(item["relevance"])
+        line = f"- {name} ({code}) [관련도 {relevance:.0%}]"
         if reason:
             line += f" - {reason}"
-        if action == "watch":
-            watch_lines.append(line)
-        else:
-            keep_lines.append(line)
-
-    dropped = result.get("verification_dropped") or []
-    dropped_lines = []
-    for item in dropped[:5]:
-        if not isinstance(item, dict):
-            continue
-        code = html.escape(_normalize_code(str(item.get("ticker") or "")))
-        name = html.escape(str(item.get("name") or code))
-        reason = html.escape(str(item.get("reason") or "")[:100])
-        action_label = "추가" if item.get("action") == "add" else "제외"
-        dropped_lines.append(f"- [{action_label} 기각] {name} ({code}) {reason}")
+        watch_lines.append(line)
 
     risks = result.get("risks") or []
     risk_lines = "\n".join(f"- {html.escape(str(r))}" for r in risks[:5]) or "- 없음"
@@ -288,20 +235,16 @@ def _format_research_result_message(
                 )
     critique_text = "\n".join(critique_lines) or "- 상충하는 근거 없음"
 
-    verified_mark = " ✅검증됨" if result.get("verified") else ""
     text = (
-        f"<b>{html.escape(title)}</b>{verified_mark}\n"
+        f"<b>{html.escape(title)}</b>\n"
         f"분석 뉴스: {news_count}건 / 후보 universe: {candidate_count}개\n\n"
         f"<b>요약</b>\n{summary}\n\n"
         f"<b>🗣 내 뷰 반론</b>\n{critique_text}\n\n"
         f"<b>추가 후보</b>\n{add_lines}\n\n"
         f"<b>제외 후보</b>\n{remove_lines}\n\n"
         f"<b>주목 종목</b>\n{chr(10).join(watch_lines[:5]) or '- 없음'}\n\n"
-        f"<b>유지</b>\n{chr(10).join(keep_lines[:5]) or '- 없음'}\n\n"
         f"<b>리스크</b>\n{risk_lines}"
     )
-    if dropped_lines:
-        text += f"\n\n<b>검증에서 기각된 후보</b>\n{chr(10).join(dropped_lines)}"
     return truncate_html(text, TELEGRAM_MESSAGE_LIMIT)
 
 
@@ -469,12 +412,10 @@ async def _run_research_job(
     stock_db: StockDatabase = context.bot_data["stock_db"]
     analyzer = context.bot_data["market_view_analyzer"]
     mvm: MarketViewManager = context.bot_data["market_view_manager"]
-    translator: TranslationService = context.bot_data["translator"]
-    translate_semaphore: asyncio.Semaphore = context.bot_data["translate_semaphore"]
     collect_global_news = context.bot_data["research_news_collector"]
 
     watchlist = await wm.get_all()
-    news_items = await collect_global_news(translator, translate_semaphore)
+    news_items = await collect_global_news()
     if not news_items:
         await _deliver_research_text(
             message,
@@ -488,17 +429,14 @@ async def _run_research_job(
         stock_db,
         watchlist,
         news_items,
-        market_view,
         max_candidates=RESEARCH_MAX_CANDIDATES,
     )
 
-    # 시장별 발굴 후보(중화권 섹터·问财, 미국 스크리너, 한국 등락률)를 병합한다.
-    # 뉴스·키워드 후보가 상한을 채우면 발굴 후보가 통째로 잘리므로, 발굴 결과가
-    # 있을 때에 한해 뒤쪽(근거가 약한 키워드 후보) 자리를 내어준다.
+    # 시장별 발굴 후보(중화권 섹터, 미국 스크리너, 한국 등락률)를 병합한다.
     quote_service = context.bot_data.get("quote_service")
     try:
         extra_candidates = await run_non_urgent(
-            collect_extra_candidates, quote_service, stock_db, watchlist, market_view
+            collect_extra_candidates, quote_service, stock_db, watchlist
         )
         existing_codes = {c["code"] for c in candidate_universe}
         new_candidates = [
@@ -583,7 +521,7 @@ async def _run_research_job(
 
     uid = uuid.uuid4().hex[:8]
     context.bot_data.setdefault("research_pending", {})[uid] = {
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": now().isoformat(timespec="seconds"),
         "market_view": market_view,
         "add": pending["add"],
         "remove": pending["remove"],

@@ -4,6 +4,8 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from core.clock import ensure_kst, now
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,14 +21,14 @@ class SentNewsTracker:
         self._load()
 
     def _cutoff(self) -> datetime:
-        return datetime.now() - timedelta(days=self._retention_days)
+        return now() - timedelta(days=self._retention_days)
 
     def _evict(self) -> None:
         cutoff = self._cutoff()
         expired = []
         for article_id, timestamp in self._id_ts.items():
             try:
-                is_expired = datetime.fromisoformat(timestamp) < cutoff
+                is_expired = ensure_kst(datetime.fromisoformat(timestamp)) < cutoff
             except (TypeError, ValueError):
                 is_expired = True
             if is_expired:
@@ -47,19 +49,14 @@ class SentNewsTracker:
             logger.warning("[SENT] 전송 이력 파일을 읽지 못해 새 이력으로 시작합니다: %s (%s)", self._file_path, exc)
             return
 
-        if isinstance(raw, list):
-            # 구형 포맷(list) → 현재 시각으로 마이그레이션
-            now = datetime.now().isoformat()
-            self._id_ts = {item: now for item in raw if isinstance(item, str)}
-        elif isinstance(raw, dict):
-            self._id_ts = {
-                article_id: timestamp
-                for article_id, timestamp in raw.items()
-                if isinstance(article_id, str) and isinstance(timestamp, str)
-            }
-        else:
+        if not isinstance(raw, dict):
             logger.warning("[SENT] 전송 이력 파일 형식이 올바르지 않아 새 이력으로 시작합니다: %s", self._file_path)
             return
+        self._id_ts = {
+            article_id: timestamp
+            for article_id, timestamp in raw.items()
+            if isinstance(article_id, str) and isinstance(timestamp, str)
+        }
         self._evict()
 
     async def reserve(self, article_id: str) -> bool:
@@ -76,7 +73,7 @@ class SentNewsTracker:
             self._pending.discard(article_id)
             if article_id in self._id_ts:
                 return
-            self._id_ts[article_id] = datetime.now().isoformat()
+            self._id_ts[article_id] = now().isoformat()
 
     async def release(self, article_id: str) -> None:
         """번역 또는 전송 실패 시 다음 주기에 재시도할 수 있도록 예약을 해제한다."""

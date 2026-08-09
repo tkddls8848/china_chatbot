@@ -13,11 +13,13 @@ from typing import Any, Callable, TypeVar
 
 import pandas as pd
 
+from core.clock import KST as _KST
 from llm.translator import TranslationResult, TranslationService
 
 T = TypeVar("T")
+# 기사 시각의 소스 타임존. 중국 뉴스·시세 제공처는 현지 시각(CST)을 준다.
+# 여기서 KST로 변환하며, 앱의 "지금"은 core/clock.py가 따로 담당한다.
 _CHINA_TZ = timezone(timedelta(hours=8))
-_KST = timezone(timedelta(hours=9), name="KST")
 
 
 def parse_news_datetime(
@@ -131,14 +133,19 @@ def format_china_time_as_kst(
 
     try:
         if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", raw):
+            # 날짜 없이 시각만 온 경우다. 붙일 날짜가 없으니 tzinfo를 달아도
+            # 의미가 없고, CST→KST는 고정 +1시간(양쪽 다 서머타임이 없다)이라
+            # 시간 산술이 정확하다. 그래서 naive strptime을 의도적으로 쓴다.
             fmt = "%H:%M:%S" if raw.count(":") == 2 else "%H:%M"
-            converted = datetime.strptime(raw, fmt) + timedelta(hours=1)
+            converted = datetime.strptime(raw, fmt) + timedelta(hours=1)  # noqa: DTZ007
             return f"{converted.strftime(fmt)} KST"
 
         converted = parse_news_datetime(published_at, published_date)
         if converted is None:
             return f"{raw} KST"
-        fmt = "%Y-%m-%d %H:%M:%S" if re.search(r":\d{2}:\d{2}", raw) else "%Y-%m-%d %H:%M"
+        fmt = (
+            "%Y-%m-%d %H:%M:%S" if re.search(r":\d{2}:\d{2}", raw) else "%Y-%m-%d %H:%M"
+        )
         return f"{converted.strftime(fmt)} KST"
     except Exception:
         return f"{raw} KST"
@@ -212,14 +219,12 @@ def chunk_message_items(
 async def translate_article(
     translator: TranslationService,
     semaphore: asyncio.Semaphore,
-    source: str,
     title: str,
     content: str,
 ) -> TranslationResult:
     async with semaphore:
         return await asyncio.to_thread(
             translator.translate_article,
-            source,
             title,
             content,
         )
@@ -227,8 +232,6 @@ async def translate_article(
 
 def is_timeout_error(error: Exception) -> bool:
     return "timed out" in str(error).lower() or "timeout" in str(error).lower()
-
-
 
 
 def normalize_stock_code(raw: Any) -> str:
@@ -261,42 +264,3 @@ def signal_codes(raw_codes: list | None) -> list[str]:
         if candidate and candidate not in codes:
             codes.append(candidate)
     return codes
-
-
-def format_sentiment_line(sentiment: float | None, impact: str = "") -> str:
-    """뉴스 메시지에 붙일 감성 한 줄. 감성 값이 없으면 빈 문자열."""
-    from core.config import NEWS_SENTIMENT_ENABLED
-
-    if not NEWS_SENTIMENT_ENABLED or sentiment is None:
-        return ""
-    if sentiment >= 0.15:
-        marker = "긍정"
-    elif sentiment <= -0.15:
-        marker = "부정"
-    else:
-        marker = "중립"
-    impact_labels = {"high": "높음", "medium": "중간", "low": "낮음"}
-    impact_part = f" · 영향 {impact_labels[impact]}" if impact in impact_labels else ""
-    return f"감성: {marker} {sentiment:+.2f}{impact_part}\n"
-
-
-def select_rotating_batch(
-    items: list,
-    cursor: int,
-    batch_size: int,
-) -> tuple[list, int]:
-    """커서를 기준으로 batch_size개를 선택하고 다음 커서를 반환한다.
-
-    전체를 매 주기 일괄 처리하지 않고 여러 주기에 나눠 회전 처리하기 위한 공용 헬퍼.
-    batch_size가 0 이하이면 전체를 한 번에 처리한다.
-    """
-    if not items:
-        return [], 0
-    size = batch_size if batch_size > 0 else len(items)
-    if cursor >= len(items):
-        cursor = 0
-    selected = items[cursor : cursor + size]
-    next_cursor = cursor + len(selected)
-    if next_cursor >= len(items):
-        next_cursor = 0
-    return selected, next_cursor

@@ -1,7 +1,7 @@
 """뉴스 수집·번역·전송 기능 선언."""
 
 import asyncio
-from datetime import datetime
+from core.clock import now
 
 from core.config import (
     NEWS_GLOBAL_SOURCE_KEYS,
@@ -54,7 +54,7 @@ def _install_jobs(scheduler, app) -> None:
         trigger="interval",
         minutes=SCHEDULER_INTERVAL_MINUTES,
         args=[app],
-        next_run_time=datetime.now(),
+        next_run_time=now(),
         id="news_digest",
         max_instances=1,
         coalesce=True,

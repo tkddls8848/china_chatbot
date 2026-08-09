@@ -6,7 +6,7 @@
 
 import html
 import logging
-from datetime import datetime
+from core.clock import now as clock_now
 
 from telegram import Update
 from telegram.ext import Application, ContextTypes
@@ -31,7 +31,7 @@ _WEEKDAYS_KO = ["월", "화", "수", "목", "금", "토", "일"]
 
 
 def _today_header() -> str:
-    now = datetime.now()
+    now = clock_now()
     return f"{now.strftime('%Y-%m-%d')} ({_WEEKDAYS_KO[now.weekday()]})"
 
 
@@ -65,13 +65,9 @@ async def _build_quant_section(app: Application, include_fund_flow: bool) -> tup
 
 
 async def _collect_briefing_news(app: Application) -> list[dict]:
-    translator = app.bot_data.get("translator")
-    semaphore = app.bot_data.get("translate_semaphore")
     registry = app.bot_data.get("news_registry")
     try:
         return await collect_global_market_news_items(
-            translator,
-            semaphore,
             registry,
             max_items=BRIEFING_NEWS_MAX_ITEMS,
         )
