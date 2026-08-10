@@ -2,7 +2,14 @@
 import json
 
 from llm.market_view import MarketViewAnalyzer
-from research.handlers import _format_research_result_message
+from research.handlers import _format_research_result_sections
+
+
+def _format_message(result: dict) -> str:
+    """섹션을 합쳐 렌더링 결과 전체를 한 문자열로 본다."""
+    return "\n\n".join(
+        _format_research_result_sections(result, {"add": [], "remove": []}, 3, 5)
+    )
 
 
 def _analyzer(tmp_path) -> MarketViewAnalyzer:
@@ -74,17 +81,19 @@ def test_parse_view_critique_fail_soft(tmp_path):
     ]
 
 
-def test_parse_view_critique_caps_at_three(tmp_path):
+def test_parse_view_critique_caps_at_limit(tmp_path):
     result = _parse(
         tmp_path,
         {
             "summary": "s",
             "actions": [],
             "risks": [],
-            "view_critique": [f"반론 {i}" for i in range(6)],
+            "view_critique": [f"반론 {i}" for i in range(9)],
         },
     )
-    assert [c["point"] for c in result["view_critique"]] == ["반론 0", "반론 1", "반론 2"]
+    assert [c["point"] for c in result["view_critique"]] == [
+        f"반론 {i}" for i in range(5)
+    ]
 
 
 def test_format_message_renders_critique_section():
@@ -101,7 +110,7 @@ def test_format_message_renders_critique_section():
             {"point": "정책 리스크", "severity": None, "evidence": None},
         ],
     }
-    text = _format_research_result_message(result, {"add": [], "remove": []}, 3, 5)
+    text = _format_message(result)
     assert "🗣 내 뷰 반론" in text
     assert "[60%] 수요 둔화 신호" in text
     assert "판매 부진 &lt;보도&gt; (Sina)" in text  # HTML 이스케이프 확인
@@ -110,6 +119,6 @@ def test_format_message_renders_critique_section():
 
 def test_format_message_critique_empty():
     result = {"summary": "요약", "actions": [], "risks": []}
-    text = _format_research_result_message(result, {"add": [], "remove": []}, 3, 5)
+    text = _format_message(result)
     assert "🗣 내 뷰 반론" in text
     assert "상충하는 근거 없음" in text

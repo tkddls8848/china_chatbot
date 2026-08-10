@@ -177,7 +177,8 @@ def test_market_command_backfills_missing_digest_days(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["markets"] == {"US"}
     assert calls[0]["days"]["US"] == [target_day]
-    assert calls[0]["kwargs"]["articles_per_day"] == 20
+    # 설정한 하루치 표본 수가 그대로 넘어가는지만 본다(값 자체는 튜닝 대상).
+    assert calls[0]["kwargs"]["articles_per_day"] == commands.MARKET_DIGEST_ARTICLES_PER_DAY
     assert message.photo["caption"].startswith("국가·증시별 뉴스 감성 — 최근 14일")
 
 

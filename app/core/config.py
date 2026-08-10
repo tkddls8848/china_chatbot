@@ -73,7 +73,9 @@ if not PROMPT_DIR.is_absolute():
 # ── 번역 ──────────────────────────────────────────────
 TRANSLATION_ENABLED = _env_bool("TRANSLATION_ENABLED", "true")
 TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "1024"))
-TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "1"))
+# 한 주기에 묶어 처리하는 기사가 늘어난 만큼 번역도 병렬로 돌린다. 소스별
+# 준비 루프는 기사를 순차 처리하므로, 동시 실행 폭은 이 세마포어가 정한다.
+TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "3"))
 
 # ── Cloudflare Workers AI ─────────────────────────────
 # API 토큰은 .env에만 두고 커밋하지 않는다. 로그·예외에도 남기지 않는다.
@@ -137,7 +139,9 @@ WEB_ADMIN_PASSWORD = os.environ.get("WEB_ADMIN_PASSWORD", "")
 
 SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
 TELEGRAM_MESSAGE_LIMIT = 4096
-NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "3"))
+# 소스 하나가 한 주기에 전송할 새 기사 수. 주기를 늘린 만큼 한 번에 묶는
+# 분량을 키운다(소스 6곳 기준 주기당 최대 36건).
+NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "6"))
 NEWS_DIGEST_MESSAGE_MAX_CHARS = min(
     TELEGRAM_MESSAGE_LIMIT,
     max(2000, int(os.environ.get("NEWS_DIGEST_MESSAGE_MAX_CHARS", "3500"))),
@@ -149,9 +153,13 @@ NEWS_LIVE_MAX_AGE_HOURS = max(
     1,
     int(os.environ.get("NEWS_LIVE_MAX_AGE_HOURS", "48")),
 )
+# 소스 한 곳을 얼마나 깊이 읽을지. 하루 기사 수량을 정하는 상한은 전송
+# 상한(NEWS_GLOBAL_LIMIT)이 아니라 이 값이다 — 여기서 잘린 기사는 다음
+# 주기에도 목록에 남지 않으면 영영 보이지 않는다. gnews는 이 값을 시장
+# 수로, gnews_us·gnews_kr은 질의 수로 다시 나눠 쓴다.
 NEWS_SOURCE_ARTICLE_LIMIT = max(
     1,
-    int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "10")),
+    int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "20")),
 )
 
 
@@ -186,7 +194,8 @@ NEWS_SENTIMENT_ENABLED = _env_bool("NEWS_SENTIMENT_ENABLED", "true")
 NEWS_NEGATIVE_ALERT_THRESHOLD = float(os.environ.get("NEWS_NEGATIVE_ALERT_THRESHOLD", "-0.6"))
 # /view 감성 뷰 집계에 사용할 최근 신호 일수.
 VIEW_LOOKBACK_DAYS = int(os.environ.get("VIEW_LOOKBACK_DAYS", "3"))
-SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5"))
+# 뉴스 주기. 짧게 돌려 조금씩 보내는 대신 텀을 늘려 한 번에 많이 묶는다.
+SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "20"))
 STOCK_DB_ENABLED = _env_bool("STOCK_DB_ENABLED", "true")
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
@@ -196,16 +205,20 @@ RESEARCH_ANALYSIS_TIMEOUT = max(
     int(os.environ.get("RESEARCH_ANALYSIS_TIMEOUT", "600")),
 )
 RESEARCH_NEWS_MAX_ITEMS = int(
-    os.environ.get("RESEARCH_NEWS_MAX_ITEMS", "6")
+    os.environ.get("RESEARCH_NEWS_MAX_ITEMS", "16")
 )
 RESEARCH_NEWS_GLOBAL_LIMIT = int(
-    os.environ.get("RESEARCH_NEWS_GLOBAL_LIMIT", "3")
+    os.environ.get("RESEARCH_NEWS_GLOBAL_LIMIT", "8")
 )
-# 분석 payload에 넣을 기사 본문 길이 상한. 중국어 원문 기준 6건 × 260자가
-# 모델 컨텍스트와 Neurons 비용의 한계선이므로 여유를 두고 잡는다.
+# 분석 payload에 넣을 기사 본문 길이 상한. 제목만으로는 촉매·수치를 읽을 수
+# 없어 분석이 얕아지므로 본문을 함께 넣는다. 16건 × 600자에 후보 24개·정량·
+# 이력까지 상한을 가득 채우면 입력이 약 22,000토큰(보수 추정)이고, 출력 예약
+# 4,096을 더해 약 26,000으로 컨텍스트 32,768의 79% 선이다. 이 값이나
+# RESEARCH_NEWS_MAX_ITEMS·RESEARCH_MAX_CANDIDATES를 올릴 때는 남은 21%를
+# 어디까지 쓰는지 다시 계산한다 — 넘기면 응답이 중간에서 잘려 파싱이 실패한다.
 RESEARCH_NEWS_CONTENT_MAX_CHARS = max(
     80,
-    int(os.environ.get("RESEARCH_NEWS_CONTENT_MAX_CHARS", "240")),
+    int(os.environ.get("RESEARCH_NEWS_CONTENT_MAX_CHARS", "600")),
 )
 # 리서치 뉴스 수집에서 균형을 맞출 시장 순서. 소스 우선순위대로 뽑으면 첫 소스
 # (중화권)가 상한을 독식해 미국·한국 뉴스가 분석 입력에 들어가지 못한다.
@@ -218,11 +231,11 @@ RESEARCH_NEWS_MARKETS = tuple(
 # 분석 결과는 JSON 한 덩어리로 오므로 상한에 걸리면 문자열 중간에서 잘려
 # 파싱이 실패한다. 후보 수(RESEARCH_MAX_CANDIDATES)를 늘리면 함께 올린다.
 RESEARCH_ANALYSIS_NUM_PREDICT = int(
-    os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "2048")
+    os.environ.get("RESEARCH_ANALYSIS_NUM_PREDICT", "4096")
 )
 RESEARCH_MAX_CANDIDATES = max(
     1,
-    int(os.environ.get("RESEARCH_MAX_CANDIDATES", "10")),
+    int(os.environ.get("RESEARCH_MAX_CANDIDATES", "24")),
 )
 # 뉴스 본문 종목명 매칭에서 버릴 '흔한 영문 토큰'의 기준(이 수보다 많은 종목이
 # 공유하는 토큰은 사용하지 않는다).
@@ -232,12 +245,12 @@ RESEARCH_NAME_TOKEN_MAX_FREQUENCY = max(
 )
 RESEARCH_MAX_NEW_ACTIONS = max(
     0,
-    int(os.environ.get("RESEARCH_MAX_NEW_ACTIONS", "4")),
+    int(os.environ.get("RESEARCH_MAX_NEW_ACTIONS", "6")),
 )
 # 후보 상한 중 시장별 발굴에 남겨 둘 자리.
 RESEARCH_DISCOVERY_RESERVED_SLOTS = max(
     0,
-    int(os.environ.get("RESEARCH_DISCOVERY_RESERVED_SLOTS", "3")),
+    int(os.environ.get("RESEARCH_DISCOVERY_RESERVED_SLOTS", "8")),
 )
 NON_URGENT_WORKER_COUNT = max(1, int(os.environ.get("NON_URGENT_WORKER_COUNT", "3")))
 # 뉴스 주기가 도는 동안 비긴급 LLM 작업을 보류할 최대 시간(초). 한도를 넘으면
@@ -253,13 +266,13 @@ RESEARCH_REMOVE_RELEVANCE_THRESHOLD = min(
         float(os.environ.get("RESEARCH_REMOVE_RELEVANCE_THRESHOLD", "0.35")),
     ),
 )
-RESEARCH_HISTORY_LIMIT = int(os.environ.get("RESEARCH_HISTORY_LIMIT", "3"))
+RESEARCH_HISTORY_LIMIT = int(os.environ.get("RESEARCH_HISTORY_LIMIT", "5"))
 # 강세 섹터 구성종목을 리서치 후보군에 추가
 RESEARCH_SECTOR_CANDIDATES_ENABLED = _env_bool("RESEARCH_SECTOR_CANDIDATES_ENABLED", "true")
-RESEARCH_SECTOR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_SECTOR_CANDIDATE_LIMIT", "10"))
+RESEARCH_SECTOR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_SECTOR_CANDIDATE_LIMIT", "14"))
 # 미국 후보 발굴: Yahoo Finance 프리셋 스크리너(yfinance.screen).
 RESEARCH_US_CANDIDATES_ENABLED = _env_bool("RESEARCH_US_CANDIDATES_ENABLED", "true")
-RESEARCH_US_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_US_CANDIDATE_LIMIT", "8"))
+RESEARCH_US_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_US_CANDIDATE_LIMIT", "12"))
 RESEARCH_US_SCREENERS = tuple(
     name.strip()
     for name in os.environ.get(
@@ -269,7 +282,7 @@ RESEARCH_US_SCREENERS = tuple(
 )
 # 한국 후보 발굴: FinanceDataReader KRX 시세 목록의 등락률 상위.
 RESEARCH_KR_CANDIDATES_ENABLED = _env_bool("RESEARCH_KR_CANDIDATES_ENABLED", "true")
-RESEARCH_KR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_KR_CANDIDATE_LIMIT", "8"))
+RESEARCH_KR_CANDIDATE_LIMIT = int(os.environ.get("RESEARCH_KR_CANDIDATE_LIMIT", "12"))
 # 거래대금(원) 하한. 급등만 보고 잡주를 추천 후보로 올리지 않기 위한 필터.
 RESEARCH_KR_MIN_TRADING_VALUE = float(
     os.environ.get("RESEARCH_KR_MIN_TRADING_VALUE", "5000000000")
@@ -324,7 +337,7 @@ MARKET_DIGEST_ENABLED = _env_bool("MARKET_DIGEST_ENABLED", "true")
 MARKET_DIGEST_PROMPT_FILE = PROMPT_DIR / "market_digest_ko.txt"
 MARKET_DIGEST_ARTICLES_PER_DAY = max(
     1,
-    int(os.environ.get("MARKET_DIGEST_ARTICLES_PER_DAY", "20")),
+    int(os.environ.get("MARKET_DIGEST_ARTICLES_PER_DAY", "40")),
 )
 # 표본이 이보다 적은 날은 계산하지 않는다. 3건짜리 하루를 20건짜리 하루와 같은
 # 무게로 그리면 차트가 다시 출렁인다.
@@ -344,7 +357,7 @@ MARKET_DIGEST_MAX_CALLS_PER_REQUEST = max(
 )
 MARKET_DIGEST_NUM_PREDICT = max(
     64,
-    int(os.environ.get("MARKET_DIGEST_NUM_PREDICT", "256")),
+    int(os.environ.get("MARKET_DIGEST_NUM_PREDICT", "512")),
 )
 MARKET_DIGEST_TIMEOUT = max(
     5,
@@ -391,9 +404,11 @@ BRIEFING_EVENING_ENABLED = _env_bool("BRIEFING_EVENING_ENABLED", "true")
 BRIEFING_EVENING_HOUR = int(os.environ.get("BRIEFING_EVENING_HOUR", "17"))
 BRIEFING_EVENING_MINUTE = int(os.environ.get("BRIEFING_EVENING_MINUTE", "40"))
 BRIEFING_LLM_ENABLED = _env_bool("BRIEFING_LLM_ENABLED", "true")
-BRIEFING_NEWS_MAX_ITEMS = int(os.environ.get("BRIEFING_NEWS_MAX_ITEMS", "5"))
+BRIEFING_NEWS_MAX_ITEMS = int(os.environ.get("BRIEFING_NEWS_MAX_ITEMS", "14"))
 BRIEFING_PROMPT_FILE = PROMPT_DIR / "briefing_ko.txt"
-BRIEFING_TIMEOUT = int(os.environ.get("BRIEFING_TIMEOUT", "120"))
+BRIEFING_TIMEOUT = int(os.environ.get("BRIEFING_TIMEOUT", "180"))
+# 코멘트 출력 예약 토큰. 헤드라인을 늘린 만큼 코멘트도 길게 받는다.
+BRIEFING_NUM_PREDICT = max(256, int(os.environ.get("BRIEFING_NUM_PREDICT", "1024")))
 WATCHLIST_SCORECARD_ENABLED = _env_bool("WATCHLIST_SCORECARD_ENABLED", "true")
 WATCHLIST_SCORECARD_DAY_OF_WEEK = os.environ.get("WATCHLIST_SCORECARD_DAY_OF_WEEK", "sat")
 WATCHLIST_SCORECARD_HOUR = int(os.environ.get("WATCHLIST_SCORECARD_HOUR", "10"))

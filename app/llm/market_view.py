@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 SIGHT_KEY = "sight"
 _ALLOWED_ACTIONS = frozenset({"add", "remove", "watch"})
 _NEW_ACTIONS = frozenset({"add", "watch"})
+# 마켓 뷰 반론 항목 상한. 프롬프트의 "최대 5개"와 같은 수를 유지한다.
+_MAX_VIEW_CRITIQUE_ITEMS = 5
 
 
 class MarketViewError(RuntimeError):
@@ -123,10 +125,11 @@ class MarketViewAnalyzer:
         self._timeout = timeout
         self._num_predict = num_predict
         self._max_new_actions = max(0, max_new_actions)
-        # Some providers enforce a smaller completion ceiling than requested.
-        # Keep the response compact; unchanged watchlist entries are not
-        # actionable and do not need to consume the JSON budget.
-        self._max_actions = min(8, max(4, self._max_new_actions + 2))
+        # 신규 제안 외에 편출(remove)이 들어갈 자리를 남긴다. 변경 없는 기존
+        # 종목은 actions에 담기지 않으므로 이만큼이면 충분하다. 상한을 올릴
+        # 때는 RESEARCH_ANALYSIS_NUM_PREDICT도 함께 올린다 — JSON 한 덩어리가
+        # 출력 예약을 넘기면 문자열 중간에서 잘려 파싱이 실패한다.
+        self._max_actions = max(4, self._max_new_actions + 4)
         self._remove_relevance_threshold = remove_relevance_threshold
         self._prompt = prompt_file.read_text(encoding="utf-8")
 
@@ -394,7 +397,7 @@ class MarketViewAnalyzer:
             return []
         normalized: list[dict[str, Any]] = []
         for item in raw:
-            if len(normalized) >= 3:
+            if len(normalized) >= _MAX_VIEW_CRITIQUE_ITEMS:
                 break
             if isinstance(item, str):
                 point = item.strip()

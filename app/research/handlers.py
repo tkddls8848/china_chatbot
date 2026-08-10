@@ -17,6 +17,7 @@ from core.config import (
 from core.menu_status import set_menu_button_text
 from core.telegram_html import truncate_html
 from core.workers import run_non_urgent, wait_for_urgent_idle
+from news.utils import chunk_message_items
 from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
 from llm.market_view import MarketViewError, MarketViewManager
@@ -25,6 +26,11 @@ from watchlist.events import record_watchlist_event
 
 logger = logging.getLogger(__name__)
 _RESEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="research")
+_SECTION_SEPARATOR = "\n\n"
+# 결과 메시지에 나열할 항목 상한. 프롬프트가 정한 개수보다 넉넉히 잡아,
+# 모델이 상한까지 답했을 때 화면에서 다시 잘리지 않게 한다.
+_MAX_WATCH_LINES = 10
+_MAX_RISK_LINES = 8
 
 
 def _log_research_task_error(task: asyncio.Task) -> None:
@@ -77,12 +83,16 @@ async def _deliver_research_text(
     *,
     parse_mode: str | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
+    with_default_keyboard: bool = True,
 ) -> None:
     if menu_message is not None:
+        markup = reply_markup
+        if markup is None and with_default_keyboard:
+            markup = build_research_done_keyboard()
         await menu_message.edit_text(
             text,
             parse_mode=parse_mode,
-            reply_markup=reply_markup or build_research_done_keyboard(),
+            reply_markup=markup,
         )
         return
     await request_message.reply_text(
@@ -90,6 +100,54 @@ async def _deliver_research_text(
         parse_mode=parse_mode,
         reply_markup=reply_markup,
     )
+
+
+async def _deliver_research_sections(
+    request_message,
+    menu_message,
+    sections: list[str],
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    """섹션을 텔레그램 길이 상한에 맞춰 여러 메시지로 나눠 보낸다.
+
+    심층 분석 결과는 한 메시지에 들어가지 않는다. 통째로 잘라내면 뒤쪽의
+    리스크·반론이 먼저 사라져 정작 읽어야 할 내용이 없어지므로, 섹션 경계
+    에서 나눈다(각 섹션은 태그가 닫힌 HTML이라 나눠도 서식이 깨지지 않는다).
+    첫 메시지는 메뉴 자리를 대체하고 버튼은 마지막 메시지에만 붙인다.
+    """
+    chunks = chunk_message_items(
+        sections,
+        text_getter=lambda section: section,
+        max_body_length=TELEGRAM_MESSAGE_LIMIT,
+        separator=_SECTION_SEPARATOR,
+    )
+    # 홈 버튼은 메뉴에서 실행했을 때만 붙는다(_deliver_research_text와 같은
+    # 규칙). 명령으로 실행한 경우에는 버튼 없이 본문만 보낸다.
+    from_menu = menu_message is not None
+    for index, chunk in enumerate(chunks):
+        is_last = index == len(chunks) - 1
+        text = _SECTION_SEPARATOR.join(chunk)
+        if index == 0:
+            await _deliver_research_text(
+                request_message,
+                menu_message,
+                text,
+                parse_mode="HTML",
+                reply_markup=reply_markup if is_last else None,
+                with_default_keyboard=is_last,
+            )
+            continue
+        markup = None
+        if is_last:
+            markup = reply_markup
+            if markup is None and from_menu:
+                markup = build_research_done_keyboard()
+        await request_message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
 
 
 def _normalize_code(code: str) -> str:
@@ -180,13 +238,13 @@ def _format_action_lines(items: list[dict[str, Any]]) -> str:
     return "\n".join(lines) if lines else "- 없음"
 
 
-def _format_research_result_message(
+def _format_research_result_sections(
     result: dict[str, Any],
     pending: dict[str, list[dict[str, Any]]],
     news_count: int,
     candidate_count: int = 0,
     temporary: bool = False,
-) -> str:
+) -> list[str]:
     title = "리서치 분석 결과"
     if temporary:
         title += " (임시 리서치)"
@@ -212,7 +270,10 @@ def _format_research_result_message(
         watch_lines.append(line)
 
     risks = result.get("risks") or []
-    risk_lines = "\n".join(f"- {html.escape(str(r))}" for r in risks[:5]) or "- 없음"
+    risk_lines = (
+        "\n".join(f"- {html.escape(str(r))}" for r in risks[:_MAX_RISK_LINES])
+        or "- 없음"
+    )
 
     critique_lines = []
     for item in result.get("view_critique") or []:
@@ -235,17 +296,19 @@ def _format_research_result_message(
                 )
     critique_text = "\n".join(critique_lines) or "- 상충하는 근거 없음"
 
-    text = (
+    sections = [
         f"<b>{html.escape(title)}</b>\n"
-        f"분석 뉴스: {news_count}건 / 후보 universe: {candidate_count}개\n\n"
-        f"<b>요약</b>\n{summary}\n\n"
-        f"<b>🗣 내 뷰 반론</b>\n{critique_text}\n\n"
-        f"<b>추가 후보</b>\n{add_lines}\n\n"
-        f"<b>제외 후보</b>\n{remove_lines}\n\n"
-        f"<b>주목 종목</b>\n{chr(10).join(watch_lines[:5]) or '- 없음'}\n\n"
-        f"<b>리스크</b>\n{risk_lines}"
-    )
-    return truncate_html(text, TELEGRAM_MESSAGE_LIMIT)
+        f"분석 뉴스: {news_count}건 / 후보 universe: {candidate_count}개",
+        f"<b>요약</b>\n{summary}",
+        f"<b>🗣 내 뷰 반론</b>\n{critique_text}",
+        f"<b>추가 후보</b>\n{add_lines}",
+        f"<b>제외 후보</b>\n{remove_lines}",
+        f"<b>주목 종목</b>\n{chr(10).join(watch_lines[:_MAX_WATCH_LINES]) or '- 없음'}",
+        f"<b>리스크</b>\n{risk_lines}",
+    ]
+    # 섹션 하나가 그 자체로 상한을 넘으면 나눌 수 없다(후보가 많고 reason이
+    # 길 때 생긴다). 그 섹션만 줄이고 나머지 섹션은 온전히 남긴다.
+    return [truncate_html(section, TELEGRAM_MESSAGE_LIMIT) for section in sections]
 
 
 async def cmd_research(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -502,7 +565,7 @@ async def _run_research_job(
     if not temporary:
         await run_non_urgent(mvm.save_result, result)
 
-    text = _format_research_result_message(
+    sections = _format_research_result_sections(
         result,
         pending,
         len(news_items),
@@ -511,11 +574,10 @@ async def _run_research_job(
     )
     has_changes = bool(pending["add"] or pending["remove"])
     if not has_changes:
-        await _deliver_research_text(
+        await _deliver_research_sections(
             message,
             menu_message,
-            text + "\n\n변경 적용 후보가 없습니다.",
-            parse_mode="HTML",
+            sections + ["변경 적용 후보가 없습니다."],
         )
         return
 
@@ -527,11 +589,10 @@ async def _run_research_job(
         "remove": pending["remove"],
         "summary": result.get("summary") or "",
     }
-    await _deliver_research_text(
+    await _deliver_research_sections(
         message,
         menu_message,
-        text,
-        parse_mode="HTML",
+        sections,
         reply_markup=build_research_result_keyboard(uid),
     )
 

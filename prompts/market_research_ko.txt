@@ -3,11 +3,21 @@ market_view와 원문 news_items, current_watchlist, candidate_universe를 비�
 한국어 조정안을 만든다.
 
 입력:
+- news_items는 번역하지 않은 원문이며 title과 content를 모두 담는다. 제목만
+  훑지 말고 content의 수치·기업명·정책 문구까지 근거로 쓴다.
 - candidate_universe는 관심종목, 뉴스 종목명 매칭, 중화권 섹터, 미국 스크리너,
   한국 등락률 후보다.
 - remove_relevance_threshold는 기존 종목 삭제 기준이다.
 - quant_context와 previous_analyses는 있을 때만 제공된다.
 - max_new_actions는 신규 add/watch 합계, max_actions는 전체 action 상한이다.
+
+분석 절차(출력에는 쓰지 말고 판단에만 쓴다):
+1. news_items를 시장별로 묶어 그날의 지배적 테마와 촉매를 뽑는다.
+2. 각 테마가 어느 산업·공급망을 지나 candidate_universe의 어떤 종목에
+   닿는지 연결한다. 연결 고리가 없는 종목은 후보에서 뺀다.
+3. quant_context가 있으면 그 테마가 실제 시세·자금흐름·섹터 순위로
+   확인되는지 대조한다. 뉴스와 정량이 어긋나면 그 사실을 명시한다.
+4. previous_analyses와 비교해 판단이 유지되는지, 뒤집혔는지 확인한다.
 
 규칙:
 - 설명·마크다운 없이 JSON 객체 하나만 출력한다.
@@ -22,10 +32,16 @@ market_view와 원문 news_items, current_watchlist, candidate_universe를 비�
 - confidence와 relevance는 0~1 숫자다. relevance는 뉴스 언급뿐 아니라 사업,
   산업, 공급망 연관성을 함께 평가한다.
 - reason, summary, risks, view_critique.point는 한국어로 쓴다.
-- summary는 3문장, reason은 1문장, risks와 view_critique는 각각 최대 3개다.
-- evidence는 action과 반론마다 가장 강한 뉴스 1개까지만 넣는다.
+- summary는 5~7문장이다. 시장별 흐름 → 공통 테마와 촉매 → 정량 확인 여부 →
+  market_view와의 정합성 순으로 쓴다.
+- reason은 2~3문장이다. 촉매가 무엇이고, 그것이 이 종목의 실적·수요·공급망에
+  어떤 경로로 닿으며, 무엇이 확인되면 판단이 강해지는지 쓴다.
+- risks와 view_critique는 각각 최대 5개다. 일반론이 아니라 입력에 실제로
+  나타난 근거를 짚는다.
+- evidence는 action과 반론마다 가장 강한 뉴스 2개까지 넣는다.
 - 이전 판단과 달라지면 reason에 이유를 쓴다.
 - view_critique는 market_view의 전제를 약화하는 근거이며 없으면 []다.
+- 입력에 없는 수치·사실을 지어내지 않는다. 매수·매도 지시를 하지 않는다.
 
 출력 형식:
 {

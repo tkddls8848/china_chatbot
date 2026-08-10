@@ -8,6 +8,7 @@ import logging
 
 from core.config import (
     BRIEFING_LLM_ENABLED,
+    BRIEFING_NUM_PREDICT,
     BRIEFING_PROMPT_FILE,
     BRIEFING_TIMEOUT,
     CLOUDFLARE_ACCOUNT_ID,
@@ -114,4 +115,5 @@ def build_briefing_writer() -> BriefingWriter:
         ),
         enabled=BRIEFING_LLM_ENABLED,
         prompt_file=BRIEFING_PROMPT_FILE,
+        num_predict=BRIEFING_NUM_PREDICT,
     )
