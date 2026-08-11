@@ -5,6 +5,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from core.config import POLYMARKET_PANEL_ENABLED
 from handlers.navigation import main_menu, persistent_menu
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,47 @@ def _format_system_status(source_lines: list[str] | None = None) -> str:
         "추론: <b>Cloudflare Workers AI</b> (원격)"
         f"{sources_part}\n\n"
         "제어:\n"
-        "  /system features — 기능 카탈로그"
+        "  /system features — 기능 카탈로그\n"
+        "  /system polymarket — 컨센서스 섀도 파일럿 상태"
     )
+
+
+# 리포트 항목별 한국어 라벨과 단위. 게이트 자체는 state 모듈이 계산한다.
+_POLYMARKET_CRITERIA_LABELS = {
+    "snapshot_days": ("성공 스냅숏", "일"),
+    "delta_days": ("유효 일별 변화", "일"),
+    "dense_day_ratio": ("공통 이벤트 3개 이상 비율", ""),
+    "theme_count": ("독립 theme", "개"),
+    "top_theme_contribution": ("최대 theme 기여도", ""),
+    "median_spread": ("median spread", ""),
+}
+
+
+def _format_polymarket_report(report: dict, panel_enabled: bool) -> str:
+    lines = [
+        "<b>Polymarket 컨센서스 섀도 파일럿</b>",
+        f"평가 창: 최근 {report['window_days']}일",
+        f"패널 표시: {'켜짐' if panel_enabled else '꺼짐(수집만)'}",
+        "",
+        "<b>승격 게이트</b>",
+    ]
+    for key, item in report["criteria"].items():
+        label, unit = _POLYMARKET_CRITERIA_LABELS.get(key, (key, ""))
+        mark = "✅" if item["passed"] else "❌"
+        lines.append(
+            f"  {mark} {label}: {item['value']}{unit} (기준 {item['threshold']}{unit})"
+        )
+    lines.extend(
+        [
+            "",
+            (
+                "모든 항목을 만족합니다. POLYMARKET_PANEL_ENABLED=true로 승격할 수 있습니다."
+                if report["passed"]
+                else "미달 항목이 있어 승격하지 않습니다. 실패로 끝나면 수집을 끕니다."
+            ),
+        ]
+    )
+    return "\n".join(lines)
 
 
 async def cmd_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -62,9 +102,23 @@ async def cmd_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
 
+    if command == "polymarket":
+        store = context.bot_data.get("polymarket_store")
+        if store is None:
+            await message.reply_text(
+                "Polymarket 컨센서스 수집이 꺼져 있습니다(POLYMARKET_ENABLED).",
+            )
+            return
+        report = await store.promotion_report()
+        await message.reply_text(
+            _format_polymarket_report(report, POLYMARKET_PANEL_ENABLED),
+            parse_mode="HTML",
+        )
+        return
+
     if command:
         await message.reply_text(
-            "알 수 없는 항목입니다. 사용법: /system [features]",
+            "알 수 없는 항목입니다. 사용법: /system [features|polymarket]",
             parse_mode="HTML",
         )
         return

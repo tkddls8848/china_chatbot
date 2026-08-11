@@ -58,6 +58,12 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - 관심종목과 발송 이력도 현재 JSON 형식만 지원한다.
 - `/market`은 기사별 번역 대신 시장·일자별 헤드라인 다이제스트를 분석한다.
   완료된 과거 일자는 저장 결과를 재사용하고 오늘만 다시 계산한다.
+- **Polymarket 컨센서스는 기본 꺼짐(`POLYMARKET_ENABLED=false`)인 섀도 파일럿이다.**
+  `market_sentiment`의 외부 소스이지 별도 기능 키가 아니다. 값은 거시 위험선호
+  확률변화(pp)라 국가별 -1~+1 감성 점수와 축이 다르다 — 합산하거나 순위·리서치
+  입력·브리핑 payload에 넣지 않고 `/market` 하단 별도 패널에만 그린다. 방향은
+  `polymarket_rules.py`의 명시적 allowlist로만 정하고 LLM에 묻지 않는다.
+  판정 근거는 `/system polymarket`이 계산한다. 자세한 규약은 `docs/next-steps.md`.
 - 종목 canonical code는 시장마다 형식이 다르다. CN·HK는 **접두사 없는 숫자 코드**
   (`600519`, `00700`)이고, US·KR만 `US:NASDAQ:AAPL`·`KR:KOSPI:005930` 형식이다
   (`stocks/universe.py`의 `stock_key`). KR 6자리는 A주 코드와 겹치므로 US·KR에만
@@ -72,7 +78,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - LLM JSON은 필수 필드를 엄격히 검사하고 현재 응답 envelope만 처리한다.
 - 외부 소스 하나의 실패가 전체 뉴스 주기를 중단시키지 않도록 소스 단위로 격리한다.
 - 새 호환 분기, 사용하지 않는 설정 플래그, 중복 helper를 만들지 않는다.
-- 앞으로 할 일은 `docs/roadmap.md` 하나에 모은다. 항목이 끝나면 지운다.
+- 앞으로 할 일은 `docs/next-steps.md` 하나에 모은다. 항목이 끝나면 지운다.
 - 모듈은 한 책임을 유지하되 한두 함수만 담는 무의미한 파일 분할은 피한다.
 - **시각은 `core/clock.py`의 `now()`·`today()`만 쓴다.** `datetime.now()`·`date.today()`는
   호스트 타임존을 따라가서 서버를 다른 타임존에 올리면 `/market`의 하루 경계와 보존

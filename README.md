@@ -62,6 +62,14 @@ $env:RUN_CLOUDFLARE_SMOKE='1'
 python -m pytest -q -m cloudflare_smoke
 ```
 
+Polymarket Gamma API 읽기 스모크도 같은 방식으로 제외되어 있습니다. 인증과 LLM을
+쓰지 않으므로 Neurons를 소비하지 않지만, 운영 서버는 출구 IP가 달라 로컬에서
+열린다고 서버에서 열리는 것이 아닙니다. 수집을 켜기 전에 서버에서 돌립니다.
+
+```bash
+RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
+```
+
 ## 주요 기능
 
 - 중국·홍콩·미국·한국·글로벌 시장 뉴스 수집과 한국어 번역
@@ -83,7 +91,7 @@ python -m pytest -q -m cloudflare_smoke
 | `/research show\|set\|run\|clear` | 리서치 후보 관리 |
 | `/briefing morning\|evening\|scorecard` | 브리핑 또는 성적표 생성 |
 | `/stockdb build` | 종목 DB 갱신 |
-| `/system [features]` | 시스템 상태와 기능 카탈로그 확인 |
+| `/system [features\|polymarket]` | 시스템 상태, 기능 카탈로그, 컨센서스 파일럿 상태 |
 
 ## 관리 웹 (선택)
 

@@ -13,7 +13,12 @@ FEATURE = FeatureSpec(
     label="시스템 관리",
     commands=(
         CommandSpec("start", "사용 안내", cmd_start),
-        CommandSpec("system", "시스템 상태", cmd_system),
+        CommandSpec(
+            "system",
+            "시스템 상태",
+            cmd_system,
+            usage="[features|polymarket]",
+        ),
         CommandSpec("help", "명령어 안내", cmd_help),
     ),
     menus=(

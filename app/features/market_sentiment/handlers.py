@@ -6,9 +6,12 @@
 """
 
 import logging
+from datetime import date, timedelta
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from core.clock import today
 from core.config import (
     MARKET_CHART_BACKFILL_DAYS_PER_REQUEST,
     MARKET_CHART_MARKETS,
@@ -19,6 +22,7 @@ from core.config import (
     MARKET_DIGEST_MAX_CALLS_PER_REQUEST,
     MARKET_DIGEST_MIN_ARTICLES,
     NEWS_MARKET_BACKFILL_QUERIES,
+    POLYMARKET_PANEL_ENABLED,
 )
 from core.menu_status import set_menu_button_text
 from core.workers import run_non_urgent
@@ -27,6 +31,12 @@ from news import backfill_market_digests
 from state import MarketDigestStore, market_history_gaps
 
 logger = logging.getLogger(__name__)
+
+# 점 두 개짜리 패널은 추세가 아니라 선분이다. 이보다 적으면 그리지 않는다.
+_PANEL_MIN_POINTS = 3
+# 스냅숏은 08:35에 찍히므로 오전에는 최신값이 어제치다. 이틀 넘게 밀렸다면
+# 수집이 멈춘 것이므로 낡은 선을 최신인 양 그리지 않는다.
+_PANEL_MAX_STALE_DAYS = 2
 
 
 def _spread_backfill_days(days: list, limit: int) -> list:
@@ -40,6 +50,32 @@ def _spread_backfill_days(days: list, limit: int) -> list:
         for index in range(limit)
     }
     return [days[index] for index in sorted(indexes)]
+
+
+async def _consensus_panel_series(context, days: int) -> list[dict] | None:
+    """하단 패널에 그릴 24시간 거시 위험선호 변화. 자격 미달이면 None.
+
+    이 함수가 None을 돌려주면 `/market`은 예전 그대로의 2패널 차트를 만든다.
+    섀도 기간에는 `POLYMARKET_PANEL_ENABLED=false`라 항상 그 경로를 탄다.
+    수집이 끊겼거나 표본이 얇을 때도 마찬가지다 — 외부 참고선 하나 때문에
+    기존 감성 차트가 흔들리면 안 된다.
+    """
+    if not POLYMARKET_PANEL_ENABLED:
+        return None
+    store = context.bot_data.get("polymarket_store")
+    if store is None:
+        return None
+    try:
+        changes = await store.daily_changes(days)
+        if len(changes) < _PANEL_MIN_POINTS:
+            return None
+        latest = date.fromisoformat(str(changes[-1]["date"]))
+    except Exception:
+        logger.warning("[POLYMARKET] 컨센서스 조회 실패, 패널 없이 진행합니다.", exc_info=True)
+        return None
+    if latest < today() - timedelta(days=_PANEL_MAX_STALE_DAYS):
+        return None
+    return changes
 
 
 async def _set_market_status(message, callback_data: str, status, text: str) -> None:
@@ -162,7 +198,10 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             status,
             "◑ 차트 생성 중",
         )
-        image = await run_non_urgent(render_market_chart, ready_markets, days)
+        consensus = await _consensus_panel_series(context, days)
+        image = await run_non_urgent(
+            render_market_chart, ready_markets, days, consensus
+        )
         ranking = " | ".join(
             f"{market_label(market)} {stats['avg_sentiment']:+.2f} ({stats['count']})"
             for market, stats in sorted(ready_markets.items(), key=lambda item: item[1]["avg_sentiment"], reverse=True)
@@ -177,11 +216,19 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         ]
         if day_counts:
             sample_note = f"\n하루 평균 표본 {sum(day_counts) / len(day_counts):.0f}건"
+        # 하단 패널은 국가별 점수와 축이 다른 외부 참고선이다. 순위·점수에
+        # 섞이지 않았다는 사실을 캡션에서도 분명히 해 둔다.
+        consensus_note = (
+            "\n하단 패널은 Polymarket 거시 위험선호 확률변화(pp)로, 위 점수·순위와 무관합니다."
+            if consensus
+            else ""
+        )
         await message.reply_photo(
             photo=image,
             caption=(
                 f"국가·증시별 뉴스 감성 — 최근 {days}일\n{ranking}{sample_note}\n\n"
                 "점수는 하루치 헤드라인을 종합한 분위기 지표(-1~+1)이며 투자 조언이 아닙니다."
+                f"{consensus_note}"
             ),
         )
         if callback_data:
