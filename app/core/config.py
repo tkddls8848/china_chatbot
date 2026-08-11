@@ -371,6 +371,37 @@ MARKET_DIGEST_COUNT_TOLERANCE_RATIO = max(
 )
 
 
+# ── Polymarket 거시 위험선호 컨센서스(섀도 파일럿) ────
+# Gamma API는 인증이 필요 없고 LLM을 쓰지 않으므로 추가 Neurons는 0/일이다.
+# 값은 국가별 뉴스 감성 점수에 절대 합산하지 않고 `/market` 하단 별도 패널에만
+# 그린다. 수집과 표시를 분리해 두는 이유는 30일 섀도 파일럿 때문이다 —
+# 수집만 켜 두고(ENABLED) 승격 게이트를 통과할 때까지 패널은 끈다(PANEL).
+POLYMARKET_CONSENSUS_FILE = DATA_DIR / "market_sentiment" / "polymarket_consensus.json"
+POLYMARKET_BASE_URL = "https://gamma-api.polymarket.com"
+POLYMARKET_ENABLED = _env_bool("POLYMARKET_ENABLED", "false")
+POLYMARKET_PANEL_ENABLED = _env_bool("POLYMARKET_PANEL_ENABLED", "false")
+POLYMARKET_TIMEOUT = max(5, int(os.environ.get("POLYMARKET_TIMEOUT", "20")))
+# 선택 게이트. 유동성이 얕은 계약은 하루 변화가 호가 한 번에 흔들려 컨센서스가
+# 아니라 잡음이 된다. 실측 기준(volume 10,000 · liquidity 1,000)을 기본값으로 둔다.
+POLYMARKET_MIN_VOLUME = float(os.environ.get("POLYMARKET_MIN_VOLUME", "10000"))
+POLYMARKET_MIN_LIQUIDITY = float(os.environ.get("POLYMARKET_MIN_LIQUIDITY", "1000"))
+# 승격 게이트의 "median spread 5%p 이하"와 같은 기준을 수집 단계에서도 쓴다.
+POLYMARKET_MAX_SPREAD = max(
+    0.0,
+    float(os.environ.get("POLYMARKET_MAX_SPREAD", "0.05")),
+)
+# 만기가 너무 먼 계약은 하루 단위로 거의 움직이지 않아 신호를 희석한다.
+POLYMARKET_MAX_HORIZON_DAYS = max(
+    1,
+    int(os.environ.get("POLYMARKET_MAX_HORIZON_DAYS", "365")),
+)
+# 30일 파일럿의 일별 변화를 계산하려면 하루 전 스냅숏이 남아 있어야 한다.
+POLYMARKET_RETENTION_DAYS = max(
+    2,
+    int(os.environ.get("POLYMARKET_RETENTION_DAYS", "31")),
+)
+
+
 def _parse_market_backfill_queries() -> dict[str, str]:
     raw = os.environ.get("NEWS_MARKET_BACKFILL_QUERIES", "").strip()
     defaults = {

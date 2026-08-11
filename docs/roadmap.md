@@ -53,47 +53,57 @@ HTTP 200으로 열린다. 기술 통합은 가능하고 LLM 비용도 0이다. �
 한국은행 동결 3건뿐이고 KOSPI나 개별종목 마켓은 없다. 따라서 Polymarket 값은
 **개별종목 감성이 아니라 글로벌 거시 위험선호의 외부 참고선**으로만 쓸 수 있다.
 
-### 승격 시에도 지킬 것
+### 코드는 들어와 있다 (섀도 상태)
 
-- 표시 위치는 `/market` **하나만**. 차트 하단에 별도 축·별도 패널로
+구현 1~5단계는 끝났고 기본값은 `POLYMARKET_ENABLED=false`다. 코드를 다시 쓸 일은
+없고, 남은 건 **서버에서 켜고 30일 관찰한 뒤 승격 여부를 판정하는 운영**이다.
+
+| 자리 | 파일 |
+|---|---|
+| Gamma keyset 클라이언트·파서 | `app/features/market_sentiment/polymarket.py` |
+| 게이트·theme allowlist·polarity | `app/features/market_sentiment/polymarket_rules.py` |
+| 08:35 KST 스냅숏 job | `app/features/market_sentiment/snapshot.py` |
+| 스냅숏 저장·일별 정렬·게이트 계산 | `app/state/polymarket_consensus.py` |
+| 하단 패널 | `app/features/market_sentiment/chart.py` |
+
+설계상 지킨 것(회귀 테스트가 붙어 있으니 바꿀 때 함께 본다):
+
+- 표시 위치는 `/market` **하나만**. 하단에 별도 축·별도 패널로
   `24시간 거시 위험선호 확률변화(pp)`를 그린다.
-- 기존 국가별 -1~+1 뉴스 감성 점수·기사 수·순위에 **절대 합산하지 않는다.**
-- CN/HK/US/KR 선으로 복제하지 않는다. HK 0건 같은 결측을 가짜 값으로 만들지 않는다.
-- `/research` 입력과 브리핑 payload에는 넣지 않는다. 리서치는 이미
-  26,096/32,768 토큰(79.6%)을 쓰고 있고, 의미가 약한 외부 확률에 쓸 여유가 아니다.
-- LLM 주입을 배제하므로 **추가 Neurons는 0/일**이다.
+- 기존 국가별 -1~+1 점수·기사 수·순위에 **합산하지 않는다.** CN/HK/US/KR 선으로
+  복제하지도 않는다.
+- `/research` 입력과 브리핑 payload에는 넣지 않는다. LLM을 거치지 않으므로
+  **추가 Neurons는 0/일**이다.
+- 전일·당일에 **같은 conditionId**가 있는 계약만 비교한다. 만료 계약을 다른 slug로
+  잇지 않고, 빠진 날을 앞 값으로 채우지 않으며, 같은 날 두 번째 스냅숏은 저장하지
+  않는다(08:35 값과 오후 값을 섞으면 일간 변화가 아니다).
+- 집계는 계약 → 이벤트 중앙값 → theme 중앙값 → theme 평균으로 접는다. S&P 임계값
+  8개짜리 이벤트가 한반도 이벤트 하나보다 8배 세지지 않는다.
+- 방향은 명시적 allowlist로만 정한다. **LLM에게 묻지 않는다.** GDP 구간·금리
+  결정처럼 국면 의존적인 질문은 제외한다.
 
-### 구현 순서
+### 남은 일
 
-1. **파서·클라이언트** — `app/features/market_sentiment/polymarket.py`.
-   `/markets/keyset` + `next_cursor`로 순회한다. 레거시 `/markets`를 큰 offset으로
-   돌면 422가 난다. mock으로 배열 매핑·합계·범위·timeout·429를 검증한다.
-2. **선택·polarity 규칙** — volume/liquidity/spread/active/endDate/horizon 게이트와
-   **명시적 theme allowlist**. 침공·충돌 Yes는 risk-off라 반전하고, 무역 합의·지수
-   상승 Yes는 정방향이다. GDP 구간·금리 동결처럼 방향이 국면 의존적인 질문은
-   제외한다. **LLM으로 방향을 추측하지 않는다.**
-3. **상태 저장·일별 정렬** — `app/state/polymarket_consensus.py`,
-   `data/market_sentiment/polymarket_consensus.json`에 31일 보존.
-   전일과 당일에 **같은 conditionId**가 모두 있는 계약만 비교한다. 만료 계약을 다른
-   slug로 이어 붙이거나 forward-fill하지 않는다. 같은 event의 자식 계약은 중앙값
-   하나로 축약해 S&P 임계값 8개가 한반도 이벤트 하나보다 8배 세지는 일을 막는다.
-4. **기능 조립** — 새 기능이 아니라 기존 `market_sentiment`의 외부 소스로 붙인다.
-   08:35 KST 스냅숏 job을 등록하고, job 실패가 다른 스케줄러로 전파되지 않는지 본다.
-5. **차트·핸들러** — optional 하단 패널. baseline이 없거나 부족하거나 오래돼도
-   기존 `/market` PNG와 순위가 그대로 나오는지 회귀 테스트한다.
-6. **30일 섀도 운영** — `POLYMARKET_ENABLED=true`로 수집하되 **표시하지 않는다.**
-7. **승격 게이트** — 아래를 **모두** 만족할 때만 패널을 켠다. 하나라도 실패하면
-   도입하지 않고 수집을 끈다.
+1. **서버 읽기 스모크.** 운영 Lightsail은 출구 IP가 달라 **한국 PC에서 열렸다는
+   사실이 서버 접근을 보장하지 않는다.** 켜기 전에 서버에서 한 번 돌린다.
+
+   ```bash
+   RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
+   ```
+
+2. **30일 섀도 운영.** 서버 `.env`에 `POLYMARKET_ENABLED=true`만 넣는다
+   (`POLYMARKET_PANEL_ENABLED`는 `false` 그대로 — 수집하되 표시하지 않는다).
+   봇이 08:35에 내려가 있던 날은 스냅숏이 비고, 그날 변화는 계산되지 않는다.
+   따라잡기 수집은 일부러 넣지 않았다.
+3. **승격 판정.** `/system polymarket`이 아래 게이트를 계산해 보여 준다.
+   **모두 통과할 때만** `POLYMARKET_PANEL_ENABLED=true`로 올린다. 하나라도
+   실패하면 도입하지 않고 `POLYMARKET_ENABLED=false`로 수집을 끄며, 이 항목과
+   관련 코드·설정을 지운다.
    - 30일 중 성공 스냅숏 24일 이상(80%)
    - 유효 daily delta 24일 이상
-   - 대부분의 유효일에 공통 이벤트 3개 이상
+   - 유효일의 80% 이상에서 공통 이벤트 3개 이상
    - 독립 theme 3개 이상, 한 theme 기여도 50% 이하
    - median spread 5%p 이하
-
-### 시작 전 확인
-
-운영 Lightsail은 출구 IP가 달라 **한국 PC에서 열렸다는 사실이 서버 접근을
-보장하지 않는다.** 1단계 전에 서버에서 `closed=false&limit=1` 읽기 스모크를 돌린다.
 
 ## 4. 환경변수 축소 (보류, 재개 시 참고)
 
