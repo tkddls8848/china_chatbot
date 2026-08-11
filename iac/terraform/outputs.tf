@@ -74,8 +74,8 @@ output "verify_commands" {
 
     # 텔레그램에서: /system, /briefing morning, /market (차트 이미지 = MPLBACKEND 정상)
 
-    # 24시간 뒤 일일 Neurons 소모 (무료 한도 10,000, 예상 약 2,600)
-    journalctl -u ${var.service_name} --since '24 hours ago' --no-pager | grep -o 'neurons=[0-9.]*' | cut -d= -f2 | paste -sd+ | bc
+    # 최근 7일 UTC 일자별 Neurons 소모 (무료 한도 10,000/일, 예상 약 2,600/일)
+    journalctl -u ${var.service_name} --since "$(date -u -d '6 days ago' '+%Y-%m-%d 00:00:00 UTC')" --until "$(date -u -d 'tomorrow' '+%Y-%m-%d 00:00:00 UTC')" -o short-iso-precise --utc --no-pager | awk 'match($0, /neurons=[0-9]+([.][0-9]+)?/) { day = substr($1, 1, 10); total[day] += substr($0, RSTART + 8, RLENGTH - 8) } END { for (day in total) printf "%s %.2f\n", day, total[day] }' | sort
   EOT
 }
 

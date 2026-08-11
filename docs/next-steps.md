@@ -3,33 +3,34 @@
 앞으로 할 일만 모은다. 끝난 항목은 지운다. 완료된 작업의 기록은 git 이력이 맡는다.
 **이 파일이 유일한 할 일 목록이다.** 새 목록 파일을 만들지 않는다.
 
-## 현재 상태
+## 확인 결과 (2026-08-11)
 
-| 축 | 상태 |
+| 축 | 확인 결과 |
 |---|---|
-| 코드 | 푸시됨. Polymarket 파일럿까지 포함해 테스트 307개·ruff 통과 |
-| 운영 서버 `.env` | **확대된 값이 반영되지 않았다.** 코드 푸시로는 전파되지 않는다 |
+| 코드·로컬 유효 설정 | **적용 확인.** 확대 값 19개와 Polymarket 구현이 들어 있다. 프로젝트 venv 기준 `307 passed, 5 skipped`, ruff 통과 |
+| 운영 서버 `.env` | **미확인.** 이 작업공간에는 Terraform state와 SSH 대상 정보가 없어 서버의 유효값을 읽지 못했다 |
 | Neurons 실사용 | **미측정.** 확대 후 수치는 추정치뿐이다 |
-| Polymarket 수집 | 코드는 있고 기본 꺼짐(`POLYMARKET_ENABLED=false`) |
+| Polymarket 수집 | 로컬은 수집·표시 모두 꺼짐이고 스냅숏 파일도 없다. 운영 서버 스모크·파일럿 착수 여부는 **미확인** |
 
 ## 실행 순서
 
-작업 1과 2는 서로 얽혀 있다. **2(서버 반영)를 먼저 하고 1(실측)을 그 위에서 재야**
+작업 1과 2는 서로 얽혀 있다. **2(서버 설정 확인·필요 시 반영)를 먼저 하고
+1(실측)을 그 위에서 재야**
 확대된 설정의 실제 소비를 보는 것이 된다. 3은 1의 결과가 무해함을 확인한 뒤에
 켠다 — 한도가 이미 빠듯하면 새 수집을 얹을 때가 아니다(다만 Polymarket 자체는
 Neurons를 쓰지 않는다). 4는 언제 해도 되지만 지금은 보류다.
 
 ```
-2. 서버 .env 반영  →  1. Neurons 실측(며칠)  →  3. Polymarket 파일럿(30일)  →  판정
-                                                4. 환경변수 축소(보류)
+2. 서버 설정 확인·필요 시 반영  →  1. Neurons 실측(며칠)  →  3. Polymarket 파일럿(30일)  →  판정
+                                                               4. 환경변수 축소(보류)
 ```
 
 ---
 
 ## 1. 수집량 확대 후 Neurons 실사용 확인
 
-주기를 20분으로 늘리고 수집·분석 깊이를 키운 뒤의 소비량은 아직
-**추정치일 뿐 실측이 아니다.**
+코드와 로컬 유효 설정에서는 주기 20분과 확대 값 19개가 모두 적용된 것을 확인했다.
+운영 서버에 같은 값이 적용된 뒤의 소비량은 아직 **추정치일 뿐 실측이 아니다.**
 
 | 구분 | 값 |
 |---|---|
@@ -42,12 +43,16 @@ Neurons를 쓰지 않는다). 4는 언제 해도 되지만 지금은 보류다.
 며칠간 로그의 `neurons=` 값을 합산한다. 하루 경계는 UTC 00시(KST 09시)다 —
 KST 자정으로 끊어 세면 아침 9시 전 소비가 전날 몫으로 잘못 붙는다.
 
+**서버에서 잰다.** 명령은 `terraform output verify_commands`에 들어 있고, 최근 7일을
+UTC 일자별로 한 줄씩 뱉는다(`YYYY-MM-DD <합계>`).
+
 ```bash
-# 서버
-journalctl -u stock-chatbot | grep neurons=
-# 로컬 (로그는 파일이 아니라 표준 오류로 나간다)
-python app\bot.py 2> bot.log
+journalctl -u stock-chatbot --since "$(date -u -d '6 days ago' '+%Y-%m-%d 00:00:00 UTC')" --until "$(date -u -d 'tomorrow' '+%Y-%m-%d 00:00:00 UTC')" -o short-iso-precise --utc --no-pager | awk 'match($0, /neurons=[0-9]+([.][0-9]+)?/) { day = substr($1, 1, 10); total[day] += substr($0, RSTART + 8, RLENGTH - 8) } END { for (day in total) printf "%s %.2f\n", day, total[day] }' | sort
 ```
+
+**로컬 `bot.log`로는 이 측정을 할 수 없다.** 로그 포맷(`%(asctime)s`)이 호스트 로컬
+시각을 오프셋 없이 찍어서 한 줄만 보고 UTC 일자를 복원할 방법이 없다. KST 호스트라는
+외부 가정을 얹어야 환산되므로, 판정 근거로는 서버 수치만 쓴다.
 
 **판정과 조치**
 
@@ -60,18 +65,51 @@ python app\bot.py 2> bot.log
 
 ---
 
-## 2. 운영 서버(Lightsail)에 설정 반영
+## 2. 운영 서버(Lightsail) 설정 확인·필요 시 반영
 
 `.env`는 `.gitignore` 대상이라 **코드를 푸시해도 서버에 전파되지 않는다.**
-확대된 값(주기 20분, fetch 깊이 20, 리서치 입력 16건×600자 등)을 서버 `.env`에
-직접 반영해야 한다.
+이 작업공간에는 Terraform state와 SSH 대상 정보가 없어 서버 `.env`를 직접 확인하지
+못했다. 서버에 낡은 명시값이 남아 있다면 확대된 값(주기 20분, fetch 깊이 20,
+리서치 입력 16건×600자 등)으로 바꾸고, 없다면 코드 기본값을 그대로 쓴다.
 
-- 절차는 `iac/terraform/README.md`가 유일한 배포 문서다.
+- 절차는 `iac/terraform/README.md`가 유일한 배포 문서다. `.env` 편집(`nano
+  ~/stock_chatbot/.env`)과 기동은 `terraform output cutover_commands`에, 재기동
+  (`sudo systemctl restart stock-chatbot`)은 README 갱신 절에 있다.
 - 같은 토큰으로 두 프로세스가 폴링하면 양쪽이 번갈아 죽는다.
   **로컬 정지 → 서버 기동** 순서를 지킨다.
-- 반영 대상은 `.env.example`과 서버 `.env`의 차분이다. 이번에 추가된
-  `POLYMARKET_*` 블록은 이 단계에서 **넣지 않는다.** 작업 3에서 스모크를 통과한
-  뒤에 켠다.
+- 이번에 추가된 `POLYMARKET_*` 블록은 이 단계에서 **넣지 않는다.** 작업 3에서
+  스모크를 통과한 뒤에 켠다.
+
+**먼저 서버 `.env`를 눈으로 확인한다.** 확대된 값은 이미 전부 `config.py`의 기본값이고,
+2026-08-11 로컬 유효 설정도 아래 19개가 모두 왼쪽 값인 것을 확인했다. 따라서
+서버 `.env`에 **낡은 명시값이 남아 있을 때만** 손댈 게 있다. 부트스트랩이 당시
+`.env.example`을 통째로 복사했으므로 남아 있을 가능성이 크지만, 아래 19줄은 서버를
+직접 보고 확정할 것 — 이 목록은 git 이력에서 역산한 추정이다.
+
+```env
+TRANSLATION_CONCURRENCY=3          # 1
+NEWS_GLOBAL_LIMIT=6                # 3
+NEWS_SOURCE_ARTICLE_LIMIT=20       # 10
+SCHEDULER_INTERVAL_MINUTES=20      # 5
+RESEARCH_ANALYSIS_NUM_PREDICT=4096 # 2048
+RESEARCH_NEWS_MAX_ITEMS=16         # 6
+RESEARCH_NEWS_GLOBAL_LIMIT=8       # 3
+RESEARCH_NEWS_CONTENT_MAX_CHARS=600 # 240
+RESEARCH_MAX_CANDIDATES=24         # 10
+RESEARCH_MAX_NEW_ACTIONS=6         # 4
+RESEARCH_DISCOVERY_RESERVED_SLOTS=8 # 3
+RESEARCH_HISTORY_LIMIT=5           # 3
+RESEARCH_SECTOR_CANDIDATE_LIMIT=14 # 10
+RESEARCH_US_CANDIDATE_LIMIT=12     # 8
+RESEARCH_KR_CANDIDATE_LIMIT=12     # 8
+MARKET_DIGEST_ARTICLES_PER_DAY=40  # 20
+MARKET_DIGEST_NUM_PREDICT=512      # 256
+BRIEFING_TIMEOUT=180               # 120
+BRIEFING_NEWS_MAX_ITEMS=14         # 5
+```
+
+주석은 교체 대상인 옛 값이다. 해당 줄이 서버에 아예 없으면 코드 기본값이 그대로
+먹으므로 추가할 필요가 없다 — **없는 키를 새로 넣지 않는다.**
 
 ---
 
@@ -95,10 +133,12 @@ HTTP 200으로 열린다. 기술 통합은 가능하고 LLM 비용도 0이다. �
 한국은행 동결 3건뿐이고 KOSPI나 개별종목 마켓은 없다. 따라서 Polymarket 값은
 **개별종목 감성이 아니라 글로벌 거시 위험선호의 외부 참고선**으로만 쓸 수 있다.
 
-### 코드는 들어와 있다 (섀도 상태)
+### 코드는 검증됐다 (운영 상태는 미확인)
 
 구현은 끝났고 기본값은 수집·표시 모두 꺼짐이다. 코드를 다시 쓸 일은 없고,
-남은 건 **서버에서 켜고 30일 관찰한 뒤 승격 여부를 판정하는 운영**이다.
+로컬 유효값도 둘 다 `false`이며 로컬 스냅숏 파일은 없다. 운영 서버의 스모크와 수집
+상태는 이 작업공간에서 확인하지 못했다. 남은 건 **서버에서 스모크를 통과시킨 뒤
+수집만 켜고 30일 관찰해 승격 여부를 판정하는 운영**이다.
 
 | 자리 | 파일 |
 |---|---|
@@ -159,6 +199,10 @@ POLYMARKET_ENABLED=true
 
 `/system polymarket`이 아래를 계산해 보여 준다. **모두 통과할 때만**
 `POLYMARKET_PANEL_ENABLED=true`로 올린다.
+
+임계값·부등호·분모가 코드와 이 표에서 일치하는지는 파일럿 착수 전에 확인했다
+(6개 전부 일치, 최소 조건 `>=`·최대 조건 `<=`로 경계 포함, 밀집일 비율의 분모는
+30일이 아니라 유효 daily delta 수). 파일럿 도중에는 이 값을 바꾸지 않는다.
 
 | 게이트 | 기준 |
 |---|---|
