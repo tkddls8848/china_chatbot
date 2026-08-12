@@ -66,7 +66,6 @@ def research_menu() -> InlineKeyboardMarkup:
 def briefing_menu() -> InlineKeyboardMarkup:
     return _keyboard([
         [("모닝", "nav:briefing:morning"), ("마감", "nav:briefing:evening")],
-        [("주간 성적표", "nav:briefing:scorecard")],
         *_back(),
     ])
 

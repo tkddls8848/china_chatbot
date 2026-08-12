@@ -210,22 +210,16 @@ class QuoteService:
 
     def __init__(
         self,
-        enabled: bool = True,
         cache_ttl_minutes: int = 10,
         sector_top_n: int = 5,
         failure_cooldown_minutes: int = 15,
     ):
-        self._enabled = enabled
         self._cache = _TTLCache(
             ttl_seconds=max(1, cache_ttl_minutes) * 60,
             failure_cooldown_seconds=max(1, failure_cooldown_minutes) * 60,
         )
         self._sector_top_n = max(1, sector_top_n)
         self._sector_labels: dict[str, str] = {}  # 시나 업종명 → label(구성종목 조회용)
-
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
 
     # ── 시세 ─────────────────────────────────────────
 
@@ -277,7 +271,7 @@ class QuoteService:
         A주·홍콩은 텐센트, 미국·한국은 Yahoo로 나눠 조회한다. 한쪽이 실패해도
         다른 시장 시세는 그대로 반환한다.
         """
-        if not self._enabled or not codes:
+        if not codes:
             return {}
 
         tencent_by_code = {c: s for c in codes if (s := tencent_symbol(c))}
@@ -317,7 +311,7 @@ class QuoteService:
 
     def get_fund_flow(self, code: str) -> dict[str, Any] | None:
         """A주 개별 종목 최근 거래일 주력 자금 순유입(시나). HK는 미지원(None)."""
-        if not self._enabled or len(code) != 6:
+        if len(code) != 6:
             return None
         symbol = tencent_symbol(code)
         if not symbol or symbol.startswith("bj"):
@@ -347,8 +341,6 @@ class QuoteService:
 
     def get_sector_rankings(self) -> dict[str, list[dict[str, Any]]]:
         """시나 업종 보드 등락률 상·하위 N개."""
-        if not self._enabled:
-            return {"top": [], "bottom": []}
         try:
             df = self._cache.get_or_fetch(
                 "industry_boards",
@@ -381,8 +373,6 @@ class QuoteService:
 
     def get_sector_constituents(self, board_name: str) -> list[dict[str, str]]:
         """업종 보드 구성종목(리서치 후보군 발굴용). board_name은 시나 업종명."""
-        if not self._enabled:
-            return []
         if board_name not in self._sector_labels:
             self.get_sector_rankings()  # 라벨 매핑 채우기(최선 노력)
         label = self._sector_labels.get(board_name)
@@ -404,8 +394,6 @@ class QuoteService:
 
     def get_zt_pool_summary(self) -> dict[str, Any]:
         """오늘 涨停 종목 수와 상위 몇 종목(단기 과열 온도계)."""
-        if not self._enabled:
-            return {}
         try:
             date = now().strftime("%Y%m%d")
             df = self._cache.get_or_fetch(
@@ -424,7 +412,7 @@ class QuoteService:
 
     def get_lhb_hits(self, codes: list[str], lookback_days: int = 5) -> list[dict[str, Any]]:
         """최근 용호방(龙虎榜)에 오른 관심종목."""
-        if not self._enabled or not codes:
+        if not codes:
             return []
         try:
             end = now()
@@ -463,8 +451,6 @@ class QuoteService:
         include_fund_flow: bool = True,
     ) -> dict[str, Any]:
         """브리핑·시장뷰 분석에 주입할 정량 스냅샷. 각 항목은 최선 노력."""
-        if not self._enabled:
-            return {}
         codes = list(watchlist.keys())
         quotes = self.get_watchlist_quotes(codes)
 

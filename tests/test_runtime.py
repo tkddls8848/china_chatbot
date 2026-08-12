@@ -130,7 +130,6 @@ def test_analysis_request_passes_prompt_and_output_budget():
 
 def test_analysis_payload_includes_new_action_cap():
     analyzer = object.__new__(MarketViewAnalyzer)
-    analyzer._enabled = True
     analyzer._timeout = 60
     analyzer._remove_relevance_threshold = 0.35
     analyzer._max_new_actions = 4

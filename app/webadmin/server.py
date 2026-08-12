@@ -195,6 +195,30 @@ def build_app(bot_app):
 
 # ── 생명주기 ─────────────────────────────────────────
 
+async def _serve_guarded(server, host: str, port: int) -> None:
+    """uvicorn 실패를 봇 이벤트 루프에서 격리한다.
+
+    uvicorn은 바인드 실패 시 `sys.exit()`을 호출한다(uvicorn/server.py).
+    태스크 안에서 난 SystemExit은 asyncio가 이벤트 루프 밖으로 다시 던져
+    `run_polling()`까지 통째로 무너뜨리므로 반드시 여기서 받아야 한다.
+    CancelledError는 BaseException이라 여기 걸리지 않고
+    `stop_web_admin`의 종료 경로로 그대로 전달된다.
+    """
+    try:
+        await server.serve()
+    except SystemExit:
+        logger.warning(
+            "[WebAdmin] %s:%d 바인드에 실패해 관리 웹 없이 계속합니다. "
+            "다른 프로세스가 쓰고 있거나 Windows 예약 포트 구간일 수 있습니다"
+            "(`netsh int ipv4 show excludedportrange protocol=tcp`). "
+            "WEB_ADMIN_PORT를 비어 있는 포트로 바꾸세요.",
+            host,
+            port,
+        )
+    except Exception as e:  # noqa: BLE001 - 관리 웹 실패가 봇을 멈추면 안 된다.
+        logger.warning("[WebAdmin] 관리 웹이 중단됐습니다: %s", e, exc_info=True)
+
+
 async def start_web_admin(bot_app) -> None:
     """관리 웹을 백그라운드 태스크로 시작한다.
 
@@ -231,7 +255,7 @@ async def start_web_admin(bot_app) -> None:
     # 봇이 신호(SIGINT/SIGTERM)를 관리하므로 uvicorn의 신호 처리는 끈다.
     server.install_signal_handlers = lambda: None
 
-    task = asyncio.create_task(server.serve())
+    task = asyncio.create_task(_serve_guarded(server, WEB_ADMIN_HOST, WEB_ADMIN_PORT))
     bot_app.bot_data[_WEB_SERVER_KEY] = server
     bot_app.bot_data[_WEB_TASK_KEY] = task
     logger.info(

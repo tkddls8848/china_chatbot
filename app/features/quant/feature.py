@@ -2,7 +2,6 @@
 
 from core.config import (
     QUANT_CACHE_TTL_MINUTES,
-    QUANT_CONTEXT_ENABLED,
     QUANT_FAILURE_COOLDOWN_MINUTES,
     QUANT_SECTOR_TOP_N,
 )
@@ -12,7 +11,6 @@ from stocks import QuoteService
 
 def _install_services(app) -> None:
     app.bot_data["quote_service"] = QuoteService(
-        enabled=QUANT_CONTEXT_ENABLED,
         cache_ttl_minutes=QUANT_CACHE_TTL_MINUTES,
         sector_top_n=QUANT_SECTOR_TOP_N,
         failure_cooldown_minutes=QUANT_FAILURE_COOLDOWN_MINUTES,

@@ -113,7 +113,6 @@ class MarketViewAnalyzer:
     def __init__(
         self,
         backend: LLMBackend,
-        enabled: bool,
         timeout: int | None,
         num_predict: int,
         prompt_file: Path,
@@ -121,7 +120,6 @@ class MarketViewAnalyzer:
         remove_relevance_threshold: float = 0.35,
     ):
         self._backend = backend
-        self._enabled = enabled
         self._timeout = timeout
         self._num_predict = num_predict
         self._max_new_actions = max(0, max_new_actions)
@@ -142,9 +140,6 @@ class MarketViewAnalyzer:
         quant_context: dict[str, Any] | None = None,
         previous_analyses: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        if not self._enabled:
-            raise MarketViewError("market view analysis is disabled")
-
         candidates = candidate_universe or []
         payload = {
             "market_view": market_view,

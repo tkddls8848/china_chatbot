@@ -72,7 +72,7 @@ if not PROMPT_DIR.is_absolute():
 
 # ── 번역 ──────────────────────────────────────────────
 TRANSLATION_ENABLED = _env_bool("TRANSLATION_ENABLED", "true")
-TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "1024"))
+TRANSLATION_NUM_PREDICT = int(os.environ.get("TRANSLATION_NUM_PREDICT", "1536"))
 # 한 주기에 묶어 처리하는 기사가 늘어난 만큼 번역도 병렬로 돌린다. 소스별
 # 준비 루프는 기사를 순차 처리하므로, 동시 실행 폭은 이 세마포어가 정한다.
 TRANSLATION_CONCURRENCY = int(os.environ.get("TRANSLATION_CONCURRENCY", "3"))
@@ -104,11 +104,16 @@ CLOUDFLARE_FAILURE_COOLDOWN_SECONDS = max(
 )
 
 
+# /research 분석과 /market 다이제스트는 전용 플래그 없이 기능 키가 켜지면
+# 항상 LLM을 쓴다. 그래서 자격증명 요구 여부는 FEATURES_ENABLED로 판단한다.
+_LLM_FEATURE_KEYS = frozenset({"research", "market_sentiment"})
+
+
 def _validate_cloudflare_credentials() -> None:
     """자격증명 없이 기동해서 첫 뉴스 주기에 전부 실패하는 일을 막는다."""
     if not (
         TRANSLATION_ENABLED
-        or _env_bool("RESEARCH_ANALYSIS_ENABLED", "true")
+        or (FEATURES_ENABLED & _LLM_FEATURE_KEYS)
         or _env_bool("BRIEFING_LLM_ENABLED", "true")
     ):
         return
@@ -122,7 +127,7 @@ def _validate_cloudflare_credentials() -> None:
     ]
     if missing:
         raise ConfigurationError(
-            "LLM 기능(번역·리서치·브리핑)이 켜져 있으나 "
+            "LLM 기능(번역·리서치·시황 다이제스트·브리핑)이 켜져 있으나 "
             f"{', '.join(missing)}이(가) .env에 비어 있습니다"
         )
 
@@ -139,9 +144,17 @@ WEB_ADMIN_PASSWORD = os.environ.get("WEB_ADMIN_PASSWORD", "")
 
 SENT_NEWS_RETENTION_DAYS = int(os.environ.get("SENT_NEWS_RETENTION_DAYS", "7"))
 TELEGRAM_MESSAGE_LIMIT = 4096
-# 소스 하나가 한 주기에 전송할 새 기사 수. 주기를 늘린 만큼 한 번에 묶는
-# 분량을 키운다(소스 6곳 기준 주기당 최대 36건).
+# 소스 하나가 한 주기에 **번역**할 새 기사 수. Neurons를 쓰는 건 이 값이다
+# (소스 6곳 기준 주기당 최대 36회 호출).
 NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "6"))
+# 번역한 기사 중 소스 하나가 실제로 **송출**할 건수. impact가 높은 순으로
+# 고르고 나머지는 텔레그램 메시지에서만 빠진다 — 번역·감성 결과는 그대로
+# news_log·prediction_log에 남아 /view·/market·signal_scoring이 읽는다.
+# 탈락분을 다시 집어 재번역하지 않도록 확정(confirm)까지 마친다.
+NEWS_DIGEST_SEND_LIMIT = max(
+    1,
+    int(os.environ.get("NEWS_DIGEST_SEND_LIMIT", "3")),
+)
 NEWS_DIGEST_MESSAGE_MAX_CHARS = min(
     TELEGRAM_MESSAGE_LIMIT,
     max(2000, int(os.environ.get("NEWS_DIGEST_MESSAGE_MAX_CHARS", "3500"))),
@@ -153,13 +166,13 @@ NEWS_LIVE_MAX_AGE_HOURS = max(
     1,
     int(os.environ.get("NEWS_LIVE_MAX_AGE_HOURS", "48")),
 )
-# 소스 한 곳을 얼마나 깊이 읽을지. 하루 기사 수량을 정하는 상한은 전송
+# 소스 한 곳을 얼마나 깊이 읽을지. 하루 기사 수량을 정하는 상한은 번역
 # 상한(NEWS_GLOBAL_LIMIT)이 아니라 이 값이다 — 여기서 잘린 기사는 다음
 # 주기에도 목록에 남지 않으면 영영 보이지 않는다. gnews는 이 값을 시장
 # 수로, gnews_us·gnews_kr은 질의 수로 다시 나눠 쓴다.
 NEWS_SOURCE_ARTICLE_LIMIT = max(
     1,
-    int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "20")),
+    int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "30")),
 )
 
 
@@ -196,10 +209,8 @@ NEWS_NEGATIVE_ALERT_THRESHOLD = float(os.environ.get("NEWS_NEGATIVE_ALERT_THRESH
 VIEW_LOOKBACK_DAYS = int(os.environ.get("VIEW_LOOKBACK_DAYS", "3"))
 # 뉴스 주기. 짧게 돌려 조금씩 보내는 대신 텀을 늘려 한 번에 많이 묶는다.
 SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "20"))
-STOCK_DB_ENABLED = _env_bool("STOCK_DB_ENABLED", "true")
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
-RESEARCH_ANALYSIS_ENABLED = _env_bool("RESEARCH_ANALYSIS_ENABLED", "true")
 RESEARCH_ANALYSIS_TIMEOUT = max(
     30,
     int(os.environ.get("RESEARCH_ANALYSIS_TIMEOUT", "600")),
@@ -289,7 +300,6 @@ RESEARCH_KR_MIN_TRADING_VALUE = float(
 )
 
 # 정량 컨텍스트(시세·자금흐름·섹터·涨停·용호방)
-QUANT_CONTEXT_ENABLED = _env_bool("QUANT_CONTEXT_ENABLED", "true")
 QUANT_CACHE_TTL_MINUTES = int(os.environ.get("QUANT_CACHE_TTL_MINUTES", "10"))
 QUANT_SECTOR_TOP_N = int(os.environ.get("QUANT_SECTOR_TOP_N", "5"))
 QUANT_FAILURE_COOLDOWN_MINUTES = int(os.environ.get("QUANT_FAILURE_COOLDOWN_MINUTES", "15"))
@@ -333,7 +343,6 @@ MARKET_CHART_MARKETS = frozenset(
 
 # 일별 감성 다이제스트는 하루치 헤드라인을 한 번에 분석한다.
 MARKET_DIGEST_FILE = DATA_DIR / "market_sentiment" / "daily_digest.json"
-MARKET_DIGEST_ENABLED = _env_bool("MARKET_DIGEST_ENABLED", "true")
 MARKET_DIGEST_PROMPT_FILE = PROMPT_DIR / "market_digest_ko.txt"
 MARKET_DIGEST_ARTICLES_PER_DAY = max(
     1,
@@ -363,11 +372,15 @@ MARKET_DIGEST_TIMEOUT = max(
     5,
     int(os.environ.get("MARKET_DIGEST_TIMEOUT", "60")),
 )
-# 감성 건수의 합이 입력 헤드라인 수와 크게 다르면 결과를 버린다.
-# 허용 오차 = max(1, ceil(헤드라인 수 × 이 비율)).
+# 감성 건수의 합이 입력 헤드라인 수와 크게 다르면 그 건수를 버린다(그날의
+# sentiment·summary는 남긴다). 허용 오차 = max(1, ceil(헤드라인 수 × 이 비율)).
+# 이 비율은 `MARKET_DIGEST_ARTICLES_PER_DAY`와 함께 봐야 한다. 모델의 세기
+# 오차는 목록이 길어질수록 비례 이상으로 커진다 — 20건 시절 실측은 93일 중
+# 78일이 오차 0, 최대 2였지만 35~40건에서는 5까지 벌어졌다. 상한을 40으로
+# 올리면서 0.1(35건 → 허용 4)로는 정상 응답이 탈락했다.
 MARKET_DIGEST_COUNT_TOLERANCE_RATIO = max(
     0.0,
-    float(os.environ.get("MARKET_DIGEST_COUNT_TOLERANCE_RATIO", "0.1")),
+    float(os.environ.get("MARKET_DIGEST_COUNT_TOLERANCE_RATIO", "0.2")),
 )
 
 
@@ -440,10 +453,6 @@ BRIEFING_PROMPT_FILE = PROMPT_DIR / "briefing_ko.txt"
 BRIEFING_TIMEOUT = int(os.environ.get("BRIEFING_TIMEOUT", "180"))
 # 코멘트 출력 예약 토큰. 헤드라인을 늘린 만큼 코멘트도 길게 받는다.
 BRIEFING_NUM_PREDICT = max(256, int(os.environ.get("BRIEFING_NUM_PREDICT", "1024")))
-WATCHLIST_SCORECARD_ENABLED = _env_bool("WATCHLIST_SCORECARD_ENABLED", "true")
-WATCHLIST_SCORECARD_DAY_OF_WEEK = os.environ.get("WATCHLIST_SCORECARD_DAY_OF_WEEK", "sat")
-WATCHLIST_SCORECARD_HOUR = int(os.environ.get("WATCHLIST_SCORECARD_HOUR", "10"))
-WATCHLIST_SCORECARD_LOOKBACK_DAYS = int(os.environ.get("WATCHLIST_SCORECARD_LOOKBACK_DAYS", "30"))
 
 
 def _parse_allowed_chat_ids() -> frozenset[int]:

@@ -38,7 +38,7 @@ from core.clock import now, today
 
 logger = logging.getLogger(__name__)
 
-# 승격 게이트(docs/next-steps.md). 30일 섀도 파일럿을 이 기준으로 판정한다.
+# 승격 게이트(docs/aws-next-steps.md). 30일 섀도 파일럿을 이 기준으로 판정한다.
 PROMOTION_WINDOW_DAYS = 30
 _MIN_SNAPSHOT_DAYS = 24
 _MIN_DELTA_DAYS = 24
@@ -237,7 +237,7 @@ class PolymarketConsensusStore:
         self,
         window_days: int = PROMOTION_WINDOW_DAYS,
     ) -> dict[str, Any]:
-        """승격 게이트를 계산한다(docs/next-steps.md 3-3).
+        """승격 게이트를 계산한다(docs/aws-next-steps.md 3-3).
 
         하나라도 실패하면 패널을 켜지 않는다. 사람이 JSON을 열어 세는 대신
         `/system polymarket`이 이 값을 그대로 보여 준다.

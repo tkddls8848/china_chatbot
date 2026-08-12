@@ -1,11 +1,10 @@
-"""정시 브리핑: 거래일 캘린더, 모닝/마감 브리핑, 주간 성적표."""
+"""정시 브리핑: 거래일 캘린더, 모닝/마감 브리핑."""
 
 from briefing.calendar import TradeCalendar
 from briefing.service import (
     cmd_briefing,
     send_evening_briefing,
     send_morning_briefing,
-    send_weekly_scorecard,
 )
 
 __all__ = [
@@ -13,5 +12,4 @@ __all__ = [
     "cmd_briefing",
     "send_evening_briefing",
     "send_morning_briefing",
-    "send_weekly_scorecard",
 ]

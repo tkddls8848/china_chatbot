@@ -76,7 +76,7 @@ RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
 - 시장별 뉴스 감성 차트 (`/market`)
 - 관심 종목 뉴스·감성 요약
 - 뉴스 기반 시장 리서치 후보 관리 (중화권·미국·한국 균형 수집과 추천)
-- 개장 전·마감 브리핑과 주간 관심종목 성적표
+- 개장 전·마감 브리핑
 - 중국·홍콩·한국·미국 종목 DB
 
 ## 텔레그램 명령
@@ -89,7 +89,7 @@ RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
 | `/add 종목코드` | 관심 종목 추가 |
 | `/view [종목코드]` | 종목별 뉴스 감성 |
 | `/research show\|set\|run\|clear` | 리서치 후보 관리 |
-| `/briefing morning\|evening\|scorecard` | 브리핑 또는 성적표 생성 |
+| `/briefing morning\|evening` | 브리핑 생성 |
 | `/stockdb build` | 종목 DB 갱신 |
 | `/system [features\|polymarket]` | 시스템 상태, 기능 카탈로그, 컨센서스 파일럿 상태 |
 

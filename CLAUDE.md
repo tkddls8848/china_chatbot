@@ -27,7 +27,7 @@ app/handlers/          콜백 라우팅, 메뉴 구성, 인라인 네비게이�
 app/news/              소스, 수집 파이프라인, 감성
 app/llm/               Cloudflare 백엔드와 분석기
 app/research/          뉴스 수집, 후보 발굴, 리서치 실행
-app/briefing/          브리핑·성적표 생성과 A주 거래일 캘린더
+app/briefing/          브리핑 생성과 A주 거래일 캘린더
 app/stocks/            종목 DB와 시세
 app/state/             발송·뉴스·시장 감성 상태
 app/watchlist/         관심종목 상태
@@ -43,9 +43,14 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 
 ## 현재 동작 가정
 
-- 뉴스 주기마다 `NEWS_GLOBAL_SOURCES`와 RSS 소스를 모두 실행한다. 주기는 20분이고
-  한 주기에 소스당 `NEWS_GLOBAL_LIMIT`건씩 묶어 보낸다.
-- **하루 기사 수량을 정하는 상한은 전송 상한이 아니라 `NEWS_SOURCE_ARTICLE_LIMIT`다.**
+- 뉴스 주기마다 `NEWS_GLOBAL_SOURCES`와 RSS 소스를 모두 실행한다. 주기는 20분이다.
+- **번역 건수와 송출 건수는 다르다.** 한 주기에 소스당 `NEWS_GLOBAL_LIMIT`건을
+  번역하고, 그중 `NEWS_DIGEST_SEND_LIMIT`건만 묶어 보낸다. 선별 기준은 impact가
+  1순위, 같으면 감성의 세기, 그래도 같으면 최신순이다(`select_digest_rows`).
+  **탈락분을 release하지 않는다** — release하면 다음 주기에 같은 기사를 다시
+  번역해 Neurons만 태운다. 확정하고 `news_log`·`prediction_log`에는 그대로 남겨
+  `/view`·`/market`·signal_scoring이 읽게 한다(`archive_unsent_articles`).
+- **하루 기사 수량을 정하는 상한은 번역 상한이 아니라 `NEWS_SOURCE_ARTICLE_LIMIT`다.**
   소스를 이 깊이까지만 읽으므로 여기서 잘린 기사는 다음 주기에도 보이지 않는다.
   `gnews`는 이 값을 시장 수로, `gnews_us`·`gnews_kr`은 질의 수로 다시 나눠 쓴다.
 - **Neurons 예산은 뉴스 번역이 대부분을 쓴다**(기사 1건 = 호출 1회). 리서치·브리핑·
@@ -63,7 +68,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   확률변화(pp)라 국가별 -1~+1 감성 점수와 축이 다르다 — 합산하거나 순위·리서치
   입력·브리핑 payload에 넣지 않고 `/market` 하단 별도 패널에만 그린다. 방향은
   `polymarket_rules.py`의 명시적 allowlist로만 정하고 LLM에 묻지 않는다.
-  판정 근거는 `/system polymarket`이 계산한다. 자세한 규약은 `docs/next-steps.md`.
+  판정 근거는 `/system polymarket`이 계산한다. 자세한 규약은 `docs/aws-next-steps.md`.
 - 종목 canonical code는 시장마다 형식이 다르다. CN·HK는 **접두사 없는 숫자 코드**
   (`600519`, `00700`)이고, US·KR만 `US:NASDAQ:AAPL`·`KR:KOSPI:005930` 형식이다
   (`stocks/universe.py`의 `stock_key`). KR 6자리는 A주 코드와 겹치므로 US·KR에만
@@ -78,7 +83,10 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - LLM JSON은 필수 필드를 엄격히 검사하고 현재 응답 envelope만 처리한다.
 - 외부 소스 하나의 실패가 전체 뉴스 주기를 중단시키지 않도록 소스 단위로 격리한다.
 - 새 호환 분기, 사용하지 않는 설정 플래그, 중복 helper를 만들지 않는다.
-- 앞으로 할 일은 `docs/next-steps.md` 하나에 모은다. 항목이 끝나면 지운다.
+- 앞으로 할 일은 두 파일에만 모은다. 항목이 끝나면 지운다. 로컬 작업은
+  `docs/next-steps.md`, 운영 서버에 접근해야 하는 작업은 `docs/aws-next-steps.md`다.
+  서버 쪽은 이 작업공간에서 착수할 수 없어 분리해 두었다 — 섞으면 로컬에서
+  손댈 수 있는 일이 착수 불가 항목에 묻힌다. 그 외 새 목록 파일은 만들지 않는다.
 - 모듈은 한 책임을 유지하되 한두 함수만 담는 무의미한 파일 분할은 피한다.
 - **시각은 `core/clock.py`의 `now()`·`today()`만 쓴다.** `datetime.now()`·`date.today()`는
   호스트 타임존을 따라가서 서버를 다른 타임존에 올리면 `/market`의 하루 경계와 보존

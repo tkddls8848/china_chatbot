@@ -2,6 +2,10 @@
 
 전역 속보는 NewsSourceRegistry의 활성 소스를 함께 조회하고 소스별 기사를
 번역한 뒤, 텔레그램 메시지 크기에 맞춘 다이제스트로 묶어 전송한다.
+
+번역 건수(NEWS_GLOBAL_LIMIT)와 송출 건수(NEWS_DIGEST_SEND_LIMIT)는 다르다.
+번역한 기사 중 impact가 높은 순으로 골라 보내고, 탈락한 기사도 로그에는
+그대로 남긴다(`archive_unsent_articles`).
 """
 
 import asyncio
@@ -15,6 +19,7 @@ from telegram.ext import Application
 
 from core.config import (
     NEWS_DIGEST_MESSAGE_MAX_CHARS,
+    NEWS_DIGEST_SEND_LIMIT,
     NEWS_GLOBAL_LIMIT,
     NEWS_LIVE_MAX_AGE_HOURS,
     NEWS_NEGATIVE_ALERT_THRESHOLD,
@@ -232,13 +237,56 @@ async def prepare_global_source(
     return prepared_rows[::-1]
 
 
+_IMPACT_RANK = {"high": 0, "medium": 1, "low": 2}
+
+
+def _digest_priority(index: int, row: PreparedGlobalArticle) -> tuple[int, int, float, int]:
+    """송출 우선순위 정렬 키(작을수록 먼저 보낸다).
+
+    impact가 1순위, 같으면 감성의 세기, 그래도 같으면 최신순이다. impact나
+    sentiment가 없는 건은 같은 순위 안에서 제일 뒤로 민다.
+    """
+    translated = row.translated
+    sentiment = translated.sentiment
+    return (
+        _IMPACT_RANK.get(translated.impact, len(_IMPACT_RANK)),
+        0 if sentiment is not None else 1,
+        -abs(sentiment) if sentiment is not None else 0.0,
+        # prepared_rows는 과거→최신 순이라 index가 클수록 새 기사다.
+        -index,
+    )
+
+
+def select_digest_rows(
+    rows: list[PreparedGlobalArticle],
+    send_limit: int,
+) -> tuple[list[PreparedGlobalArticle], list[PreparedGlobalArticle]]:
+    """번역된 소스 하나의 기사를 (송출 대상, 탈락)으로 나눈다.
+
+    골라낸 쪽은 원래의 과거→최신 표시 순서를 유지한다. 탈락한 쪽도 번역과
+    감성 분석은 이미 끝났으므로 버리지 않는다 — 확정과 로그 기록은
+    `archive_unsent_articles`가 맡는다.
+    """
+    if len(rows) <= send_limit:
+        return list(rows), []
+    ranked = sorted(
+        range(len(rows)),
+        key=lambda index: _digest_priority(index, rows[index]),
+    )
+    selected = set(ranked[:send_limit])
+    return (
+        [row for index, row in enumerate(rows) if index in selected],
+        [row for index, row in enumerate(rows) if index not in selected],
+    )
+
+
 async def _confirm_and_log_global_article(
     prepared: PreparedGlobalArticle,
     tracker: SentNewsTracker,
     prediction_log: PredictionLog | None,
     news_log: NewsLog | None,
 ) -> None:
-    """전송된 기사를 확정한 뒤 원문 기반 감성 결과를 로그에 기록한다."""
+    """처리를 마친 기사를 확정한 뒤 원문 기반 감성 결과를 로그에 기록한다."""
     spec = prepared.spec
     article = prepared.article
     translated = prepared.translated
@@ -276,8 +324,26 @@ async def _confirm_and_log_global_article(
                 ),
             )
     except Exception as e:
-        # 메시지는 이미 전송됐으므로 예약을 풀어 중복 송출하지 않는다.
-        logger.error("[%s] 전송 후 로그 기록 실패: %s", spec.key, e)
+        # 이미 확정한 뒤이므로 예약을 풀어 같은 기사를 다시 처리하지 않는다.
+        logger.error("[%s] 확정 후 로그 기록 실패: %s", spec.key, e)
+
+
+async def archive_unsent_articles(
+    rows: list[PreparedGlobalArticle],
+    tracker: SentNewsTracker,
+    prediction_log: PredictionLog | None,
+    news_log: NewsLog | None,
+) -> None:
+    """송출에서 탈락한 기사를 전송 시도 없이 확정하고 로그에만 남긴다.
+
+    release하면 다음 주기에 같은 기사를 다시 집어 다시 번역한다. impact가
+    계속 낮으면 영원히 재번역되며 Neurons만 태우므로 확정까지 마친다.
+    """
+    if not rows:
+        return
+    for row in rows:
+        await _confirm_and_log_global_article(row, tracker, prediction_log, news_log)
+    logger.info("[GLOBAL] 송출 제외 %d건은 로그에만 기록", len(rows))
 
 
 async def send_global_digest(
@@ -405,7 +471,17 @@ async def _fetch_all(app: Application) -> None:
             for spec in selected_specs
         )
     )
-    prepared_rows = [row for group in prepared_groups for row in group]
+    # 번역은 소스당 NEWS_GLOBAL_LIMIT건까지 하되, 실제로 보내는 건 impact
+    # 상위 NEWS_DIGEST_SEND_LIMIT건이다. 선별은 소스 안에서만 겨룬다.
+    prepared_rows: list[PreparedGlobalArticle] = []
+    unsent_rows: list[PreparedGlobalArticle] = []
+    for group in prepared_groups:
+        selected, dropped = select_digest_rows(group, NEWS_DIGEST_SEND_LIMIT)
+        prepared_rows.extend(selected)
+        unsent_rows.extend(dropped)
+
+    # 전송 실패 시 release되는 건 송출 대상뿐이다. 탈락분은 전송 경로를 아예
+    # 타지 않으므로 다이제스트가 실패해도 영향받지 않는다.
     await send_global_digest(
         app.bot,
         TELEGRAM_CHAT_ID,
@@ -414,5 +490,6 @@ async def _fetch_all(app: Application) -> None:
         prediction_log,
         news_log,
     )
+    await archive_unsent_articles(unsent_rows, tracker, prediction_log, news_log)
 
     await tracker.persist()

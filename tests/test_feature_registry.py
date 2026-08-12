@@ -134,6 +134,6 @@ def test_generated_help_includes_command_usage_and_code_examples():
 
     assert "/market [일수]" in text
     assert "/research show|set|run|clear" in text
-    assert "/briefing morning|evening|scorecard" in text
+    assert "/briefing morning|evening" in text
     assert "/score" not in text
     assert "KR:KOSPI:005930" in text

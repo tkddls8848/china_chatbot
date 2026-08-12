@@ -1,4 +1,4 @@
-"""모닝/마감 브리핑과 주간 성적표 생성·전송.
+"""모닝/마감 브리핑 생성·전송.
 
 스케줄러 cron이 호출하며, /briefing 명령으로 수동 실행(휴장일 무시)도
 가능하다. LLM 코멘트 생성이 실패하면 데이터 전용 브리핑으로 대체한다.
@@ -13,7 +13,6 @@ from telegram.ext import Application, ContextTypes
 
 from core.config import (
     BRIEFING_NEWS_MAX_ITEMS,
-    WATCHLIST_SCORECARD_LOOKBACK_DAYS,
     TELEGRAM_CHAT_ID,
     TELEGRAM_MESSAGE_LIMIT,
 )
@@ -23,7 +22,6 @@ from core.workers import run_non_urgent, wait_for_urgent_idle
 from research.news import collect_global_market_news_items
 from state.news_log import aggregate_sentiment_by_code
 from stocks.quotes import format_quant_summary
-from watchlist.events import build_scorecard_lines
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +54,7 @@ async def _build_quant_section(app: Application, include_fund_flow: bool) -> tup
     quote_service = app.bot_data.get("quote_service")
     wm = app.bot_data["watchlist_manager"]
     watchlist = await wm.get_all()
-    if quote_service is None or not quote_service.enabled or not watchlist:
+    if quote_service is None or not watchlist:
         return {}, ""
     context = await run_non_urgent(
         quote_service.build_quant_context, watchlist, include_fund_flow
@@ -217,59 +215,8 @@ async def send_evening_briefing(app: Application, force: bool = False) -> None:
         logger.error("[BRIEFING] 마감 브리핑 전송 실패: %s", e)
 
 
-async def send_weekly_scorecard(app: Application, notify_empty: bool = False) -> None:
-    """관심리스트 편입·편출 이벤트의 이후 성과를 요약해 전송한다."""
-    event_log = app.bot_data.get("watchlist_events")
-    quote_service = app.bot_data.get("quote_service")
-    wm = app.bot_data["watchlist_manager"]
-    if event_log is None:
-        return
-
-    events = await event_log.snapshot(lookback_days=WATCHLIST_SCORECARD_LOOKBACK_DAYS)
-    watchlist = await wm.get_all()
-    if not events:
-        if notify_empty:
-            await app.bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID,
-                text=f"최근 {WATCHLIST_SCORECARD_LOOKBACK_DAYS}일간 관심리스트 편입·편출 이벤트가 없습니다.",
-            )
-        else:
-            logger.info("[SCORECARD] 최근 이벤트가 없어 성적표를 건너뜁니다.")
-        return
-
-    codes = sorted({str(e.get("code")) for e in events if e.get("code")})
-    current_prices: dict[str, float | None] = {}
-    if quote_service is not None and quote_service.enabled:
-        quotes = await run_non_urgent(quote_service.get_watchlist_quotes, codes)
-        current_prices = {code: (quotes.get(code) or {}).get("price") for code in codes}
-
-    lines = build_scorecard_lines(events, watchlist, current_prices)
-    sections = [
-        f"<b>📊 시장뷰 성적표</b> (최근 {WATCHLIST_SCORECARD_LOOKBACK_DAYS}일)",
-    ]
-    if lines["added"]:
-        sections.append("<b>편입 이후 성과</b>\n" + "\n".join(map(html.escape, lines["added"])))
-    if lines["removed"]:
-        sections.append(
-            "<b>편출 이후 변화</b> (하락했다면 편출이 유효)\n"
-            + "\n".join(map(html.escape, lines["removed"]))
-        )
-    if len(sections) == 1:
-        sections.append("평가할 이벤트가 없습니다.")
-
-    try:
-        await app.bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=truncate_html("\n\n".join(sections), TELEGRAM_MESSAGE_LIMIT),
-            parse_mode="HTML",
-        )
-        logger.info("[SCORECARD] 주간 성적표 전송 완료")
-    except Exception as e:
-        logger.error("[SCORECARD] 전송 실패: %s", e)
-
-
 async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/briefing morning|evening|scorecard — 수동 실행(휴장일 무시)."""
+    """/briefing morning|evening — 수동 실행(휴장일 무시)."""
     message = update.effective_message
     if message is None:
         return
@@ -279,15 +226,13 @@ async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     actions = {
         "morning": ("모닝", send_morning_briefing),
         "evening": ("마감", send_evening_briefing),
-        "scorecard": ("주간 성적표", send_weekly_scorecard),
     }
     selected = actions.get(command)
     if selected is None:
         await message.reply_text(
             "사용법:\n"
             "/briefing morning — 모닝 브리핑 즉시 실행\n"
-            "/briefing evening — 마감 브리핑 즉시 실행\n"
-            "/briefing scorecard — 시장뷰 성적표 즉시 실행"
+            "/briefing evening — 마감 브리핑 즉시 실행"
         )
         return
 
@@ -298,10 +243,7 @@ async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if is_menu:
         await set_menu_button_text(message, callback_data, "◐ 생성 중")
     try:
-        if command == "scorecard":
-            await action(app, notify_empty=True)
-        else:
-            await action(app, force=True)
+        await action(app, force=True)
     finally:
         if is_menu:
             await set_menu_button_text(message, callback_data, label)

@@ -516,7 +516,7 @@ async def _run_research_job(
 
     # 정량 스냅샷과 직전 분석 이력을 분석 입력에 주입한다(각각 최선 노력).
     quant_context = None
-    if quote_service is not None and quote_service.enabled:
+    if quote_service is not None:
         try:
             quant_context = await run_non_urgent(
                 quote_service.build_quant_context, watchlist

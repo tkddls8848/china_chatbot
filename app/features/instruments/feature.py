@@ -2,7 +2,7 @@
 
 import logging
 
-from core.config import STOCK_DB_ENABLED, STOCK_DB_FILE
+from core.config import STOCK_DB_FILE
 from core.workers import run_non_urgent
 from features.base import CommandSpec, FeatureSpec, MenuSpec
 from features.instruments.handlers import cmd_stockdb
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _install_services(app) -> None:
-    stock_db = StockDatabase(cache_file=STOCK_DB_FILE, enabled=STOCK_DB_ENABLED)
+    stock_db = StockDatabase(cache_file=STOCK_DB_FILE)
     stock_db.load_or_build()
     app.bot_data["stock_db"] = stock_db
 

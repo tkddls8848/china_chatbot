@@ -27,7 +27,7 @@ def _post_watchlist_endpoint(bot_data):
 
 
 def _stock_db(tmp_path):
-    stock_db = StockDatabase(tmp_path / "stock_db.json", enabled=False)
+    stock_db = StockDatabase(tmp_path / "stock_db.json")
     stock_db._db = {
         "600519": {"display_name": "Moutai", "market": "SH"},
         "KR:KOSPI:005930": {

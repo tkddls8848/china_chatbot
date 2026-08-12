@@ -1,11 +1,10 @@
-"""모닝·마감·주간 브리핑 기능 선언."""
+"""모닝·마감 브리핑 기능 선언."""
 
 from briefing import (
     TradeCalendar,
     cmd_briefing,
     send_evening_briefing,
     send_morning_briefing,
-    send_weekly_scorecard,
 )
 from core.config import (
     BRIEFING_EVENING_ENABLED,
@@ -14,9 +13,6 @@ from core.config import (
     BRIEFING_MORNING_ENABLED,
     BRIEFING_MORNING_HOUR,
     BRIEFING_MORNING_MINUTE,
-    WATCHLIST_SCORECARD_DAY_OF_WEEK,
-    WATCHLIST_SCORECARD_ENABLED,
-    WATCHLIST_SCORECARD_HOUR,
 )
 from features.base import CommandSpec, FeatureSpec, MenuSpec
 from llm import build_briefing_writer
@@ -50,17 +46,6 @@ def _install_jobs(scheduler, app) -> None:
             max_instances=1,
             coalesce=True,
         )
-    if WATCHLIST_SCORECARD_ENABLED:
-        scheduler.add_job(
-            send_weekly_scorecard,
-            trigger="cron",
-            day_of_week=WATCHLIST_SCORECARD_DAY_OF_WEEK,
-            hour=WATCHLIST_SCORECARD_HOUR,
-            args=[app],
-            id="weekly_scorecard",
-            max_instances=1,
-            coalesce=True,
-        )
 
 
 FEATURE = FeatureSpec(
@@ -72,7 +57,7 @@ FEATURE = FeatureSpec(
             "briefing",
             "브리핑 생성",
             cmd_briefing,
-            usage="morning|evening|scorecard",
+            usage="morning|evening",
         ),
     ),
     menus=(

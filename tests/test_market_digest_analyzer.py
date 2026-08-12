@@ -23,7 +23,6 @@ class BackendStub:
 def _analyzer(response, **kwargs):
     return MarketDigestAnalyzer(
         backend=BackendStub(response),
-        enabled=True,
         prompt_file=PROMPT,
         **kwargs,
     )
@@ -42,14 +41,26 @@ def test_parses_digest_and_counts():
     assert (result["positive"], result["negative"], result["neutral"]) == (2, 1, 1)
 
 
-def test_large_count_drift_is_rejected():
-    """크게 어긋나면 모델이 목록을 다 읽지 않았다는 신호다."""
+def test_large_count_drift_drops_counts_but_keeps_the_day():
+    """크게 어긋나면 건수만 버린다.
+
+    차트가 읽는 값은 sentiment와 summary뿐이고 건수는 읽는 곳이 없다. 그날을
+    통째로 버리면 캐시에 아무것도 남지 않아 `/market`을 부를 때마다 같은 날을
+    다시 받아 다시 호출하게 된다.
+    """
     analyzer = _analyzer(
         '{"positive": 2, "negative": 1, "neutral": 1, "sentiment": 0.1, "summary": "x"}'
     )
 
-    with pytest.raises(MarketDigestError, match="drift 6 > tolerance 1"):
-        analyzer.analyze("KR", "2026-08-05", [f"h{i}" for i in range(10)])
+    result = analyzer.analyze("KR", "2026-08-05", [f"h{i}" for i in range(10)])
+
+    assert result["sentiment"] == 0.1
+    assert result["summary"] == "x"
+    assert (result["positive"], result["negative"], result["neutral"]) == (
+        None,
+        None,
+        None,
+    )
 
 
 @pytest.mark.parametrize(
@@ -58,13 +69,21 @@ def test_large_count_drift_is_rejected():
         ((7, 6, 5), 17),  # 실측 사례: 18 vs 17
         ((3, 2, 2), 6),   # 실측 사례: 7 vs 6
         ((7, 6, 6), 20),  # 19 vs 20 (과소 카운트)
+        # 2026-08-12 실측. MARKET_DIGEST_ARTICLES_PER_DAY를 20에서 40으로 올린
+        # 뒤 첫 백필에서 목록이 길어지자 오차가 5까지 벌어졌다(US 08-10 35→30,
+        # US 08-08 40→35, CN 07-24 35→30). 같은 실행에서 35건짜리가 오차 1·2로
+        # 통과하기도 했으므로 편향이 아니라 분산이다.
+        ((12, 10, 8), 35),
+        ((13, 12, 10), 40),
+        ((4, 3, 3), 8),  # 작은 표본의 과대 카운트(KR 08-08 8→10)
     ],
 )
 def test_off_by_one_is_tolerated(counts, headline_count):
     """세기 부정확은 정상 범위다. /no_think로 추론을 껐으니 더 그렇다.
 
     2026-08-08 실측에서 7회 중 2회가 +1로 어긋났다. 이걸 버리면 호출 비용의
-    약 29%가 그대로 낭비된다.
+    약 29%가 그대로 낭비된다. 게다가 실패한 날은 캐시에 남지 않으므로
+    `/market`을 부를 때마다 같은 날을 다시 받아 다시 호출한다.
     """
     positive, negative, neutral = counts
     analyzer = _analyzer(
@@ -80,13 +99,14 @@ def test_off_by_one_is_tolerated(counts, headline_count):
 
 
 def test_tolerance_scales_with_headline_count():
-    """20건에서는 ±2까지 봐주지만 6건에서는 ±1이다."""
+    """긴 목록일수록 넉넉히 봐준다. 하루 상한 40건에서는 ±8이다."""
     analyzer = _analyzer("{}")
 
-    assert analyzer._count_tolerance(6) == 1
-    assert analyzer._count_tolerance(17) == 2
-    assert analyzer._count_tolerance(20) == 2
     assert analyzer._count_tolerance(1) == 1
+    assert analyzer._count_tolerance(8) == 2
+    assert analyzer._count_tolerance(20) == 4
+    assert analyzer._count_tolerance(35) == 7
+    assert analyzer._count_tolerance(40) == 8
 
 
 def test_missing_counts_are_rejected_when_strict():
@@ -131,25 +151,18 @@ def test_empty_response_is_rejected():
 
 def test_empty_headlines_do_not_call_backend():
     backend = BackendStub("{}")
-    analyzer = MarketDigestAnalyzer(backend, True, PROMPT)
+    analyzer = MarketDigestAnalyzer(backend, PROMPT)
 
     with pytest.raises(MarketDigestError, match="no headlines"):
         analyzer.analyze("US", "2026-08-05", [])
     assert backend.calls == []
 
 
-def test_disabled_analyzer_raises():
-    analyzer = MarketDigestAnalyzer(BackendStub("{}"), False, PROMPT)
-
-    with pytest.raises(MarketDigestError, match="disabled"):
-        analyzer.analyze("US", "2026-08-05", ["a"])
-
-
 def test_payload_carries_market_date_and_headlines():
     backend = BackendStub(
         '{"positive": 1, "negative": 0, "neutral": 0, "sentiment": 0.1, "summary": "x"}'
     )
-    analyzer = MarketDigestAnalyzer(backend, True, PROMPT, num_predict=256)
+    analyzer = MarketDigestAnalyzer(backend, PROMPT, num_predict=256)
 
     analyzer.analyze("KR", "2026-08-05", ["헤드라인"])
 

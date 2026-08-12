@@ -30,9 +30,8 @@ _MARKET_SCOPE = {
 
 
 class StockDatabase:
-    def __init__(self, cache_file: Path, enabled: bool = True):
+    def __init__(self, cache_file: Path):
         self._cache_file = cache_file
-        self._enabled = enabled
         self._db: dict[str, dict] = {}
         self._aliases: dict[str, str | None] | None = None
 
@@ -174,9 +173,6 @@ class StockDatabase:
         logger.info("[StockDB] 캐시 로드: %d종목", len(self._db))
 
     def load_or_build(self) -> None:
-        if not self._enabled:
-            logger.info("[StockDB] STOCK_DB_ENABLED=false, 관련종목 기능 비활성화")
-            return
         if self._cache_file.exists():
             try:
                 self.load()

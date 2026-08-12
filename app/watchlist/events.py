@@ -1,11 +1,10 @@
 """관심리스트 편입·편출 이벤트 로그.
 
-이벤트 시점 가격을 함께 기록해 주간 성적표(시장뷰 큐레이션 피드백 루프)의
-근거가 된다. 가격 조회는 최선 노력이며 실패하면 None으로 남긴다.
+이벤트 시점 가격을 함께 기록해 관리 웹의 `/api/events`가 편입·편출 내역을
+읽는다. 가격 조회는 최선 노력이며 실패하면 None으로 남긴다.
 """
 
 import asyncio
-import html
 import json
 import logging
 from datetime import datetime, timedelta
@@ -87,7 +86,7 @@ async def record_watchlist_event(
         return
     price = None
     quote_service = bot_data.get("quote_service")
-    if quote_service is not None and getattr(quote_service, "enabled", False):
+    if quote_service is not None:
         try:
             price = await run_non_urgent(quote_service.get_price, code)
         except Exception as e:
@@ -96,55 +95,3 @@ async def record_watchlist_event(
         await event_log.record(event, code, name, price, reason)
     except Exception as e:
         logger.warning("[EVENTS] 이벤트 기록 실패(%s %s): %s", event, code, e)
-
-
-def build_scorecard_lines(
-    events: list[dict[str, Any]],
-    watchlist: dict[str, str],
-    current_prices: dict[str, float | None],
-) -> dict[str, list[str]]:
-    """이벤트와 현재가로 성적표 라인을 만든다(순수 함수, 테스트 대상).
-
-    - 편입 후 아직 보유 중: 편입가 대비 현재가 수익률
-    - 편출: 편출가 대비 현재가 변화(음수면 편출이 옳았던 셈)
-    """
-    added_lines: list[str] = []
-    removed_lines: list[str] = []
-
-    def pct(from_price: Any, to_price: Any) -> float | None:
-        try:
-            from_value = float(from_price)
-            to_value = float(to_price)
-        except (TypeError, ValueError):
-            return None
-        if from_value == 0:
-            return None
-        return (to_value - from_value) / from_value * 100
-
-    # 같은 코드의 최신 이벤트만 평가한다(추가→삭제→추가 반복 대응).
-    latest_by_code: dict[str, dict[str, Any]] = {}
-    for event in events:
-        code = str(event.get("code") or "")
-        if code:
-            latest_by_code[code] = event
-
-    for code, event in latest_by_code.items():
-        name = html.escape(str(event.get("name") or watchlist.get(code) or code))
-        display_code = html.escape(code)
-        kind = event.get("event")
-        entry_price = event.get("price")
-        current = current_prices.get(code)
-        ts = str(event.get("ts") or "")[:10]
-        change = pct(entry_price, current)
-        change_part = f"{change:+.1f}%" if change is not None else "가격 데이터 없음"
-
-        if kind == "add" and code in watchlist:
-            added_lines.append(
-                f"• {name} ({display_code}) {ts} 편입 → {change_part}"
-            )
-        elif kind == "remove":
-            removed_lines.append(
-                f"• {name} ({display_code}) {ts} 편출 → 이후 {change_part}"
-            )
-
-    return {"added": added_lines, "removed": removed_lines}
