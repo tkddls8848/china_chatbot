@@ -42,7 +42,7 @@ Neurons를 쓰지 않는다).
 
 ## 1. 수집량 확대 후 Neurons 실사용 확인
 
-코드와 로컬 유효 설정에서는 주기 20분과 확대 값 19개가 모두 적용된 것을 확인했다.
+코드와 로컬 유효 설정에서는 주기 20분과 확대 값들이 모두 적용된 것을 확인했다.
 운영 서버에 같은 값이 적용된 뒤의 소비량은 아직 **추정치일 뿐 실측이 아니다.**
 
 | 구분 | 값 |
@@ -82,8 +82,8 @@ journalctl -u stock-chatbot --since "$(date -u -d '6 days ago' '+%Y-%m-%d 00:00:
 
 `.env`는 `.gitignore` 대상이라 **코드를 푸시해도 서버에 전파되지 않는다.**
 이 작업공간에는 Terraform state와 SSH 대상 정보가 없어 서버 `.env`를 직접 확인하지
-못했다. 서버에 낡은 명시값이 남아 있다면 확대된 값(주기 20분, fetch 깊이 20,
-리서치 입력 16건×600자 등)으로 바꾸고, 없다면 코드 기본값을 그대로 쓴다.
+못했다. 분석 깊이·타임아웃 등은 코드 상수로 고정되어 낡은 환경변수 줄이 남아 있어도
+무시된다. 아래 운영 조절값만 서버에 낡은 명시값이 있으면 현재 값으로 바꾼다.
 
 - 절차는 `iac/terraform/README.md`가 유일한 배포 문서다. `.env` 편집(`nano
   ~/stock_chatbot/.env`)과 기동은 `terraform output cutover_commands`에, 재기동
@@ -93,40 +93,20 @@ journalctl -u stock-chatbot --since "$(date -u -d '6 days ago' '+%Y-%m-%d 00:00:
 - `POLYMARKET_*` 블록은 이 단계에서 **넣지 않는다.** 작업 3에서
   스모크를 통과한 뒤에 켠다.
 
-**먼저 서버 `.env`를 눈으로 확인한다.** 확대된 값은 이미 전부 `config.py`의 기본값이고,
-2026-08-11 로컬 유효 설정도 아래 19개가 모두 왼쪽 값인 것을 확인했다. 따라서
+**먼저 서버 `.env`를 눈으로 확인한다.** 아래 운영 조절값은 `config.py`에도 기본값이
+있지만 서버의 명시값이 우선한다. 따라서
 서버 `.env`에 **낡은 명시값이 남아 있을 때만** 손댈 게 있다. 부트스트랩이 당시
-`.env.example`을 통째로 복사했으므로 남아 있을 가능성이 크지만, 아래 19줄은 서버를
+`.env.example`을 통째로 복사했으므로 남아 있을 가능성이 크지만, 아래 각 줄은 서버를
 직접 보고 확정할 것 — 이 목록은 git 이력에서 역산한 추정이다.
 
 ```env
-TRANSLATION_CONCURRENCY=3          # 1
 NEWS_GLOBAL_LIMIT=6                # 3
-NEWS_SOURCE_ARTICLE_LIMIT=20       # 10
+NEWS_SOURCE_ARTICLE_LIMIT=30       # 10
 SCHEDULER_INTERVAL_MINUTES=20      # 5
-RESEARCH_ANALYSIS_NUM_PREDICT=4096 # 2048
-RESEARCH_NEWS_MAX_ITEMS=16         # 6
-RESEARCH_NEWS_GLOBAL_LIMIT=8       # 3
-RESEARCH_NEWS_CONTENT_MAX_CHARS=600 # 240
-RESEARCH_MAX_CANDIDATES=24         # 10
-RESEARCH_MAX_NEW_ACTIONS=6         # 4
-RESEARCH_DISCOVERY_RESERVED_SLOTS=8 # 3
-RESEARCH_HISTORY_LIMIT=5           # 3
-RESEARCH_SECTOR_CANDIDATE_LIMIT=14 # 10
-RESEARCH_US_CANDIDATE_LIMIT=12     # 8
-RESEARCH_KR_CANDIDATE_LIMIT=12     # 8
-MARKET_DIGEST_ARTICLES_PER_DAY=40  # 20
-MARKET_DIGEST_NUM_PREDICT=512      # 256
-BRIEFING_TIMEOUT=180               # 120
-BRIEFING_NEWS_MAX_ITEMS=14         # 5
 ```
 
 주석은 교체 대상인 옛 값이다. 해당 줄이 서버에 아예 없으면 코드 기본값이 그대로
 먹으므로 추가할 필요가 없다 — **없는 키를 새로 넣지 않는다.**
-
-`MARKET_DIGEST_COUNT_TOLERANCE_RATIO`는 위 19줄에 없지만 2026-08-12에 기본값을
-0.1에서 0.2로 올렸다. 서버 `.env`에 `0.1`이 명시돼 있으면 함께 고친다 — 남겨 두면
-하루 35~40건짜리 다이제스트에서 정상 응답의 건수가 버려진다.
 
 ---
 

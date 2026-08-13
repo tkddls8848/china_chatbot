@@ -21,7 +21,7 @@ CLOUDFLARE_ACCOUNT_ID=<Cloudflare 계정 ID>
 CLOUDFLARE_API_TOKEN=<Workers AI 실행 권한 토큰>
 ```
 
-전체 설정과 기본값은 [`.env.example`](.env.example)에서 확인할 수 있습니다.
+환경 변수로 조정하는 설정과 기본값은 [`.env.example`](.env.example)에서 확인할 수 있습니다.
 
 ### LLM은 Cloudflare Workers AI를 사용합니다
 
