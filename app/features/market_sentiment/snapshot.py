@@ -44,6 +44,7 @@ async def capture_polymarket_snapshot(app) -> None:
             client.fetch_open_contracts,
             min_volume=POLYMARKET_MIN_VOLUME,
             min_liquidity=POLYMARKET_MIN_LIQUIDITY,
+            max_horizon_days=POLYMARKET_MAX_HORIZON_DAYS,
         )
         selected, rejected = select_contracts(
             contracts,

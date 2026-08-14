@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from core.config import POLYMARKET_PANEL_ENABLED
-from handlers.navigation import main_menu, persistent_menu
+from handlers.navigation import main_menu, persistent_menu, system_menu
 
 logger = logging.getLogger(__name__)
 
@@ -126,5 +126,7 @@ async def cmd_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     registry = context.bot_data.get("news_registry")
     source_lines = registry.status_lines() if registry is not None else None
     await message.reply_text(
-        _format_system_status(source_lines), parse_mode="HTML"
+        _format_system_status(source_lines),
+        parse_mode="HTML",
+        reply_markup=system_menu(),
     )

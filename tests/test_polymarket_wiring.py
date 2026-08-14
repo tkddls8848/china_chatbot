@@ -47,7 +47,7 @@ def test_collection_on_installs_the_external_source_of_market_sentiment(monkeypa
     app, scheduler = _install(monkeypatch, enabled=True)
 
     assert "polymarket_store" in app.bot_data
-    assert app.bot_data["polymarket_client"].url.endswith("/markets/keyset")
+    assert app.bot_data["polymarket_client"].url.endswith("/markets")
     assert "market_digest_store" in app.bot_data
 
 
@@ -100,9 +100,11 @@ def test_polymarket_stays_inside_market_sentiment_instead_of_a_new_feature():
 class _Message:
     def __init__(self):
         self.texts = []
+        self.markups = []
 
     async def reply_text(self, text, **kwargs):
         self.texts.append(text)
+        self.markups.append(kwargs.get("reply_markup"))
 
 
 def _run_system(bot_data, args):
@@ -151,3 +153,46 @@ def test_unknown_system_subcommand_lists_the_available_ones():
     text = _run_system({}, ["nope"])
 
     assert "features|polymarket" in text
+
+
+def test_system_status_carries_a_polymarket_button():
+    """파일럿 진행 상황을 명령 인자 없이 열 수 있어야 한다."""
+    message = _Message()
+    update = SimpleNamespace(effective_message=message)
+    asyncio.run(admin.cmd_system(update, SimpleNamespace(args=[], bot_data={})))
+
+    buttons = [
+        button
+        for row in message.markups[-1].inline_keyboard
+        for button in row
+    ]
+    assert "nav:system:polymarket" in {button.callback_data for button in buttons}
+
+
+def test_menu_button_routes_to_the_polymarket_report(monkeypatch):
+    """버튼은 `/system polymarket`과 같은 경로를 타야 한다."""
+    from handlers import navigation
+
+    seen = {}
+
+    async def fake_cmd_system(update, context):
+        seen["args"] = context.args
+
+    monkeypatch.setattr(
+        "features.system_admin.handlers.cmd_system", fake_cmd_system
+    )
+    query = SimpleNamespace(message=_Message())
+    update = SimpleNamespace(callback_query=query)
+    context = SimpleNamespace(
+        args=[],
+        bot_data={"feature_registry": SimpleNamespace(menu_owner=lambda _data: None)},
+        user_data={},
+        application=None,
+    )
+
+    handled = asyncio.run(
+        navigation.handle_menu_callback(update, context, "nav:system:polymarket")
+    )
+
+    assert handled is True
+    assert seen["args"] == ["polymarket"]

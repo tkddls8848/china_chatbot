@@ -21,7 +21,7 @@ from core.config import (
     CLOUDFLARE_ACCOUNT_ID,
     CLOUDFLARE_AI_BASE_URL,
     CLOUDFLARE_API_TOKEN,
-    CLOUDFLARE_TRANSLATION_MODEL,
+    CLOUDFLARE_MODEL,
     CLOUDFLARE_TRANSLATION_TIMEOUT,
     PROMPT_DIR,
     TRANSLATION_NUM_PREDICT,
@@ -71,7 +71,7 @@ def service() -> TranslationService:
     backend = CloudflareWorkersAIBackend(
         account_id=CLOUDFLARE_ACCOUNT_ID,
         api_token=CLOUDFLARE_API_TOKEN,
-        model=CLOUDFLARE_TRANSLATION_MODEL,
+        model=CLOUDFLARE_MODEL,
         base_url=CLOUDFLARE_AI_BASE_URL,
         timeout=CLOUDFLARE_TRANSLATION_TIMEOUT,
     )

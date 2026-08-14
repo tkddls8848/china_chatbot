@@ -8,7 +8,7 @@
 RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
 ```
 
-확인 항목: `closed=false&limit=1` 읽기, keyset 응답 파싱, Yes/No 확률 범위.
+확인 항목: `closed=false&limit=1` 읽기, `/markets` 응답 파싱, Yes/No 확률 범위.
 인증이 없고 LLM을 거치지 않으므로 Neurons를 소비하지 않는다.
 """
 

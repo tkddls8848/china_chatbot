@@ -81,14 +81,14 @@ TRANSLATION_CONCURRENCY = 3
 CLOUDFLARE_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
 CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
 CLOUDFLARE_AI_BASE_URL = "https://api.cloudflare.com/client/v4"
-CLOUDFLARE_TRANSLATION_MODEL = os.environ.get(
-    "CLOUDFLARE_TRANSLATION_MODEL", "@cf/qwen/qwen3-30b-a3b-fp8"
+# 번역과 분석은 같은 모델을 쓴다. 나눌 실익이 없다 — `qwen3-30b-a3b`는 이름과
+# 달리 MoE(활성 3B)라 단가가 3B 모델과 같다(입력 $0.0509/M, 출력 $0.335/M).
+# "가벼운 번역 / 무거운 분석"으로 나눠도 절감이 0이다.
+# 값 자체는 env로 남긴다. 임계값과 달리 모델 이름은 Cloudflare가 폐기·개명하면
+# 외부 사정으로 무효가 되므로, 코드 배포 없이 고칠 수 있어야 한다.
+CLOUDFLARE_MODEL = os.environ.get(
+    "CLOUDFLARE_MODEL", "@cf/qwen/qwen3-30b-a3b-fp8"
 ).strip()
-# 시황 분석·브리핑용 모델. 미지정 시 번역과 같은 모델을 쓴다.
-CLOUDFLARE_ANALYSIS_MODEL = (
-    os.environ.get("CLOUDFLARE_ANALYSIS_MODEL", "").strip()
-    or CLOUDFLARE_TRANSLATION_MODEL
-)
 CLOUDFLARE_TRANSLATION_TIMEOUT = 45
 CLOUDFLARE_MAX_ATTEMPTS = 2
 CLOUDFLARE_FAILURE_THRESHOLD = 3
@@ -303,26 +303,19 @@ POLYMARKET_CONSENSUS_FILE = DATA_DIR / "market_sentiment" / "polymarket_consensu
 POLYMARKET_BASE_URL = "https://gamma-api.polymarket.com"
 POLYMARKET_ENABLED = _env_bool("POLYMARKET_ENABLED", "false")
 POLYMARKET_PANEL_ENABLED = _env_bool("POLYMARKET_PANEL_ENABLED", "false")
-POLYMARKET_TIMEOUT = max(5, int(os.environ.get("POLYMARKET_TIMEOUT", "20")))
+POLYMARKET_TIMEOUT = 20
 # 선택 게이트. 유동성이 얕은 계약은 하루 변화가 호가 한 번에 흔들려 컨센서스가
-# 아니라 잡음이 된다. 실측 기준(volume 10,000 · liquidity 1,000)을 기본값으로 둔다.
-POLYMARKET_MIN_VOLUME = float(os.environ.get("POLYMARKET_MIN_VOLUME", "10000"))
-POLYMARKET_MIN_LIQUIDITY = float(os.environ.get("POLYMARKET_MIN_LIQUIDITY", "1000"))
+# 아니라 잡음이 된다. 실측 기준(volume 10,000 · liquidity 1,000)을 쓴다.
+# 아래 네 값은 파일럿 도중 바꾸지 않는다 — 바꾸면 앞뒤 기간의 표본이 달라져
+# 30일을 한 창으로 볼 수 없다(docs/aws-next-steps.md 3-2). 그래서 env가 아니다.
+POLYMARKET_MIN_VOLUME = 10000.0
+POLYMARKET_MIN_LIQUIDITY = 1000.0
 # 승격 게이트의 "median spread 5%p 이하"와 같은 기준을 수집 단계에서도 쓴다.
-POLYMARKET_MAX_SPREAD = max(
-    0.0,
-    float(os.environ.get("POLYMARKET_MAX_SPREAD", "0.05")),
-)
+POLYMARKET_MAX_SPREAD = 0.05
 # 만기가 너무 먼 계약은 하루 단위로 거의 움직이지 않아 신호를 희석한다.
-POLYMARKET_MAX_HORIZON_DAYS = max(
-    1,
-    int(os.environ.get("POLYMARKET_MAX_HORIZON_DAYS", "365")),
-)
+POLYMARKET_MAX_HORIZON_DAYS = 365
 # 30일 파일럿의 일별 변화를 계산하려면 하루 전 스냅숏이 남아 있어야 한다.
-POLYMARKET_RETENTION_DAYS = max(
-    2,
-    int(os.environ.get("POLYMARKET_RETENTION_DAYS", "31")),
-)
+POLYMARKET_RETENTION_DAYS = 31
 
 
 NEWS_MARKET_BACKFILL_QUERIES = {

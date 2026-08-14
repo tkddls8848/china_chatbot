@@ -13,12 +13,11 @@ from core.config import (
     BRIEFING_TIMEOUT,
     CLOUDFLARE_ACCOUNT_ID,
     CLOUDFLARE_AI_BASE_URL,
-    CLOUDFLARE_ANALYSIS_MODEL,
+    CLOUDFLARE_MODEL,
     CLOUDFLARE_API_TOKEN,
     CLOUDFLARE_FAILURE_COOLDOWN_SECONDS,
     CLOUDFLARE_FAILURE_THRESHOLD,
     CLOUDFLARE_MAX_ATTEMPTS,
-    CLOUDFLARE_TRANSLATION_MODEL,
     CLOUDFLARE_TRANSLATION_TIMEOUT,
     MARKET_DIGEST_COUNT_TOLERANCE_RATIO,
     MARKET_DIGEST_NUM_PREDICT,
@@ -64,7 +63,7 @@ def build_translation_service() -> TranslationService:
     return TranslationService(
         backend=build_backend(
             "translation",
-            model=CLOUDFLARE_TRANSLATION_MODEL,
+            model=CLOUDFLARE_MODEL,
             timeout=CLOUDFLARE_TRANSLATION_TIMEOUT,
         ),
         enabled=TRANSLATION_ENABLED,
@@ -77,7 +76,7 @@ def build_market_view_analyzer() -> MarketViewAnalyzer:
     return MarketViewAnalyzer(
         backend=build_backend(
             "research_analysis",
-            model=CLOUDFLARE_ANALYSIS_MODEL,
+            model=CLOUDFLARE_MODEL,
             # 분석은 입력이 크고 오래 걸리므로 리서치 타임아웃을 그대로 쓴다.
             timeout=RESEARCH_ANALYSIS_TIMEOUT,
         ),
@@ -93,7 +92,7 @@ def build_market_digest_analyzer() -> MarketDigestAnalyzer:
     return MarketDigestAnalyzer(
         backend=build_backend(
             "market_digest",
-            model=CLOUDFLARE_ANALYSIS_MODEL,
+            model=CLOUDFLARE_MODEL,
             timeout=MARKET_DIGEST_TIMEOUT,
         ),
         prompt_file=MARKET_DIGEST_PROMPT_FILE,
@@ -106,7 +105,7 @@ def build_briefing_writer() -> BriefingWriter:
     return BriefingWriter(
         backend=build_backend(
             "briefing",
-            model=CLOUDFLARE_ANALYSIS_MODEL,
+            model=CLOUDFLARE_MODEL,
             timeout=BRIEFING_TIMEOUT,
         ),
         enabled=BRIEFING_LLM_ENABLED,

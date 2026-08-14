@@ -130,16 +130,23 @@ HTTP 200으로 열린다. 기술 통합은 가능하고 LLM 비용도 0이다. �
 한국은행 동결 3건뿐이고 KOSPI나 개별종목 마켓은 없다. 따라서 Polymarket 값은
 **개별종목 감성이 아니라 글로벌 거시 위험선호의 외부 참고선**으로만 쓸 수 있다.
 
-### 코드는 검증됐다 (운영 상태는 미확인)
+### 수집 경로는 2026-08-14에 고쳤다 (운영 상태는 미확인)
 
-구현은 끝났고 기본값은 수집·표시 모두 꺼짐이다. 코드를 다시 쓸 일은 없고,
-로컬 유효값도 둘 다 `false`이며 로컬 스냅숏 파일은 없다. 운영 서버의 스모크와 수집
-상태는 이 작업공간에서 확인하지 못했다. 남은 건 **서버에서 스모크를 통과시킨 뒤
-수집만 켜고 30일 관찰해 승격 여부를 판정하는 운영**이다.
+원래 구현은 스냅숏을 한 건도 남기지 못했다. 실 API로 확인한 원인이 셋이다.
+
+1. `/markets/keyset` 응답은 레코드를 `markets`에 담는데 파서가 `data`를 봤다.
+2. keyset은 커서가 어떤 이름으로도 넘어가지 않고(`limit`은 100에서 잘리고 offset은
+   422) 같은 첫 페이지를 되돌려 준다 — 순회가 불가능하다.
+3. 거래량 상위는 2028년 만기 계약이 덮고 있어 앞 페이지가 전부 `horizon_too_far`다.
+
+그래서 `/markets` + offset 순회로 바꾸고 `end_date_max`를 서버에 넘긴다. 수정 뒤
+실측으로 **계약 24건 / theme 5개 / 이벤트 20개**가 선정된다(승격 기준은 theme 3개,
+일 3이벤트). 남은 건 **서버에서 스모크를 통과시킨 뒤 수집만 켜고 30일 관찰해 승격
+여부를 판정하는 운영**이다.
 
 | 자리 | 파일 |
 |---|---|
-| Gamma keyset 클라이언트·파서 | `app/features/market_sentiment/polymarket.py` |
+| Gamma `/markets` 클라이언트·파서 | `app/features/market_sentiment/polymarket.py` |
 | 게이트·theme allowlist·polarity | `app/features/market_sentiment/polymarket_rules.py` |
 | 08:35 KST 스냅숏 job | `app/features/market_sentiment/snapshot.py` |
 | 스냅숏 저장·일별 정렬·게이트 계산 | `app/state/polymarket_consensus.py` |
@@ -188,9 +195,13 @@ POLYMARKET_ENABLED=true
   않았다**(오후에 찍은 값은 다른 날과 같은 축에 놓을 수 없다).
 - 그래서 이 기간에는 **08:35 전후 재시작을 피한다.** 배포가 필요하면 그 시각을
   비켜서 한다.
-- 진행 상황은 `/system polymarket`으로 아무 때나 볼 수 있다.
+- 진행 상황은 `/system polymarket`으로 아무 때나 볼 수 있다. 시스템 상태 화면의
+  **🎲 폴리마켓** 버튼(`nav:system:polymarket`)이 같은 보고서를 연다.
 - 게이트 임계값(`POLYMARKET_MIN_VOLUME` 등)은 파일럿 도중에 바꾸지 않는다.
-  바꾸면 앞뒤 기간의 표본이 달라져 30일을 한 창으로 볼 수 없다.
+  바꾸면 앞뒤 기간의 표본이 달라져 30일을 한 창으로 볼 수 없다. 그래서 env가
+  아니라 `config.py`의 상수다 — 바꾸려면 코드를 고쳐야 하고 git에 남는다.
+  env로 남은 Polymarket 키는 `POLYMARKET_ENABLED`·`POLYMARKET_PANEL_ENABLED`
+  둘뿐이다.
 
 ### 3-3. 승격 판정
 

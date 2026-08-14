@@ -1,15 +1,18 @@
-"""Gamma keyset 클라이언트·파서 검증(1단계).
+"""Gamma `/markets` 클라이언트·파서 검증(1단계).
 
-실제 API를 부르지 않는다. 배열 매핑, 확률 합계, 범위, 커서 순회, timeout,
-429를 mock 응답으로 확인한다.
+실제 API를 부르지 않는다. 배열 매핑, 확률 합계, 범위, offset 순회, 지평 필터,
+timeout, 429를 mock 응답으로 확인한다.
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests
 
+from core.clock import now
 from features.market_sentiment.polymarket import (
+    _MAX_PAGES as MAX_PAGES,
     PolymarketClient,
     PolymarketError,
     parse_contract,
@@ -150,61 +153,60 @@ def test_end_date_is_normalised_to_kst():
     assert contract.end_date.hour == 21
 
 
-# ── 커서 순회 ─────────────────────────────────────────
+# ── offset 순회 ───────────────────────────────────────
 
-def test_keyset_pagination_follows_the_cursor():
+def test_offset_pagination_walks_until_a_short_page():
+    full_page = [_record(conditionId=f"0x{index:03d}") for index in range(100)]
     client = _client(
         [
-            _Response({"data": [_record()], "next_cursor": "page2"}),
-            _Response({"data": [_record(conditionId="0xdef")], "next_cursor": ""}),
+            _Response(full_page),
+            _Response([_record(conditionId="0xdef")]),
         ]
     )
 
-    contracts = client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
+    contracts = client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
 
-    assert [contract.condition_id for contract in contracts] == ["0xabc", "0xdef"]
+    assert len(contracts) == 101
     calls = client._session.calls
-    assert calls[0]["url"] == "https://gamma-api.example/markets/keyset"
-    assert "next_cursor" not in calls[0]["params"]
-    assert calls[1]["params"]["next_cursor"] == "page2"
+    assert calls[0]["url"] == "https://gamma-api.example/markets"
+    assert calls[0]["params"]["offset"] == 0
+    assert calls[1]["params"]["offset"] == 100
     assert calls[0]["params"]["closed"] == "false"
     assert calls[0]["timeout"] == 7
 
 
-def test_cursor_inside_pagination_envelope_is_honoured():
-    client = _client(
-        [
-            _Response({"data": [_record()], "pagination": {"nextCursor": "page2"}}),
-            _Response({"data": [], "pagination": {}}),
-        ]
-    )
-
-    client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
-
-    assert client._session.calls[1]["params"]["next_cursor"] == "page2"
-
-
-def test_repeated_cursor_stops_the_walk():
-    """서버가 같은 커서를 되돌려 보내도 무한 루프에 빠지지 않는다."""
-    client = _client(
-        [
-            _Response({"data": [_record()], "next_cursor": "same"}),
-            _Response({"data": [_record(conditionId="0xdef")], "next_cursor": "same"}),
-        ]
-    )
-
-    contracts = client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
-
-    assert len(client._session.calls) == 2
-    assert len(contracts) == 2
-
-
-def test_bare_list_response_ends_the_walk():
+def test_horizon_is_pushed_to_the_server():
+    """지평 밖 계약이 거래량 상위를 덮고 있어 서버에서 먼저 잘라야 한다."""
     client = _client([_Response([_record()])])
 
-    contracts = client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
+    client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
 
-    assert len(contracts) == 1
+    params = client._session.calls[0]["params"]
+    cutoff = datetime.strptime(params["end_date_max"], "%Y-%m-%dT%H:%M:%SZ")
+    expected = (now() + timedelta(days=365)).astimezone(timezone.utc)
+    assert abs((cutoff.replace(tzinfo=timezone.utc) - expected).total_seconds()) < 120
+    # 거래량 내림차순이어야 앞 페이지에서 게이트 통과분이 나온다.
+    assert params["order"] == "volumeNum"
+    assert params["ascending"] == "false"
+
+
+def test_page_ceiling_stops_the_walk():
+    """지평 안 계약만 1,200건이 넘는다. 끝까지 돌지 않고 상한에서 끊는다."""
+    full_page = [_record(conditionId=f"0x{index:03d}") for index in range(100)]
+    client = _client([_Response(list(full_page)) for _ in range(MAX_PAGES + 3)])
+
+    client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
+
+    assert len(client._session.calls) == MAX_PAGES
+
+
+def test_unexpected_envelope_yields_no_records():
+    """배열이 아닌 응답은 읽지 않고 그 자리에서 순회를 끝낸다."""
+    client = _client([_Response({"markets": [_record()]})])
+
+    contracts = client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
+
+    assert contracts == []
     assert len(client._session.calls) == 1
 
 
@@ -220,7 +222,7 @@ def test_timeout_is_retried_then_reported():
     )
 
     with pytest.raises(PolymarketError) as error:
-        client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
+        client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
 
     assert error.value.reason == "timeout"
     assert error.value.retryable is True
@@ -235,13 +237,13 @@ def test_rate_limit_waits_the_retry_after_then_succeeds():
         session=_Session(
             [
                 _Response(status_code=429, text="slow down", headers={"Retry-After": "3"}),
-                _Response({"data": [_record()]}),
+                _Response([_record()]),
             ]
         ),
         sleep=slept.append,
     )
 
-    contracts = client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
+    contracts = client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
 
     assert len(contracts) == 1
     assert slept == [3.0]
@@ -256,13 +258,13 @@ def test_rate_limit_retry_wait_is_capped():
         session=_Session(
             [
                 _Response(status_code=429, text="", headers={"Retry-After": "3600"}),
-                _Response({"data": [_record()]}),
+                _Response([_record()]),
             ]
         ),
         sleep=slept.append,
     )
 
-    client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
+    client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
 
     assert slept == [10.0]
 
@@ -272,7 +274,7 @@ def test_client_error_is_not_retried():
     client = _client([_Response(status_code=422, text="offset too large")])
 
     with pytest.raises(PolymarketError) as error:
-        client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
+        client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
 
     assert error.value.reason == "bad_request"
     assert error.value.status_code == 422
@@ -283,11 +285,11 @@ def test_server_error_is_retried():
     client = _client(
         [
             _Response(status_code=503, text="unavailable"),
-            _Response({"data": [_record()]}),
+            _Response([_record()]),
         ]
     )
 
-    contracts = client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
+    contracts = client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
 
     assert len(contracts) == 1
     assert len(client._session.calls) == 2
@@ -297,7 +299,7 @@ def test_non_json_response_is_reported_without_retry():
     client = _client([_Response(payload=None, status_code=200, text="<html>")])
 
     with pytest.raises(PolymarketError) as error:
-        client.fetch_open_contracts(min_volume=10000, min_liquidity=1000)
+        client.fetch_open_contracts(min_volume=10000, min_liquidity=1000, max_horizon_days=365)
 
     assert error.value.reason == "invalid_response"
     assert len(client._session.calls) == 1

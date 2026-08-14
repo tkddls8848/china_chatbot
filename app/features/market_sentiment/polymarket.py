@@ -3,9 +3,16 @@
 Gamma는 인증이 필요 없고 LLM을 거치지 않는다. 그래서 이 경로가 쓰는 추가
 Neurons는 0/일이다. 여기서는 공개 시세만 읽으며 주문·체결 API는 건드리지 않는다.
 
-**페이지네이션은 `/markets/keyset`과 cursor만 쓴다.** 레거시 `/markets`를 큰
-offset으로 돌면 422가 나서 순회가 중간에 끊긴다. 커서가 더 이상 없거나 같은
-커서가 반복되면 멈춘다(서버가 커서를 되돌려 보내도 무한 루프에 빠지지 않는다).
+**페이지네이션은 `/markets`와 offset으로 돈다.** `/markets/keyset`은 커서를
+어떤 이름으로 넘겨도(`next_cursor`·`cursor`·`start_cursor`·`after`) 같은 첫
+페이지를 되돌려 줘서 순회가 되지 않고, `limit`은 100에서 잘리며 offset은
+422(`offset is not allowed on keyset endpoints`)다. 즉 keyset으로는 100건이
+전부다. 레거시 `/markets`는 offset이 정상 동작한다.
+
+만기가 먼 계약(2028 대선 등)이 거래량 상위를 덮고 있어 **`end_date_max`를
+서버에 넘겨 지평 밖을 먼저 잘라 낸다.** 이 필터 없이 읽으면 첫 수백 건이
+전부 `horizon_too_far`로 떨어져 선정이 0건이 된다. 정렬은 거래량 내림차순이라
+뒤 페이지일수록 얇아진다 — 그래서 `_MAX_PAGES`에서 끊는다.
 
 Gamma가 돌려주는 `outcomes`·`outcomePrices`는 **JSON 문자열**이다
 (`'["Yes", "No"]'`). 리스트로 오는 응답도 있어 둘 다 같은 코드로 읽는다.
@@ -19,18 +26,19 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
 
 import requests
 
-from core.clock import ensure_kst
+from core.clock import ensure_kst, now
 
 logger = logging.getLogger(__name__)
 
-# 한 번의 스냅숏에서 돌 최대 페이지 수. 게이트를 통과할 계약은 수십 건 규모라
-# 이 상한에 닿을 일이 없다. 서버가 커서를 계속 내주는 병리적 상황에서만 걸린다.
-_MAX_PAGES = 20
+# 한 번의 스냅숏에서 돌 최대 페이지 수. 지평 안 계약만 세어도 1,200건이 넘어
+# 끝까지 도는 것은 의미가 없다. 거래량 내림차순이라 상위 1,000건이면 게이트를
+# 통과하는 계약(실측 24건 / 20개 이벤트)이 모두 들어온다.
+_MAX_PAGES = 10
 _PAGE_SIZE = 100
 # 429·5xx·timeout에만 재시도한다. 스냅숏은 하루 한 번이라 여기서 포기하면
 # 그날 delta가 통째로 비므로 짧게 두 번까지 더 시도한다.
@@ -210,38 +218,22 @@ def parse_contracts(records: Iterable[Any]) -> list[PolymarketContract]:
 
 
 def _extract_records(payload: Any) -> list[Any]:
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, list):
-            return data
-    return []
+    """`/markets` 응답에서 시장 레코드를 꺼낸다. 이 엔드포인트는 배열을 돌려준다."""
+    return payload if isinstance(payload, list) else []
 
 
-def _extract_cursor(payload: Any) -> str:
-    """다음 페이지 커서를 뽑는다.
+def _horizon_cutoff(max_horizon_days: int) -> str:
+    """서버에 넘길 만기 상한. Gamma는 UTC ISO 문자열로 받는다.
 
-    envelope의 키 표기는 우리가 고정할 수 없으므로 알려진 자리만 순서대로 본다.
-    첫 번째로 발견한 비어 있지 않은 문자열을 쓰고, 없으면 순회를 끝낸다.
+    `now()`는 KST aware라 그대로 포매팅하면 9시간을 UTC로 오기하게 된다.
+    반드시 UTC로 변환한 뒤 찍는다.
     """
-    if not isinstance(payload, dict):
-        return ""
-    pagination = payload.get("pagination")
-    candidates = (
-        payload.get("next_cursor"),
-        payload.get("nextCursor"),
-        pagination.get("next_cursor") if isinstance(pagination, dict) else None,
-        pagination.get("nextCursor") if isinstance(pagination, dict) else None,
-    )
-    for candidate in candidates:
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-    return ""
+    cutoff = now() + timedelta(days=max(1, max_horizon_days))
+    return cutoff.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class PolymarketClient:
-    """Gamma `/markets/keyset` 읽기 전용 클라이언트."""
+    """Gamma `/markets` 읽기 전용 클라이언트."""
 
     def __init__(
         self,
@@ -251,7 +243,7 @@ class PolymarketClient:
         session: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ):
-        self._url = f"{base_url.rstrip('/')}/markets/keyset"
+        self._url = f"{base_url.rstrip('/')}/markets"
         self._timeout = timeout
         self._session = session if session is not None else requests.Session()
         self._sleep = sleep
@@ -265,38 +257,35 @@ class PolymarketClient:
         *,
         min_volume: float,
         min_liquidity: float,
+        max_horizon_days: int,
     ) -> list[PolymarketContract]:
-        """열려 있는 이진 계약을 커서로 끝까지 읽어 온다.
+        """열려 있는 이진 계약을 거래량 상위부터 읽어 온다.
 
-        수량 필터는 서버에도 넘겨 페이지 수를 줄이지만, 최종 판정은 규칙
+        수량·지평 필터는 서버에도 넘겨 페이지를 아끼지만, 최종 판정은 규칙
         모듈의 게이트가 다시 한다(서버가 필터를 무시해도 값이 새지 않는다).
         """
         contracts: list[PolymarketContract] = []
-        seen_cursors: set[str] = set()
-        cursor = ""
         pages = 0
         while pages < _MAX_PAGES:
-            params: dict[str, Any] = {
-                "closed": "false",
-                "active": "true",
-                "limit": _PAGE_SIZE,
-                "volume_num_min": min_volume,
-                "liquidity_num_min": min_liquidity,
-            }
-            if cursor:
-                params["next_cursor"] = cursor
-            payload = self._request(params)
+            payload = self._request(
+                {
+                    "closed": "false",
+                    "active": "true",
+                    "limit": _PAGE_SIZE,
+                    "offset": pages * _PAGE_SIZE,
+                    "volume_num_min": min_volume,
+                    "liquidity_num_min": min_liquidity,
+                    "end_date_max": _horizon_cutoff(max_horizon_days),
+                    # 거래량 내림차순. 앞 페이지일수록 게이트를 통과할 확률이 높다.
+                    "order": "volumeNum",
+                    "ascending": "false",
+                }
+            )
             pages += 1
             records = _extract_records(payload)
             contracts.extend(parse_contracts(records))
-            cursor = _extract_cursor(payload)
-            if not records or not cursor or cursor in seen_cursors:
+            if len(records) < _PAGE_SIZE:
                 break
-            seen_cursors.add(cursor)
-        else:
-            logger.warning(
-                "[POLYMARKET] 페이지 상한 %d에 도달해 순회를 멈춥니다.", _MAX_PAGES
-            )
         logger.info("[POLYMARKET] pages=%d contracts=%d", pages, len(contracts))
         return contracts
 
@@ -347,7 +336,7 @@ class PolymarketClient:
         elif status >= 500:
             reason, retryable = "server_error", True
         else:
-            # 422는 잘못된 순회 방식(레거시 offset)의 신호다. 재시도해도 같다.
+            # 400/422 등 요청 형식 오류는 재시도해도 같은 결과다.
             reason, retryable = "bad_request", False
         return self._fail(
             reason,

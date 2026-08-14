@@ -70,6 +70,14 @@ def briefing_menu() -> InlineKeyboardMarkup:
     ])
 
 
+def system_menu() -> InlineKeyboardMarkup:
+    """시스템 상태 아래에 붙는 하위 항목. `/system`의 인자를 버튼으로 옮긴 것이다."""
+    return _keyboard([
+        [("📋 기능 카탈로그", "nav:system:features"), ("🎲 폴리마켓", "nav:system:polymarket")],
+        *_back(),
+    ])
+
+
 def _context(context: ContextTypes.DEFAULT_TYPE, args: list[str]):
     # user_data를 그대로 전달해야 프록시로 호출되는 핸들러(cmd_add 등)가
     # add_market 같은 대화 상태에 접근할 수 있다(SimpleNamespace에는 기본으로 없음).
@@ -144,6 +152,9 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action == "system":
         from features.system_admin.handlers import cmd_system
         await cmd_system(update, _context(context, []))
+    elif action.startswith("system:"):
+        from features.system_admin.handlers import cmd_system
+        await cmd_system(update, _context(context, [action.split(":", 1)[1]]))
     elif action == "stockdb":
         from features.instruments.handlers import cmd_stockdb
         await cmd_stockdb(update, _context(context, ["build"]))
