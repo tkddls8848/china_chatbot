@@ -177,4 +177,7 @@ def test_market_view_change_and_clear_remove_previous_analysis_context(tmp_path)
         "sight": None,
         "updated_at": None,
         "history": [],
+        # 전체 결과도 함께 지운다 — 주제가 없어졌는데 이전 분석이 /research show에
+        # 남아 있으면 다른 주제의 결과를 현재 것으로 오해한다.
+        "last_result": None,
     }

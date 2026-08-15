@@ -5,8 +5,19 @@ from pathlib import Path
 from llm.backends import LLMBackend
 
 
+_RAW_EXCERPT_CHARS = 200
+
+
 class TranslationError(RuntimeError):
     """Raised when translation is required but unavailable."""
+
+
+def _excerpt(raw: object) -> str:
+    """실패한 응답의 앞부분. 줄바꿈을 접어 로그 한 줄에 들어가게 한다."""
+    collapsed = " ".join(str(raw).split())
+    if len(collapsed) <= _RAW_EXCERPT_CHARS:
+        return collapsed
+    return collapsed[:_RAW_EXCERPT_CHARS] + "…"
 
 
 @dataclass(frozen=True)
@@ -37,6 +48,8 @@ class TranslationService:
         if not self._enabled:
             return TranslationResult(title, content, [])
 
+        # 호출 자체가 실패하면 남길 응답이 없다. except에서 이름이 비지 않게 둔다.
+        raw = ""
         try:
             raw = self._backend.generate(
                 system_prompt=self._prompt,
@@ -46,7 +59,12 @@ class TranslationService:
             )
             return self._parse_translation(raw)
         except Exception as exc:
-            raise TranslationError(str(exc)) from exc
+            # 응답의 어느 부분이 계약을 벗어났는지 로그만 보고 알 수 있어야 한다.
+            # 실패한 호출도 Neurons를 이미 썼으므로, 재현을 기다리지 않고 그
+            # 자리에서 응답 앞부분을 남긴다. 백엔드 오류(HTTP 등)일 때는 raw가
+            # 비어 있어 기존 메시지만 남는다.
+            detail = f" | raw={_excerpt(raw)}" if raw else ""
+            raise TranslationError(f"{exc}{detail}") from exc
 
     @staticmethod
     def _parse_translation(raw: str) -> TranslationResult:

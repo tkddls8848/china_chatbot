@@ -353,24 +353,40 @@ async def _handle_research_show(update: Update, context: ContextTypes.DEFAULT_TY
     last_result = mvm.get_last_result()
 
     view_text = html.escape(view) if view else "저장된 리서치 주제 없음"
-    if last_result:
-        generated_at = html.escape(str(last_result.get("generated_at") or ""))
-        summary = html.escape(str(last_result.get("summary") or "요약 없음"))
-        last_text = f"- 마지막 실행: {generated_at}\n- 요약: {summary}"
-    else:
-        last_text = "- 최근 분석 없음"
-
-    await message.reply_text(
+    header = (
         "<b>리서치 주제</b>\n"
         f"{view_text}\n\n"
-        "<b>최근 분석</b>\n"
-        f"{last_text}\n\n"
         "<b>명령</b>\n"
         "/research show\n"
         "/research set 리서치주제\n"
         "/research run\n"
-        "/research clear",
-        parse_mode="HTML",
+        "/research clear"
+    )
+
+    if not last_result:
+        await message.reply_text(
+            f"{header}\n\n<b>최근 분석</b>\n- 최근 분석 없음",
+            parse_mode="HTML",
+        )
+        return
+
+    # 실행 직후와 같은 화면을 다시 그린다. 요약만 보여 주면 근거·리스크·반론이
+    # 사라져 재확인이 안 되므로 같은 포매터를 그대로 쓴다.
+    wm = context.bot_data["watchlist_manager"]
+    stock_db: StockDatabase = context.bot_data["stock_db"]
+    watchlist = await wm.get_all()
+    pending = _collect_research_actions(last_result, watchlist, stock_db)
+    generated_at = html.escape(str(last_result.get("generated_at") or ""))
+    sections = _format_research_result_sections(
+        last_result,
+        pending,
+        int(last_result.get("news_count") or 0),
+        int(last_result.get("candidate_count") or 0),
+    )
+    await _deliver_research_sections(
+        message,
+        None,
+        [header, f"<b>마지막 실행</b>\n{generated_at}", *sections],
     )
 
 
@@ -563,7 +579,12 @@ async def _run_research_job(
 
     pending = _collect_research_actions(result, watchlist, stock_db)
     if not temporary:
-        await run_non_urgent(mvm.save_result, result)
+        await run_non_urgent(
+            mvm.save_result,
+            result,
+            news_count=len(news_items),
+            candidate_count=len(candidate_universe),
+        )
 
     sections = _format_research_result_sections(
         result,

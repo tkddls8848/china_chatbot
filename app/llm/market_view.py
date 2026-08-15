@@ -44,7 +44,7 @@ class MarketViewManager:
             self._persist()
 
     def _default_data(self) -> dict[str, Any]:
-        return {SIGHT_KEY: None, "updated_at": None, "history": []}
+        return {SIGHT_KEY: None, "updated_at": None, "history": [], "last_result": None}
 
     def _persist(self) -> None:
         self._file_path.write_text(
@@ -59,7 +59,10 @@ class MarketViewManager:
     def set_sight(self, text: str) -> None:
         normalized = text.strip()
         if normalized != self.get_sight():
+            # 주제가 바뀌면 이전 분석은 맥락이 다르다. 프롬프트에 넣지 않는 것과
+            # 같은 이유로 `/research show`에도 남기지 않는다.
             self._data["history"] = []
+            self._data["last_result"] = None
         self._data[SIGHT_KEY] = normalized
         self._data["updated_at"] = now().isoformat(timespec="seconds")
         self._persist()
@@ -68,18 +71,42 @@ class MarketViewManager:
         self._data[SIGHT_KEY] = None
         self._data["updated_at"] = None
         self._data["history"] = []
+        self._data["last_result"] = None
         self._persist()
 
     def get_last_result(self) -> dict[str, Any] | None:
-        history = self.get_history_summaries()
-        return history[-1] if history else None
+        """마지막 분석의 **전체** 결과. `/research show`가 그대로 다시 그린다."""
+        last = self._data.get("last_result")
+        return last if isinstance(last, dict) else None
 
-    def save_result(self, result: dict[str, Any]) -> None:
+    def save_result(
+        self,
+        result: dict[str, Any],
+        *,
+        news_count: int = 0,
+        candidate_count: int = 0,
+    ) -> None:
+        """압축본은 history에, 전체는 last_result에 따로 적는다.
+
+        둘을 합치지 않는 이유는 쓰임이 달라서다. history는 다음 분석 프롬프트에
+        맥락으로 들어가므로 짧아야 하고(입력 토큰이 부풀면 응답이 잘린다),
+        `/research show`는 근거·리스크·반론까지 다시 보여 줘야 한다. 하나로
+        묶으면 프롬프트가 비대해지거나 show가 얇아진다.
+
+        전체는 **마지막 한 건만** 남긴다. 이력을 통째로 쌓을 이유가 없다.
+        """
         history = self._data.get("history")
         if not isinstance(history, list):
             history = []
         history.append(self._summarize_result(result))
         self._data["history"] = history[-self._history_limit :]
+        # 입력 규모는 결과에 없으므로 저장 시점에 함께 적는다. show가 헤더에
+        # "분석 뉴스 N건 / 후보 M개"를 실행 때와 똑같이 그리기 위해서다.
+        self._data["last_result"] = {
+            **result,
+            "news_count": news_count,
+            "candidate_count": candidate_count,
+        }
         self._persist()
 
     def get_history_summaries(self) -> list[dict[str, Any]]:
