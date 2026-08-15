@@ -9,6 +9,10 @@
         "lightsail:GetBundles",
         "lightsail:GetBlueprints",
 
+        "lightsail:GetOperation",
+        "lightsail:GetOperations",
+        "lightsail:GetOperationsForResource",
+
         "lightsail:ImportKeyPair",
         "lightsail:CreateKeyPair",
         "lightsail:GetKeyPair",

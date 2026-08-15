@@ -210,7 +210,11 @@ RESEARCH_NEWS_CONTENT_MAX_CHARS = 600
 RESEARCH_NEWS_MARKETS = ("CN", "US", "KR")
 # 분석 결과는 JSON 한 덩어리로 오므로 상한에 걸리면 문자열 중간에서 잘려
 # 파싱이 실패한다. 후보 수(RESEARCH_MAX_CANDIDATES)를 늘리면 함께 올린다.
-RESEARCH_ANALYSIS_NUM_PREDICT = 4096
+# 2026-08-15 운영에서 4096이 실제로 모자랐다(output_tokens=4096에 정확히 걸려
+# `Unterminated string`). action 10건 × evidence 2건에 URL까지 들어가면 JSON이
+# 8KB를 넘는다. 컨텍스트는 32,768이라 입력 12,264 + 출력 8,192 = 20,456으로
+# 아직 62% 선이다.
+RESEARCH_ANALYSIS_NUM_PREDICT = 8192
 RESEARCH_MAX_CANDIDATES = 24
 # 뉴스 본문 종목명 매칭에서 버릴 '흔한 영문 토큰'의 기준(이 수보다 많은 종목이
 # 공유하는 토큰은 사용하지 않는다).

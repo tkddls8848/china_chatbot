@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # stock_chatbot Lightsail 부트스트랩.
 # cloud-init이 최초 부팅 때 root로 1회 실행한다. 재실행하려면 SSH로 접속해
@@ -6,8 +6,14 @@
 #
 # 이 스크립트는 봇을 **기동하지 않는다.** 이유는 아래 8절 참조.
 
-set -euo pipefail
-exec > >(tee -a /var/log/stock-chatbot-bootstrap.log) 2>&1
+# **bash 전용 구문을 쓰지 않는다.** Lightsail은 user_data 앞에 자기 초기화
+# 스크립트를 붙이고 합쳐진 파일을 `/bin/sh`(dash)로 실행한다. 그래서 위의
+# `#!/bin/bash`는 파일 중간의 주석이 되어 무시된다. 2026-08-15에 `set -o pipefail`이
+# `Illegal option`으로 죽어 부트스트랩이 통째로 실패했다 — 로그 파일조차 열리기
+# 전이라 원인이 `/var/log/cloud-init-output.log`에만 남았다.
+# 프로세스 치환 `>(...)`, `[[ ]]`, 배열도 같은 이유로 쓸 수 없다.
+set -eu
+exec >>/var/log/stock-chatbot-bootstrap.log 2>&1
 
 APP_USER="${app_user}"
 APP_DIR="${app_dir}"

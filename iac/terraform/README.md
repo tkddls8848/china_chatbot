@@ -84,6 +84,18 @@ terraform output -raw bootstrap_status_command   # 명령을 복사해 실행
 `/var/lib/stock-chatbot/bootstrap-ok`에 시각이 찍히면 완료다. 안 나오면
 `sudo tail -50 /var/log/stock-chatbot-bootstrap.log`에 실패 지점이 있다.
 
+**그 로그 파일조차 없으면** 스크립트가 로그를 열기 전에 죽은 것이다. 그때는
+`sudo tail -60 /var/log/cloud-init-output.log`를 본다 — cloud-init이 실행한 모든
+출력이 여기 남는다. 실패한 부트스트랩은 인스턴스를 다시 만들지 않고 이렇게 잇는다:
+
+```bash
+sudo sed -n '/^#!\/bin\/sh$/,$p' /var/lib/cloud/instance/scripts/part-001 | sudo tee /tmp/bootstrap.sh >/dev/null
+sudo sh /tmp/bootstrap.sh
+```
+
+Lightsail이 앞에 붙인 초기화 부분(SSH CA 등록·sshd 재시작)을 빼고 우리 스크립트만
+돌린다. 그 앞부분을 같이 재실행하면 SSH가 끊길 수 있다.
+
 ## 전환
 
 ```powershell
