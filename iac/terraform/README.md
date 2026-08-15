@@ -4,13 +4,15 @@ Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정�
 
 ## 이 코드가 하는 일 / 하지 않는 일
 
-| | 담당 |
-|---|---|
-| Lightsail 인스턴스·고정 IP·SSH 키페어·방화벽(22만) | **Terraform** |
-| 스왑 2G, 타임존 KST, apt 패키지, git clone, venv, pip install | **user_data 부트스트랩** |
-| systemd 유닛 설치, 백업 cron, 자동 스냅샷 | **user_data 부트스트랩** |
-| `.env` 작성(토큰·자격증명) | 사람 (SSH) |
-| `data/` 이관, 로컬 봇 정지, 서비스 기동 | 사람 (`terraform output cutover_commands`) |
+
+|                                                       | 담당                                       |
+| ----------------------------------------------------- | ---------------------------------------- |
+| Lightsail 인스턴스·고정 IP·SSH 키페어·방화벽(22만)                 | **Terraform**                            |
+| 스왑 2G, 타임존 KST, apt 패키지, git clone, venv, pip install | **user_data 부트스트랩**                      |
+| systemd 유닛 설치, 백업 cron, 자동 스냅샷                        | **user_data 부트스트랩**                      |
+| `.env` 작성(토큰·자격증명)                                    | 사람 (SSH)                                 |
+| `data/` 이관, 로컬 봇 정지, 서비스 기동                           | 사람 (`terraform output cutover_commands`) |
+
 
 **부트스트랩은 봇을 기동하지 않는다.** `data/runtime/bot.lock`은 머신 단위라 다른
 호스트의 중복 기동을 막지 못하고, 같은 토큰으로 두 프로세스가 `getUpdates`를 치면
@@ -21,28 +23,36 @@ Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정�
 
 1. Terraform >= 1.5, AWS 자격증명 (`aws configure` 또는 `AWS_PROFILE`)
 2. **IAM 사용자에게 Lightsail 권한.** `AmazonLightsailFullAccess` 같은 AWS 관리형
-   정책은 **존재하지 않으므로** 직접 만들어 붙여야 한다. EC2 권한이 있어도 Lightsail은
-   별개 서비스라 거부된다.
-
-   ```powershell
+ 정책은 **존재하지 않으므로** 직접 만들어 붙여야 한다. EC2 권한이 있어도 Lightsail은
+ 별개 서비스라 거부된다.
+  ```powershell
+   cd iac\terraform   # file:// 경로는 이 디렉터리 기준이다. 저장소 루트에서는 파일을 못 찾는다
    aws iam create-policy --policy-name StockChatbotLightsail --policy-document file://iam-policy.json
    aws iam attach-user-policy --user-name <내 IAM 사용자> --policy-arn <위 출력의 Arn>
    aws lightsail get-bundles --region ap-northeast-2 --query 'bundles[?bundleId==`micro_3_0`]'   # 확인
-   ```
+  ```
 
    `iam-policy.json`은 이 디렉터리에 있고 `ap-northeast-2`로 리전을 제한한다.
    다른 리전을 쓰면 `aws:RequestedRegion` 값도 함께 바꾼다.
-3. **SSH 키.** 없으면 만든다. 개인키는 로컬에만 남고, Terraform은 공개키만 등록한다.
 
-   ```powershell
+   **root 자격증명으로는 붙일 대상이 없다.** `aws sts get-caller-identity`의 `Arn`이
+   `:root`로 끝나면 IAM 사용자가 아니라는 뜻이고, `attach-user-policy`에 계정 이메일을
+   넣으면 `NoSuchEntity`가 난다. 콘솔 IAM → 사용자에서 사용자를 만들어 위 정책을 붙이고,
+   그 사용자의 액세스 키로 `aws configure`를 다시 한다. root 액세스 키는 유출되면
+   결제·계정 폐쇄까지 열리므로 만들지 않는다.
+
+   `InvalidClientTokenId`는 자격증명 자체가 무효라는 신호다(키 삭제·비활성·오타).
+   `aws configure list`로 어느 파일의 어떤 키가 먹고 있는지부터 확인한다.
+3. **SSH 키.** 없으면 만든다. 개인키는 로컬에만 남고, Terraform은 공개키만 등록한다.
+  ```powershell
    ssh-keygen -t ed25519 -C stock-chatbot-lightsail
    Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub"   # ssh-ed25519 AAAA... 로 시작
-   ```
+  ```
 
    생성한 `.pub` 경로를 `terraform.tfvars`의 `ssh_public_key_path`에 적는다.
    **Windows 경로는 슬래시로 쓴다** (`"C:/Users/tkddl/.ssh/id_ed25519.pub"`).
 4. **저장소가 공개인지 확인.** 비공개면 부트스트랩의 clone이 실패한다 —
-   SSH 접속 후 배포 키를 등록하고 4절부터 수동으로 이어서 실행한다.
+ SSH 접속 후 배포 키를 등록하고 4절부터 수동으로 이어서 실행한다.
 5. 로컬 작업이 전부 커밋·푸시되어 있을 것. 안 하면 서버가 옛 코드를 받는다.
 
 ```powershell
@@ -62,7 +72,7 @@ terraform plan
 terraform apply
 ```
 
-apply는 1~2분이면 끝나지만 **부트스트랩은 그 뒤로 5~10분 더 걸린다**(pip이 pandas를
+apply는 1~~2분이면 끝나지만 **부트스트랩은 그 뒤로 5~~10분 더 걸린다**(pip이 pandas를
 빌드한다). 진행 상황:
 
 ```powershell
@@ -106,11 +116,13 @@ grep WEB_ADMIN_PASSWORD ~/stock_chatbot/.env
 **이름 변수를 바꾸면 영향 범위가 셋으로 갈린다.** 2026-08-08 리브랜딩
 (`china-chatbot` → `stock-chatbot`) 때 실측한 구분이다.
 
-| 바뀐 것 | 결과 |
-|---|---|
-| `instance_name` | **인스턴스 교체.** 정적 IP·키페어 이름의 접두사라 파생 리소스도 함께 재구성된다. 기존 배포가 있으면 기본값만 바꾸지 말고 `terraform.tfvars`에 옛 값을 명시해 고정한다. |
-| `tags` | in-place 태그 갱신. `main.tf`에는 참조가 없지만 `versions.tf`의 프로바이더 `default_tags`가 소비하므로 **실제로 적용된다** — 참조가 없다고 오해하기 쉽다. |
-| `service_name`·`app_dir_name`·`repo_url` | 신규 부팅에만 반영된다. `user_data` 안에서만 쓰이는데 그 변경이 아래처럼 무시되기 때문이다. |
+
+| 바뀐 것                                     | 결과                                                                                                             |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `instance_name`                          | **인스턴스 교체.** 정적 IP·키페어 이름의 접두사라 파생 리소스도 함께 재구성된다. 기존 배포가 있으면 기본값만 바꾸지 말고 `terraform.tfvars`에 옛 값을 명시해 고정한다.    |
+| `tags`                                   | in-place 태그 갱신. `main.tf`에는 참조가 없지만 `versions.tf`의 프로바이더 `default_tags`가 소비하므로 **실제로 적용된다** — 참조가 없다고 오해하기 쉽다. |
+| `service_name`·`app_dir_name`·`repo_url` | 신규 부팅에만 반영된다. `user_data` 안에서만 쓰이는데 그 변경이 아래처럼 무시되기 때문이다.                                                      |
+
 
 그래서 **이미 떠 있는 서버의 이름 변경은 Terraform이 해주지 않는다.** SSH로 직접:
 스냅샷 → `~/<옛 이름>`을 새 이름으로 이동 → 옛 서비스 중지·비활성화 후 새 이름으로
@@ -130,6 +142,11 @@ aws lightsail get-bundles --region ap-northeast-2
 aws lightsail get-blueprints --region ap-northeast-2
 ```
 
+**부트스트랩은 `pytest`를 설치하지 않는다.** `requirements.txt`만 설치하는데
+(`user_data.sh.tftpl`), `cutover_commands`의 3단계와 폴리마켓 스모크는 pytest를 쓴다.
+`No module named pytest`가 나오면 `./venv/bin/pip install -r requirements-dev.txt`로
+먼저 깐다.
+
 **정지해도 과금은 멈추지 않는다.** Lightsail은 running과 stopped 모두 과금한다.
 실제로 멈추려면 스냅샷 → `terraform destroy` 순서로 삭제해야 한다. 고정 IP도 함께
 사라져야 한다 — 인스턴스에서 분리된 채 1시간이 지나면 $0.005/시간이 붙는다.
@@ -140,6 +157,9 @@ aws lightsail get-blueprints --region ap-northeast-2
 서버에서만 재현되는 문제를 쫓을 때 이 파일이 유일한 근거다.
 
 ## 갱신과 삭제
+
+서버는 clone한 브랜치(`main`)를 pull한다. **작업 브랜치에만 커밋해 두면 서버는 옛
+코드를 받는다** — 먼저 `main`에 병합하고 push한다.
 
 ```bash
 # 코드 갱신 (서버에서)
@@ -152,3 +172,4 @@ sudo systemctl restart stock-chatbot
 # 인프라 삭제 — data/는 함께 사라진다. 먼저 스냅샷을 찍는다.
 terraform destroy
 ```
+
