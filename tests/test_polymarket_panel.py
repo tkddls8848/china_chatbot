@@ -231,9 +231,14 @@ def test_ranking_caption_never_absorbs_the_consensus_value(monkeypatch):
 # ── 스냅숏 job 격리 ───────────────────────────────────
 
 class _RecordingStore:
-    def __init__(self, accepted=True):
+    def __init__(self, accepted=True, captured_days=()):
         self.snapshots = []
         self._accepted = accepted
+        # job이 재시도 창에서 조회를 건너뛸지 판단할 때 읽는다.
+        self._captured_days = list(captured_days)
+
+    async def snapshot_dates(self):
+        return list(self._captured_days)
 
     async def put_snapshot(self, day, contracts):
         self.snapshots.append((day, contracts))

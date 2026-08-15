@@ -52,17 +52,48 @@ def test_collection_on_installs_the_external_source_of_market_sentiment(monkeypa
 
 
 def test_snapshot_job_is_pinned_to_0835_kst(monkeypatch):
-    """하루 변화를 재려면 두 스냅숏이 같은 시각이어야 한다."""
+    """하루 변화를 재려면 두 스냅숏이 같은 시각이어야 한다.
+
+    다만 08:35 한 번만 노리면 그 순간의 재시작 하나로 하루가 빈다. 10:35까지
+    재시도하되 그 이상 늦은 값은 하루 축에 얹지 않는다.
+    """
     _, scheduler = _install(monkeypatch, enabled=True)
 
     assert len(scheduler.jobs) == 1
     job = scheduler.jobs[0]
     assert job["id"] == "polymarket_snapshot"
     assert job["trigger"] == "cron"
-    assert (job["hour"], job["minute"]) == (8, 35)
+    assert (job["hour"], job["minute"]) == ("8-10", 35)
     assert job["timezone"] is KST
     # 기동 즉시 한 번 찍으면 08:35이 아닌 값이 그날 스냅숏이 된다.
     assert "next_run_time" not in job
+
+
+def test_retry_window_skips_the_fetch_once_the_day_is_captured(monkeypatch):
+    """재시도 창의 2·3회차는 조회 없이 끝나야 한다."""
+    from datetime import date
+
+    from features.market_sentiment import snapshot as snapshot_module
+
+    calls = []
+
+    class ClientStub:
+        def fetch_open_contracts(self, **kwargs):
+            calls.append(kwargs)
+            return []
+
+    class StoreStub:
+        async def snapshot_dates(self):
+            return [date(2026, 8, 15)]
+
+    monkeypatch.setattr(snapshot_module, "today", lambda: date(2026, 8, 15))
+    app = SimpleNamespace(
+        bot_data={"polymarket_client": ClientStub(), "polymarket_store": StoreStub()}
+    )
+
+    asyncio.run(snapshot_module.capture_polymarket_snapshot(app))
+
+    assert calls == []
 
 
 def test_cron_without_an_explicit_timezone_would_follow_the_host():

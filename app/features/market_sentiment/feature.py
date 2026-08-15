@@ -16,7 +16,7 @@ from features.base import CommandSpec, FeatureSpec, MenuSpec
 from features.market_sentiment.handlers import cmd_market
 from features.market_sentiment.polymarket import PolymarketClient
 from features.market_sentiment.snapshot import (
-    SNAPSHOT_HOUR,
+    SNAPSHOT_HOUR_SPEC,
     SNAPSHOT_MINUTE,
     capture_polymarket_snapshot,
 )
@@ -52,7 +52,7 @@ def _install_jobs(scheduler, app) -> None:
     scheduler.add_job(
         capture_polymarket_snapshot,
         trigger="cron",
-        hour=SNAPSHOT_HOUR,
+        hour=SNAPSHOT_HOUR_SPEC,
         minute=SNAPSHOT_MINUTE,
         # 스케줄러 기본 타임존은 호스트를 따라간다. 하루 변화를 재려면 두
         # 스냅숏이 같은 시각이어야 하므로 여기서 KST로 고정한다.
