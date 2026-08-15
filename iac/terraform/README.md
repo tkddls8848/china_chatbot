@@ -49,8 +49,10 @@ Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정�
    Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub"   # ssh-ed25519 AAAA... 로 시작
   ```
 
-   생성한 `.pub` 경로를 `terraform.tfvars`의 `ssh_public_key_path`에 적는다.
-   **Windows 경로는 슬래시로 쓴다** (`"C:/Users/tkddl/.ssh/id_ed25519.pub"`).
+   위 이름 그대로 만들었으면 **`ssh_public_key_path`는 손대지 않아도 된다.**
+   기본값 `~/.ssh/id_ed25519.pub`의 `~`를 `pathexpand`가 홈 디렉터리로 바꾸므로
+   Windows 계정명을 적을 필요가 없다. 키 이름이 다를 때만 고치고, 굳이 절대경로를
+   쓴다면 **Windows 경로는 슬래시로 쓴다** (`"C:/Users/이름/.ssh/id_ed25519.pub"`).
 4. **저장소가 공개인지 확인.** 비공개면 부트스트랩의 clone이 실패한다 —
  SSH 접속 후 배포 키를 등록하고 4절부터 수동으로 이어서 실행한다.
 5. 로컬 작업이 전부 커밋·푸시되어 있을 것. 안 하면 서버가 옛 코드를 받는다.

@@ -86,9 +86,14 @@ variable "repo_ref" {
 # ---------------------------------------------------------------------------
 
 variable "ssh_public_key_path" {
-  description = "Lightsail에 등록할 SSH 공개키 파일 경로. 대응하는 개인키로 접속한다."
+  description = <<-EOT
+    Lightsail에 등록할 SSH 공개키 파일 경로. 대응하는 개인키로 접속한다.
+    `~`는 `pathexpand`가 홈 디렉터리로 바꾼다(Windows에서도 동작한다). 그래서
+    사용자 계정명을 적을 필요가 없고, 기본값 그대로 두면 대부분 맞는다.
+    README가 안내하는 키 종류(ed25519)와 같은 이름을 기본값으로 둔다.
+  EOT
   type        = string
-  default     = "~/.ssh/id_rsa.pub"
+  default     = "~/.ssh/id_ed25519.pub"
 }
 
 variable "manage_firewall" {

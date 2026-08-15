@@ -17,8 +17,9 @@ repo_url = "https://github.com/tkddls8848/stock_chatbot.git"
 repo_ref = "main"
 
 # --- 접근 제어 -----------------------------------------------------------
-# Windows 경로는 역슬래시가 아니라 슬래시로 쓴다.
-ssh_public_key_path = "C:/Users/<사용자>/.ssh/id_ed25519.pub"
+# `~`가 홈 디렉터리로 확장되므로 계정명을 적을 필요가 없다(Windows 포함).
+# 키 이름이 다를 때만 고친다. 절대경로를 쓸 경우 Windows는 슬래시로 적는다.
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
 
 # 방화벽을 Lightsail 콘솔에서 직접 관리하려면 false.
 # false로 두면 인스턴스가 기본 규칙(22/80/443 개방)으로 뜨므로,
