@@ -53,6 +53,25 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - **하루 기사 수량을 정하는 상한은 번역 상한이 아니라 `NEWS_SOURCE_ARTICLE_LIMIT`다.**
   소스를 이 깊이까지만 읽으므로 여기서 잘린 기사는 다음 주기에도 보이지 않는다.
   `gnews`는 이 값을 시장 수로, `gnews_us`·`gnews_kr`은 질의 수로 다시 나눠 쓴다.
+- **`news_prefilter`는 넓게 읽는 비용을 CPU로 내고 Neurons는 그대로 둔다.**
+  번역 전에 원문 후보를 사건 단위로 묶고 점수를 매겨, 번역 대상을 "최신순
+  상위 N건"에서 "점수 상위 N건"으로 바꾼다. 번역 건수는 `NEWS_GLOBAL_LIMIT`
+  그대로라 **추가 Neurons는 0이다** — 그래서 `NEWS_SOURCE_ARTICLE_LIMIT`을 250까지
+  올릴 수 있다. LLM을 부르지 않고 Aho-Corasick 종목 매칭·simhash 사건 군집·
+  로컬 로지스틱 보정기만 쓴다.
+- **사전선별은 `shadow`로 시작하고 `/system prefilter`가 승격 근거를 그린다.**
+  shadow는 점수와 관측만 쌓고 번역 순서는 최신순 그대로 둔다. **shadow가
+  답하지 못하는 것이 있다**: 라벨(impact)은 번역된 기사에만 붙고 shadow에서
+  번역되는 것은 최신순 상위뿐이라, 사전선별이 새로 끌어올렸을 기사의 impact는
+  끝내 관측되지 않는다. 따라서 shadow의 AUC는 "최신순이 이미 고른 기사들
+  안에서의 순위"이지 "더 나은 기사를 찾아내는 능력"이 아니다. 후자는 `active`의
+  탐색 슬롯(`NEWS_PREFILTER_EXPLORATION_SLOTS`)으로만 측정된다. 이 한계는
+  `service.py`의 `SHADOW_CAVEATS`에 적어 두었고 지운 채로 승격하지 않는다.
+- **관측 파일은 두 정책이 고르는 기사와 탐색분만 남긴다.** 후보 250건을 전부
+  적으면 하루 10만 줄이 쌓이는데 라벨은 번역된 6건에만 붙어 나머지는 학습에
+  쓸 수 없다. 남기지 않는 후보는 주기별 `cycle` 집계 줄로 센다.
+  적재는 **offset 뒤만 이어 읽는다** — 파일 전체를 dict에 담으면 보존 기간이
+  찬 시점에 1GB 인스턴스가 감당하지 못한다(실측: 2일치 221k줄에서 602MB).
 - **Neurons 예산은 뉴스 번역이 대부분을 쓴다**(기사 1건 = 호출 1회). 리서치·브리핑·
   `/market`은 하루 10회 남짓이라 입력을 깊게 잡아도 총량에 거의 영향이 없다.
   수량을 늘릴 때만 무료 한도(하루 10,000)를 다시 계산한다.
@@ -92,6 +111,11 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 
 - 환경 변수는 `app/core/config.py`에서만 읽고 `.env.example`에 현재 키를 기록한다.
   운영자가 조정하지 않는 설정은 같은 모듈의 리터럴 상수로 둔다.
+- **배경 CPU 작업은 예산 안에서만 돈다.** Lightsail `micro_3_0`은 2 vCPU에
+  vCPU당 baseline 10%라 하루 지속 가능 CPU가 4.8 vCPU-hour다. 사전선별 보정은
+  그중 75%(3.6h)만 쓰고 나머지는 텔레그램·뉴스 긴급 경로에 남긴다. 조각마다
+  `wait_for_urgent_idle`·load average·남은 예산을 다시 확인해 오래 가로막지
+  않는다. bundle을 바꾸면 `NEWS_PREFILTER_LIGHTSAIL_*` 상수도 함께 바꾼다.
 - 상태 파일은 `data/<feature>/`에 둔다. 설정은 상태 파일에 저장하지 않는다.
 - **상태 파일은 `core/storage.py`의 원자적 쓰기로만 저장한다.** 대상 파일을 직접
   열어 쓰면 그 순간 내용이 비고, 실패하면 잘린 JSON이 남아 다음 기동이 상태를
@@ -116,8 +140,11 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   기간이 통째로 밀린다. ruff의 `DTZ` 규칙이 이걸 막는다(테스트는 예외).
   저장된 타임스탬프를 `now()`와 비교할 때는 `ensure_kst()`로 감싼다 — aware 전환
   이전에 쓴 `data/` 파일에는 오프셋이 없어 그냥 비교하면 TypeError로 죽는다.
-  예외는 둘뿐이다: Cloudflare 할당량 리셋은 UTC 00시 기준이고
-  (`llm/backends.py`), 기사 시각은 소스 타임존을 `news/utils.py`가 KST로 변환한다.
+  예외는 셋뿐이다: Cloudflare 할당량 리셋은 UTC 00시 기준이고
+  (`llm/backends.py`), 기사 시각은 소스 타임존을 `news/utils.py`가 KST로 변환하며,
+  사전선별의 하루 CPU 예산도 Neurons와 같은 UTC 00시에 리셋한다
+  (`features/news_prefilter/service.py`) — 두 예산의 경계를 맞춰 두면 한쪽이
+  소진된 날을 다른 쪽 로그와 같은 일자로 읽을 수 있다.
 
 ## 배포
 

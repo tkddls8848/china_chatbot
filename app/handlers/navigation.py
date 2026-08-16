@@ -74,6 +74,7 @@ def system_menu() -> InlineKeyboardMarkup:
     """시스템 상태 아래에 붙는 하위 항목. `/system`의 인자를 버튼으로 옮긴 것이다."""
     return _keyboard([
         [("📋 기능 카탈로그", "nav:system:features"), ("🎲 폴리마켓", "nav:system:polymarket")],
+        [("🧮 뉴스 사전선별", "nav:system:prefilter")],
         *_back(),
     ])
 

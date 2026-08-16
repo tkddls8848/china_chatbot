@@ -4,6 +4,7 @@ from features.briefing.feature import FEATURE as BRIEFING
 from features.instruments.feature import FEATURE as INSTRUMENTS
 from features.market_sentiment.feature import FEATURE as MARKET_SENTIMENT
 from features.news.feature import FEATURE as NEWS
+from features.news_prefilter.feature import FEATURE as NEWS_PREFILTER
 from features.quant.feature import FEATURE as QUANT
 from features.registry import FeatureRegistry
 from features.research.feature import FEATURE as RESEARCH
@@ -16,6 +17,7 @@ ALL_FEATURES = (
     INSTRUMENTS,
     QUANT,
     WATCHLIST,
+    NEWS_PREFILTER,
     NEWS,
     MARKET_SENTIMENT,
     RESEARCH,

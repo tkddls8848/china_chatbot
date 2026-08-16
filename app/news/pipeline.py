@@ -17,6 +17,7 @@ import requests
 from telegram import Bot
 from telegram.ext import Application
 
+from core.clock import now
 from core.config import (
     NEWS_DIGEST_MESSAGE_MAX_CHARS,
     NEWS_DIGEST_SEND_LIMIT,
@@ -59,6 +60,7 @@ class PreparedGlobalArticle:
     article: GlobalArticle
     text: str
     translated: TranslationResult
+    prefilter_candidate_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,8 @@ async def prepare_global_source(
     translator: TranslationService,
     translate_semaphore: asyncio.Semaphore,
     watchlist: dict[str, str],
+    prefilter=None,
+    cycle_id: str = "",
 ) -> list[PreparedGlobalArticle]:
     try:
         articles: list[GlobalArticle] = await _fetch_source(spec.fetch)
@@ -157,6 +161,26 @@ async def prepare_global_source(
             NEWS_LIVE_MAX_AGE_HOURS,
         )
         return []
+
+    prefilter_contexts = {}
+    if prefilter is not None:
+        try:
+            ranked_candidates = await prefilter.rank_articles(
+                source=spec.key,
+                market=spec.market,
+                articles=articles,
+                watchlist=watchlist,
+                cycle_id=cycle_id,
+            )
+            articles = [candidate.article for candidate in ranked_candidates]
+            prefilter_contexts = {
+                candidate.article.article_id: candidate
+                for candidate in ranked_candidates
+            }
+        except Exception as e:
+            # 로컬 보조 기능이 뉴스 번역·전송을 막아서는 안 된다. shadow/active와
+            # 무관하게 실패한 주기만 기존 최신순으로 처리한다.
+            logger.error("[%s] 뉴스 사전선별 실패, 최신순으로 계속: %s", spec.key, e)
 
     metrics = {"duplicate": 0, "translate_failed": 0, "prepared": 0}
 
@@ -196,7 +220,14 @@ async def prepare_global_source(
                 safe_url,
             )
             metrics["prepared"] += 1
-            return PreparedGlobalArticle(spec, article, text, translated)
+            context = prefilter_contexts.get(article.article_id)
+            return PreparedGlobalArticle(
+                spec,
+                article,
+                text,
+                translated,
+                getattr(context, "candidate_id", ""),
+            )
         except Exception as e:
             await tracker.release(article_id)
             metrics["translate_failed"] += 1
@@ -285,6 +316,7 @@ async def _confirm_and_log_global_article(
     tracker: SentNewsTracker,
     prediction_log: PredictionLog | None,
     news_log: NewsLog | None,
+    prefilter=None,
 ) -> None:
     """처리를 마친 기사를 확정한 뒤 원문 기반 감성 결과를 로그에 기록한다."""
     spec = prepared.spec
@@ -326,6 +358,15 @@ async def _confirm_and_log_global_article(
     except Exception as e:
         # 이미 확정한 뒤이므로 예약을 풀어 같은 기사를 다시 처리하지 않는다.
         logger.error("[%s] 확정 후 로그 기록 실패: %s", spec.key, e)
+    if prefilter is not None and prepared.prefilter_candidate_id:
+        try:
+            await prefilter.record_outcome(
+                candidate_id=prepared.prefilter_candidate_id,
+                impact=translated.impact,
+                sentiment=translated.sentiment,
+            )
+        except Exception as e:
+            logger.warning("[%s] 사전선별 라벨 기록 실패: %s", spec.key, e)
 
 
 async def archive_unsent_articles(
@@ -333,6 +374,7 @@ async def archive_unsent_articles(
     tracker: SentNewsTracker,
     prediction_log: PredictionLog | None,
     news_log: NewsLog | None,
+    prefilter=None,
 ) -> None:
     """송출에서 탈락한 기사를 전송 시도 없이 확정하고 로그에만 남긴다.
 
@@ -342,7 +384,13 @@ async def archive_unsent_articles(
     if not rows:
         return
     for row in rows:
-        await _confirm_and_log_global_article(row, tracker, prediction_log, news_log)
+        await _confirm_and_log_global_article(
+            row,
+            tracker,
+            prediction_log,
+            news_log,
+            prefilter,
+        )
     logger.info("[GLOBAL] 송출 제외 %d건은 로그에만 기록", len(rows))
 
 
@@ -353,6 +401,7 @@ async def send_global_digest(
     tracker: SentNewsTracker,
     prediction_log: PredictionLog | None,
     news_log: NewsLog | None,
+    prefilter=None,
 ) -> None:
     """여러 뉴스사의 기사를 안전 크기의 다이제스트 메시지로 묶어 보낸다."""
     if not prepared_rows:
@@ -422,6 +471,7 @@ async def send_global_digest(
                     tracker,
                     prediction_log,
                     news_log,
+                    prefilter,
                 )
                 logger.info(
                     "[%s] 다이제스트 전송 완료: %s",
@@ -448,7 +498,9 @@ async def _fetch_all(app: Application) -> None:
     registry: NewsSourceRegistry = app.bot_data["news_registry"]
     prediction_log: PredictionLog | None = app.bot_data.get("prediction_log")
     news_log: NewsLog | None = app.bot_data.get("news_log")
+    prefilter = app.bot_data.get("news_prefilter")
     watchlist = await wm.get_all()
+    cycle_id = now().isoformat(timespec="seconds")
 
     selected_specs = registry.active_specs()
     if not selected_specs:
@@ -467,6 +519,8 @@ async def _fetch_all(app: Application) -> None:
                 translator,
                 translate_semaphore,
                 watchlist,
+                prefilter,
+                cycle_id,
             )
             for spec in selected_specs
         )
@@ -489,7 +543,14 @@ async def _fetch_all(app: Application) -> None:
         tracker,
         prediction_log,
         news_log,
+        prefilter,
     )
-    await archive_unsent_articles(unsent_rows, tracker, prediction_log, news_log)
+    await archive_unsent_articles(
+        unsent_rows,
+        tracker,
+        prediction_log,
+        news_log,
+        prefilter,
+    )
 
     await tracker.persist()

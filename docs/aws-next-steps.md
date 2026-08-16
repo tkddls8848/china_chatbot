@@ -116,12 +116,28 @@ journalctl -u stock-chatbot --since "$(date -u -d '6 days ago' '+%Y-%m-%d 00:00:
 
 ```env
 NEWS_GLOBAL_LIMIT=6                # 3
-NEWS_SOURCE_ARTICLE_LIMIT=30       # 10
+NEWS_SOURCE_ARTICLE_LIMIT=250      # 10 또는 30
 SCHEDULER_INTERVAL_MINUTES=20      # 5
 ```
 
 주석은 교체 대상인 옛 값이다. 해당 줄이 서버에 아예 없으면 코드 기본값이 그대로
 먹으므로 추가할 필요가 없다 — **없는 키를 새로 넣지 않는다.**
+
+`NEWS_SOURCE_ARTICLE_LIMIT` 250은 `news_prefilter`가 함께 켜져 있을 때만 쓴다.
+이 기능이 소스를 깊게 훑되 번역은 `NEWS_GLOBAL_LIMIT` 건으로 묶으므로 **Neurons는
+늘지 않는다.** 서버 `FEATURES_ENABLED`에 `news_prefilter`가 없다면 이 줄은
+30으로 두고, 기능과 함께 올린다.
+
+```env
+FEATURES_ENABLED=instruments,quant,watchlist,news_prefilter,news,market_sentiment,research,briefing,signal_scoring,system_admin,web_admin
+NEWS_PREFILTER_MODE=shadow
+```
+
+`shadow`로 올린다. 승격 판정은 일주일 뒤 `/system prefilter`로 하고 절차는
+`docs/next-steps.md` 1번에 있다. 배경 보정 작업은 하루 3.6 CPU-hour 예산 안에서만
+돌고, 긴급 뉴스 구간·load average 1.5 이상에서는 스스로 물러난다. 첫 며칠은
+`journalctl -u stock-chatbot | grep PREFILTER`로 `중단=budget`이 매일 나오는지만
+본다 — 매일 소진되면 예산이 아니라 관측량을 먼저 줄인다.
 
 ---
 

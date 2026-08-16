@@ -12,6 +12,7 @@ EXPECTED_FEATURES = {
     "instruments",
     "quant",
     "watchlist",
+    "news_prefilter",
     "news",
     "market_sentiment",
     "research",
@@ -78,6 +79,7 @@ def test_registry_rejects_unknown_feature():
         ({"briefing"}, "briefing → news"),
         ({"signal_scoring"}, "signal_scoring → instruments"),
         ({"quant"}, "quant → instruments"),
+        ({"news_prefilter"}, "news_prefilter → instruments"),
     ],
 )
 def test_registry_rejects_unsatisfied_dependencies(enabled, expected):
@@ -94,6 +96,7 @@ def test_every_enabled_subset_that_passes_can_install_services():
         {"instruments"},
         {"instruments", "quant"},
         {"instruments", "watchlist"},
+        {"instruments", "watchlist", "news_prefilter"},
         {"instruments", "watchlist", "news"},
         {"instruments", "watchlist", "news", "market_sentiment"},
         {"instruments", "watchlist", "news", "quant", "research"},

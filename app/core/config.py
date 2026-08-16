@@ -35,7 +35,7 @@ def _env_bool(name: str, default: str = "false") -> bool:
 
 
 _DEFAULT_FEATURES = (
-    "instruments,quant,watchlist,news,market_sentiment,"
+    "instruments,quant,watchlist,news_prefilter,news,market_sentiment,"
     "research,briefing,signal_scoring,system_admin,web_admin"
 )
 FEATURES_ENABLED = frozenset(
@@ -66,6 +66,10 @@ WATCHLIST_EVENTS_FILE = DATA_DIR / "watchlist" / "watchlist_events.json"
 STOCK_DB_FILE     = DATA_DIR / "instruments" / "stock_db.json"
 PREDICTION_LOG_FILE = DATA_DIR / "signal_scoring" / "prediction_log.jsonl"
 RESEARCH_STATE_FILE = DATA_DIR / "research" / "market_research.json"
+NEWS_PREFILTER_EVENT_FILE = DATA_DIR / "news_prefilter" / "event_memory.json"
+NEWS_PREFILTER_OBSERVATION_FILE = DATA_DIR / "news_prefilter" / "observations.jsonl"
+NEWS_PREFILTER_MODEL_FILE = DATA_DIR / "news_prefilter" / "model.json"
+NEWS_PREFILTER_CPU_STATE_FILE = DATA_DIR / "news_prefilter" / "cpu_budget.json"
 RUNTIME_LOCK_FILE = DATA_DIR / "runtime" / "bot.lock"
 PROMPT_DIR        = BASE_DIR / "prompts"
 
@@ -155,8 +159,47 @@ NEWS_LIVE_MAX_AGE_HOURS = 48
 # 수로, gnews_us·gnews_kr은 질의 수로 다시 나눠 쓴다.
 NEWS_SOURCE_ARTICLE_LIMIT = max(
     1,
-    int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "30")),
+    int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "250")),
 )
+
+# ── 번역 전 로컬 뉴스 사건 메모리·사전선별 ───────────
+# shadow는 점수·후보·LLM 결과만 축적하고 현재 최신순 번역 순서를 바꾸지 않는다.
+# 최소 일주일의 정책 비교가 끝난 뒤에만 active로 올린다.
+NEWS_PREFILTER_MODE = os.environ.get("NEWS_PREFILTER_MODE", "shadow").strip().lower()
+if NEWS_PREFILTER_MODE not in {"shadow", "active"}:
+    raise ConfigurationError("NEWS_PREFILTER_MODE는 shadow 또는 active여야 합니다")
+
+NEWS_PREFILTER_EVENT_WINDOW_HOURS = 72
+NEWS_PREFILTER_MAX_EVENTS = 5000
+# 라벨은 번역된 기사에만 붙어 하루 2,600건 남짓이고, 학습 샘플을 메모리에
+# 들고 있는 비용이 여기에 비례한다(실측: 5,184건 = 29MB → 7일 약 100MB).
+# 늘리기 전에 1GB 인스턴스의 여유를 다시 잰다.
+NEWS_PREFILTER_OBSERVATION_RETENTION_DAYS = 7
+NEWS_PREFILTER_SIMILARITY_THRESHOLD = 0.74
+# active에서 번역 슬롯 하나를 임의 깊이 기사에 배정해 선택 편향을 줄인다.
+# 총 번역 건수는 NEWS_GLOBAL_LIMIT 그대로라 추가 Neurons는 쓰지 않는다.
+NEWS_PREFILTER_EXPLORATION_SLOTS = 1
+
+# Terraform 기본 bundle(micro_3_0: 2 vCPU, vCPU당 baseline 10%)의 하루 지속
+# 가능 CPU는 4.8 vCPU-hour다. 전체 프로세스 CPU를 함께 계량하고 그중 25%는
+# 텔레그램·뉴스 긴급 경로에 남긴다. bundle을 바꾸면 이 두 상수도 함께 바꾼다.
+NEWS_PREFILTER_LIGHTSAIL_VCPUS = 2
+NEWS_PREFILTER_LIGHTSAIL_BASELINE = 0.10
+NEWS_PREFILTER_CPU_RESERVE_RATIO = 0.25
+NEWS_PREFILTER_DAILY_CPU_BUDGET_SECONDS = int(
+    NEWS_PREFILTER_LIGHTSAIL_VCPUS
+    * 24
+    * 60
+    * 60
+    * NEWS_PREFILTER_LIGHTSAIL_BASELINE
+    * (1.0 - NEWS_PREFILTER_CPU_RESERVE_RATIO)
+)
+# 2분마다 최대 60 CPU-second를 한 코어에서 나눠 쓴다. 5초 조각 사이마다
+# 긴급 뉴스 구간과 load average를 다시 확인해 오래 가로막지 않는다.
+NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES = 2
+NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS = 60.0
+NEWS_PREFILTER_MAINTENANCE_CHUNK_SECONDS = 5.0
+NEWS_PREFILTER_MAX_LOAD_AVERAGE = 1.5
 
 
 def _parse_rss_feeds() -> list[tuple[str, str]]:

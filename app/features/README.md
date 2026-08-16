@@ -8,6 +8,7 @@
 |---|---|
 | `instruments` | 종목 데이터베이스와 일별 갱신 |
 | `quant` | 시세·자금흐름·섹터 정량 데이터 |
+| `news_prefilter` | 번역 전 로컬 사건 메모리·후보 점수화(Neurons 0) |
 | `watchlist` | 관심종목 추가·삭제·목록 |
 | `news` | Futu·Sina·Google News(글로벌·미국·한국)·RSS 수집과 다이제스트 |
 | `market_sentiment` | 날짜별 시장 감성 백필·집계·차트, Polymarket 컨센서스 스냅숏 |

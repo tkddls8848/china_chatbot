@@ -101,7 +101,7 @@ RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
 | `/research show\|set\|run\|clear` | 리서치 후보 관리 |
 | `/briefing morning\|evening` | 브리핑 생성 |
 | `/stockdb build` | 종목 DB 갱신 |
-| `/system [features\|polymarket]` | 시스템 상태, 기능 카탈로그, 컨센서스 파일럿 상태 |
+| `/system [features\|polymarket\|prefilter]` | 시스템 상태, 기능 카탈로그, 컨센서스 파일럿 상태, 뉴스 사전선별 섀도 비교 |
 
 ## 관리 웹 (선택)
 
