@@ -35,6 +35,7 @@ from statistics import median
 from typing import Any
 
 from core.clock import now, today
+from core.storage import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -158,14 +159,9 @@ class PolymarketConsensusStore:
             self._write()
 
     def _write(self) -> None:
-        try:
-            self._file_path.parent.mkdir(parents=True, exist_ok=True)
-            self._file_path.write_text(
-                json.dumps(self._snapshots, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            logger.warning("[POLYMARKET] 스냅숏을 저장하지 못했습니다: %s", exc)
+        # 실패를 삼키지 않는다. `put_snapshot()`의 True는 "그날을 남겼다"는 뜻이고
+        # 백필의 저장 건수가 이 값을 세므로, 못 쓴 날을 성공으로 세면 안 된다.
+        write_json_atomic(self._file_path, self._snapshots)
 
     async def put_snapshot(self, day: date, contracts: dict[str, dict[str, Any]]) -> bool:
         """하루치 스냅숏을 기록한다. 그날이 이미 있으면 저장하지 않고 False.
@@ -180,13 +176,19 @@ class PolymarketConsensusStore:
         async with self._lock:
             if key in self._snapshots:
                 return False
+            previous = dict(self._snapshots)
             self._snapshots[key] = {
                 "date": key,
                 "captured_at": now().isoformat(timespec="seconds"),
                 "contracts": contracts,
             }
             self._evict()
-            self._write()
+            try:
+                self._write()
+            except OSError:
+                # 저장 못 한 날을 기억하면 재시도가 "이미 있는 날"로 막힌다.
+                self._snapshots = previous
+                raise
             return True
 
     async def snapshot_dates(self) -> list[date]:

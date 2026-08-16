@@ -3,6 +3,8 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from core.storage import write_json_atomic
+
 
 class WatchlistManager:
     """관심종목 관리"""
@@ -21,11 +23,7 @@ class WatchlistManager:
     def _load(self):
         if not self._file_path.exists():
             self._watchlist = {}
-            self._file_path.parent.mkdir(parents=True, exist_ok=True)
-            self._file_path.write_text(
-                json.dumps(self._watchlist, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            write_json_atomic(self._file_path, self._watchlist, indent=2)
         else:
             self._watchlist = json.loads(self._file_path.read_text(encoding="utf-8"))
 
@@ -34,10 +32,17 @@ class WatchlistManager:
             return code
         return self._code_resolver(code) or code
 
-    async def _persist(self):
-        data = json.dumps(self._watchlist, ensure_ascii=False, indent=2)
-        self._file_path.parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(self._file_path.write_text, data, encoding="utf-8")
+    async def _persist(self, watchlist: dict[str, str]) -> None:
+        """저장이 끝난 목록만 메모리에 올린다.
+
+        먼저 메모리를 고치고 저장하면, 저장이 실패한 뒤에도 봇은 바뀐 목록으로
+        동작하다가 다음 저장 때 그 변경을 함께 적어 버린다 — 사용자에게는
+        실패라고 알린 편입·편출이 뒤늦게 반영되는 셈이다.
+        """
+        await asyncio.to_thread(
+            write_json_atomic, self._file_path, watchlist, indent=2
+        )
+        self._watchlist = watchlist
 
     async def get_all(self) -> dict[str, str]:
         async with self._lock:
@@ -45,12 +50,14 @@ class WatchlistManager:
 
     async def add(self, code: str, name: str) -> None:
         async with self._lock:
-            self._watchlist[self._canonical_code(code)] = name
-            await self._persist()
+            updated = dict(self._watchlist)
+            updated[self._canonical_code(code)] = name
+            await self._persist(updated)
 
     async def remove(self, code: str) -> str | None:
         async with self._lock:
-            name = self._watchlist.pop(self._canonical_code(code), None)
+            updated = dict(self._watchlist)
+            name = updated.pop(self._canonical_code(code), None)
             if name is not None:
-                await self._persist()
+                await self._persist(updated)
             return name

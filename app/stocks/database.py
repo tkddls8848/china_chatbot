@@ -7,6 +7,7 @@ import json
 import logging
 from pathlib import Path
 
+from core.storage import write_json_atomic
 from stocks.sources import (
     _classify_market,
     _fetch_a_code_name,
@@ -103,8 +104,9 @@ class StockDatabase:
         if not a_loaded and not hk_loaded and not db:
             raise RuntimeError("A주와 홍콩 주식 DB 빌드가 모두 실패했습니다")
 
-        self._cache_file.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_file.write_text(json.dumps(db, ensure_ascii=False), encoding="utf-8")
+        # 캐시를 먼저 완성해 교체한 뒤에 메모리를 바꾼다. 저장이 실패하면
+        # 예외가 /stockdb build까지 올라가고 이전 DB가 그대로 남는다.
+        write_json_atomic(self._cache_file, db)
         self._db = db
         self._aliases = None
         logger.info("[StockDB] DB 빌드 완료: 총 %d종목", len(db))

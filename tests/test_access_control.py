@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from core import access
 import handlers.commands as commands
 from core.menu_status import set_menu_button_text
@@ -24,9 +26,25 @@ def _update(chat_id):
     return SimpleNamespace(effective_chat=chat)
 
 
-def test_empty_allowlist_allows_everyone(monkeypatch):
+def test_empty_allowlist_blocks_everyone(monkeypatch):
     monkeypatch.setattr(access, "ALLOWED_CHAT_IDS", frozenset())
-    assert access.is_allowed_update(_update(12345)) is True
+    assert access.is_allowed_update(_update(12345)) is False
+
+
+def test_config_refuses_to_start_without_a_usable_allowlist(monkeypatch):
+    from core import config
+
+    for raw in ("", "   ", ",,", "abc", "abc, 12x"):
+        monkeypatch.setenv("ALLOWED_CHAT_IDS", raw)
+        with pytest.raises(config.ConfigurationError, match="ALLOWED_CHAT_IDS"):
+            config._parse_allowed_chat_ids()
+
+
+def test_config_keeps_valid_ids_and_drops_invalid_ones(monkeypatch):
+    from core import config
+
+    monkeypatch.setenv("ALLOWED_CHAT_IDS", " 111 , oops , -222 ")
+    assert config._parse_allowed_chat_ids() == frozenset({111, -222})
 
 
 def test_allowlist_blocks_other_chats(monkeypatch):
@@ -50,7 +68,7 @@ def test_restricted_decorator_skips_disallowed(monkeypatch):
 
 
 def test_restricted_decorator_updates_request_status(monkeypatch):
-    monkeypatch.setattr(access, "ALLOWED_CHAT_IDS", frozenset())
+    monkeypatch.setattr(access, "ALLOWED_CHAT_IDS", frozenset({123}))
     edits = []
 
     class StatusMessage:
@@ -76,7 +94,7 @@ def test_restricted_decorator_updates_request_status(monkeypatch):
 
 
 def test_menu_jobs_suppress_chat_status(monkeypatch):
-    monkeypatch.setattr(access, "ALLOWED_CHAT_IDS", frozenset())
+    monkeypatch.setattr(access, "ALLOWED_CHAT_IDS", frozenset({123}))
     replies = []
 
     class RequestMessage:

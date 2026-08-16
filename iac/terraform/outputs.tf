@@ -45,12 +45,17 @@ output "cutover_commands" {
     cd ${local.app_dir} && ./venv/bin/python -c "import sys; sys.path.insert(0,'app'); import core.config"
 
     # 3. 테스트가 로컬과 같은 결과인지 확인 (Python 3.12 비호환 조기 발견)
+    #    부트스트랩은 실행 의존성만 설치하므로 pytest를 여기서 함께 받는다.
+    cd ${local.app_dir} && ./venv/bin/pip install -r requirements-dev.txt
     cd ${local.app_dir} && ./venv/bin/python -m pytest -q
 
-    # 4. 재구축 비용이 큰 상태만 이관 (로컬 PowerShell에서 실행)
-    #    data/instruments는 /stockdb build로 재생성되므로 옮기지 않는다.
-    #    data/runtime/bot.lock은 옮기지 않는다.
-    scp -r data/watchlist data/research data/news ${var.app_user}@${aws_lightsail_static_ip.this.ip_address}:${local.app_dir}/data/
+    # 4. 재생성되는 것만 빼고 data/ 전부를 이관 (로컬 PowerShell에서 실행)
+    #    옮길 것을 나열하지 않고 뺄 것만 나열한다 — 기능이 늘 때마다 이 줄을
+    #    고치는 걸 잊으면 그 기능의 이력이 조용히 사라진다.
+    #    instruments는 /stockdb build로 재생성되고 runtime은 bot.lock뿐이다.
+    #    나머지(signal_scoring 예측 로그, market_sentiment 다이제스트·폴리마켓
+    #    스냅숏 포함)는 다시 만들 수 없거나 LLM 호출을 다시 태워야 한다.
+    scp -r (Get-ChildItem data -Directory -Exclude instruments,runtime | ForEach-Object FullName) ${var.app_user}@${aws_lightsail_static_ip.this.ip_address}:${local.app_dir}/data/
 
     # 5. >>> 로컬 봇을 먼저 정지한다 <<<
 

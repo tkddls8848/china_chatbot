@@ -355,8 +355,17 @@ BRIEFING_NUM_PREDICT = 1024
 
 
 def _parse_allowed_chat_ids() -> frozenset[int]:
+    """명령을 받을 chat_id 목록. 하나도 없으면 기동하지 않는다.
+
+    빈 목록을 "모두 허용"으로 읽으면 안 된다 — 봇 사용자명을 아는 누구나
+    관심종목·리서치 상태를 읽고 고치며 LLM 호출로 Neurons를 태울 수 있다.
+    상태는 채팅별로 나뉘어 있지 않아 공개 전제가 성립하지 않는다.
+    오타로 유효한 값이 하나도 남지 않은 경우도 같게 취급한다. 그쪽이 더
+    위험하다 — 설정했다고 믿는 채로 전체 허용이 된다.
+    """
     raw = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
     ids: set[int] = set()
+    invalid: list[str] = []
     for chunk in raw.split(","):
         chunk = chunk.strip()
         if not chunk:
@@ -364,11 +373,19 @@ def _parse_allowed_chat_ids() -> frozenset[int]:
         try:
             ids.add(int(chunk))
         except ValueError:
-            logging.getLogger(__name__).warning(
-                "ALLOWED_CHAT_IDS에 숫자가 아닌 값이 있어 무시합니다: %s", chunk
-            )
+            invalid.append(chunk)
+    if invalid:
+        logging.getLogger(__name__).warning(
+            "ALLOWED_CHAT_IDS에 숫자가 아닌 값이 있어 무시합니다: %s",
+            ", ".join(invalid),
+        )
+    if not ids:
+        raise ConfigurationError(
+            "ALLOWED_CHAT_IDS에 유효한 chat_id가 없습니다. 명령을 받을 채팅 ID를 "
+            "쉼표로 구분해 .env에 적습니다"
+        )
     return frozenset(ids)
 
 
-# 비어 있으면 모두 허용(기존 동작). 채우면 해당 chat_id에서만 명령을 받는다.
+# 여기 있는 chat_id에서 온 업데이트만 처리한다. 비면 위에서 기동이 멈춘다.
 ALLOWED_CHAT_IDS = _parse_allowed_chat_ids()

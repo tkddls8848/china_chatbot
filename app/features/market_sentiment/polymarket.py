@@ -214,14 +214,16 @@ def parse_contract(record: Any) -> PolymarketContract | None:
     if leg is None:
         return None
     yes_index, yes_price = leg
+    # spread가 **없는** 응답만 최악값(1.0)으로 둔다. 0.0으로 채우면 호가가 없는
+    # 계약이 가장 좋은 계약으로 둔갑한다. 반대로 `or 1.0`으로 쓰면 실제 spread
+    # 0.0(가장 좋은 값)까지 falsy라 최악값이 되어 우량 계약이 표본에서 빠진다.
+    spread = _as_float(record.get("spread"))
     return PolymarketContract(
         condition_id=condition_id,
         event_id=_event_id(record),
         question=question,
         yes_price=yes_price,
-        # spread가 없는 응답은 게이트에서 떨어지도록 최악값(1.0)으로 둔다.
-        # 0.0으로 채우면 호가가 없는 계약이 가장 좋은 계약으로 둔갑한다.
-        spread=_as_float(record.get("spread")) or 1.0,
+        spread=1.0 if spread is None else spread,
         volume=_as_float(record.get("volumeNum")) or 0.0,
         liquidity=_as_float(record.get("liquidityNum")) or 0.0,
         end_date=_parse_end_date(record.get("endDate")),

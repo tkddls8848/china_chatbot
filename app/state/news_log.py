@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from core.clock import ensure_kst, now
+from core.storage import write_json_atomic
 
 
 class NewsLog:
@@ -76,9 +77,8 @@ class NewsLog:
                 }
             )
             self._evict()
-            data = json.dumps(self._entries, ensure_ascii=False)
-            self._file_path.parent.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(self._file_path.write_text, data, encoding="utf-8")
+            entries = list(self._entries)
+            await asyncio.to_thread(write_json_atomic, self._file_path, entries)
             return True
 
     async def snapshot(self, since_hours: int = 24) -> list[dict[str, Any]]:

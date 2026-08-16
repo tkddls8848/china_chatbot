@@ -138,6 +138,12 @@ def test_missing_spread_is_treated_as_worst_case():
     assert contract.spread == 1.0
 
 
+@pytest.mark.parametrize("raw", [0, 0.0, "0", "0.0"])
+def test_zero_spread_is_kept_as_the_best_value(raw):
+    """0은 없는 값이 아니라 가장 좋은 값이다. 최악값으로 바꾸면 우량 계약이 빠진다."""
+    assert parse_contract(_record(spread=raw)).spread == 0.0
+
+
 def test_parse_contracts_skips_broken_records_without_failing_the_page():
     contracts = parse_contracts(
         [_record(), "not a dict", _record(conditionId="0xdef")]

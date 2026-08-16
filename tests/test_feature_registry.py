@@ -68,6 +68,50 @@ def test_registry_rejects_unknown_feature():
         build_feature_registry({"unknown"})
 
 
+@pytest.mark.parametrize(
+    ("enabled", "expected"),
+    [
+        ({"watchlist"}, "watchlist → instruments"),
+        ({"research", "instruments"}, "research → news"),
+        ({"news"}, "news → watchlist"),
+        ({"market_sentiment"}, "market_sentiment → news"),
+        ({"briefing"}, "briefing → news"),
+        ({"signal_scoring"}, "signal_scoring → instruments"),
+        ({"quant"}, "quant → instruments"),
+    ],
+)
+def test_registry_rejects_unsatisfied_dependencies(enabled, expected):
+    with pytest.raises(FeatureConfigurationError, match="의존 기능이 비활성"):
+        build_feature_registry(enabled)
+
+    with pytest.raises(FeatureConfigurationError, match=expected):
+        build_feature_registry(enabled)
+
+
+def test_every_enabled_subset_that_passes_can_install_services():
+    """검증을 통과한 조합은 서비스 설치가 KeyError 없이 끝나야 한다."""
+    closures = [
+        {"instruments"},
+        {"instruments", "quant"},
+        {"instruments", "watchlist"},
+        {"instruments", "watchlist", "news"},
+        {"instruments", "watchlist", "news", "market_sentiment"},
+        {"instruments", "watchlist", "news", "quant", "research"},
+        {"system_admin"},
+        {"web_admin"},
+        EXPECTED_FEATURES,
+    ]
+    for enabled in closures:
+        registry = build_feature_registry(enabled)
+        registry.install_services(SimpleNamespace(bot_data={}))
+
+
+def test_default_feature_set_satisfies_its_own_dependencies():
+    from core.config import FEATURES_ENABLED
+
+    build_feature_registry(FEATURES_ENABLED)
+
+
 def test_disabled_features_are_removed_from_both_menus():
     enabled = frozenset({"instruments", "system_admin"})
     registry = build_feature_registry(enabled)

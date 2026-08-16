@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from core.clock import now, today
+from core.storage import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -65,14 +66,9 @@ class MarketDigestStore:
             self._write()
 
     def _write(self) -> None:
-        try:
-            self._file_path.parent.mkdir(parents=True, exist_ok=True)
-            self._file_path.write_text(
-                json.dumps(self._entries, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            logger.warning("[DIGEST] 캐시를 저장하지 못했습니다: %s", exc)
+        # 실패를 삼키지 않는다. 이전에는 로그만 남기고 정상 반환해서, 하루치
+        # 다이제스트가 디스크에 없는데 메모리에는 있는 상태로 갈렸다.
+        write_json_atomic(self._file_path, self._entries)
 
     async def put(
         self,
@@ -88,8 +84,14 @@ class MarketDigestStore:
         headlines: list[str] | None = None,
         final: bool = False,
     ) -> None:
-        """하루치 다이제스트를 저장한다. 같은 날을 다시 넣으면 덮어쓴다."""
+        """하루치 다이제스트를 저장한다. 같은 날을 다시 넣으면 덮어쓴다.
+
+        저장에 실패하면 메모리도 되돌리고 예외를 올린다. 디스크에 없는 날을
+        "계산 완료"로 기억하면 `missing_digest_days()`가 그 날을 건너뛰어,
+        재시작 전까지 영영 빈 자리로 남는다.
+        """
         async with self._lock:
+            previous = dict(self._entries)
             self._entries[digest_key(market, day)] = {
                 "market": str(market).strip().upper(),
                 "date": day.isoformat(),
@@ -104,7 +106,11 @@ class MarketDigestStore:
                 "final": bool(final),
             }
             self._evict()
-            self._write()
+            try:
+                self._write()
+            except OSError:
+                self._entries = previous
+                raise
 
     async def missing_digest_days(
         self,

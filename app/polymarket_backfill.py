@@ -16,6 +16,7 @@
 
 import asyncio
 import logging
+import os
 import sys
 
 from core.config import (
@@ -51,16 +52,25 @@ _WINDOW_DAYS = POLYMARKET_RETENTION_DAYS - 1
 async def _store_snapshots(snapshots) -> int:
     # 매번 처음부터 다시 쓴다. 같은 날을 두 번 저장하지 않는 store 규칙 때문에
     # 이전 실행이 남아 있으면 새 값이 조용히 무시된다.
-    POLYMARKET_BACKFILL_FILE.unlink(missing_ok=True)
-    store = PolymarketConsensusStore(
-        POLYMARKET_BACKFILL_FILE,
-        retention_days=POLYMARKET_RETENTION_DAYS,
+    #
+    # 그렇다고 결과 파일을 먼저 지우지는 않는다. 중간에 실패하면 새 판정도 없고
+    # 지난 판정도 없는 상태가 된다. 옆 파일에 끝까지 쓴 뒤 마지막에 교체한다.
+    staging = POLYMARKET_BACKFILL_FILE.with_name(
+        f"{POLYMARKET_BACKFILL_FILE.name}.staging"
     )
+    staging.unlink(missing_ok=True)
+    store = PolymarketConsensusStore(staging, retention_days=POLYMARKET_RETENTION_DAYS)
     stored = 0
-    for day in sorted(snapshots):
-        if await store.put_snapshot(day, snapshots[day]):
-            stored += 1
-    report = await store.promotion_report(window_days=_WINDOW_DAYS)
+    try:
+        for day in sorted(snapshots):
+            if await store.put_snapshot(day, snapshots[day]):
+                stored += 1
+        if not stored:
+            return 0
+        report = await store.promotion_report(window_days=_WINDOW_DAYS)
+        os.replace(staging, POLYMARKET_BACKFILL_FILE)
+    finally:
+        staging.unlink(missing_ok=True)
     _print_report(report)
     return stored
 
@@ -117,6 +127,12 @@ def main() -> int:
         return 1
 
     stored = asyncio.run(_store_snapshots(result.snapshots))
+    if not stored:
+        print(
+            "한 날도 저장하지 못했다. 지난 판정 파일은 그대로 두었다.",
+            file=sys.stderr,
+        )
+        return 1
     print(f"\n{POLYMARKET_BACKFILL_FILE} 에 {stored}일치를 기록했다.")
     return 0
 

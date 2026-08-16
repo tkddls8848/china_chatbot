@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from core.clock import ensure_kst, now
+from core.storage import write_json_atomic
 from core.workers import run_non_urgent
 
 logger = logging.getLogger(__name__)
@@ -56,9 +57,10 @@ class WatchlistEventLog:
             )
             if len(self._events) > self._max_events:
                 self._events = self._events[-self._max_events :]
-            data = json.dumps(self._events, ensure_ascii=False, indent=2)
-            self._file_path.parent.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(self._file_path.write_text, data, encoding="utf-8")
+            events = list(self._events)
+            await asyncio.to_thread(
+                write_json_atomic, self._file_path, events, indent=2
+            )
 
     async def snapshot(self, lookback_days: int = 30) -> list[dict[str, Any]]:
         cutoff = now() - timedelta(days=max(1, lookback_days))

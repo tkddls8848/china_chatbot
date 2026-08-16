@@ -2,6 +2,7 @@ import json
 import logging
 import math
 from core.clock import now
+from core.storage import write_json_atomic
 from pathlib import Path
 from typing import Any
 
@@ -47,10 +48,7 @@ class MarketViewManager:
         return {SIGHT_KEY: None, "updated_at": None, "history": [], "last_result": None}
 
     def _persist(self) -> None:
-        self._file_path.write_text(
-            json.dumps(self._data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        write_json_atomic(self._file_path, self._data, indent=2)
 
     def get_sight(self) -> str | None:
         sight = self._data.get(SIGHT_KEY)

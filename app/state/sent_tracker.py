@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.clock import ensure_kst, now
+from core.storage import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,5 @@ class SentNewsTracker:
     async def persist(self):
         async with self._lock:
             self._evict()
-            data = json.dumps(self._id_ts, ensure_ascii=False)
-            self._file_path.parent.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(self._file_path.write_text, data, encoding="utf-8")
+            id_ts = dict(self._id_ts)
+            await asyncio.to_thread(write_json_atomic, self._file_path, id_ts)

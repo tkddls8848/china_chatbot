@@ -1,8 +1,9 @@
 """텔레그램 명령어 접근 제어.
 
-ALLOWED_CHAT_IDS가 비어 있으면 기존처럼 모두 허용한다. 채워져 있으면 해당
-chat_id에서 온 업데이트만 처리하고, 나머지는 조용히 무시한다(봇 존재를
-드러내지 않기 위해 응답하지 않는다).
+ALLOWED_CHAT_IDS에 있는 chat_id에서 온 업데이트만 처리하고, 나머지는 조용히
+무시한다(봇 존재를 드러내지 않기 위해 응답하지 않는다). 목록이 비는 경우는
+없다 — `core/config.py`가 기동 시점에 막는다. 여기에 "비면 모두 허용" 분기를
+되살리면 설정 누락이 곧바로 공개 봇이 된다.
 """
 
 import functools
@@ -57,8 +58,6 @@ def request_label(update: Update, handler_name: str) -> str:
 
 
 def is_allowed_update(update: Update) -> bool:
-    if not ALLOWED_CHAT_IDS:
-        return True
     chat = update.effective_chat
     return chat is not None and chat.id in ALLOWED_CHAT_IDS
 

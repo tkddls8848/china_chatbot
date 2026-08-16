@@ -38,6 +38,22 @@ class FeatureRegistry:
                 f"알 수 없는 기능: {', '.join(sorted(unknown))}"
             )
 
+        # 선언한 의존성을 실제로 검사한다. 예전에는 이름만 확인하고 넘어가서,
+        # `FEATURES_ENABLED`에서 의존 기능을 빼면 서비스 설치 중 KeyError로
+        # 죽거나(watchlist만 켜면 'stock_db'), 기동은 되고 예약 작업만 조용히
+        # 매번 실패했다. 어느 쪽이든 원인이 설정이라는 사실이 드러나지 않는다.
+        missing = sorted(
+            f"{spec.key} → {dependency}"
+            for spec in all_specs
+            if spec.key in requested
+            for dependency in spec.requires
+            if dependency not in requested
+        )
+        if missing:
+            raise FeatureConfigurationError(
+                f"의존 기능이 비활성입니다: {', '.join(missing)}"
+            )
+
         self._all_specs = all_specs
         self._enabled_specs = tuple(
             spec for spec in all_specs if spec.key in requested

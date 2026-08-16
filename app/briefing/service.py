@@ -98,6 +98,22 @@ async def _write_llm_comment(app: Application, payload: dict) -> str:
         return ""
 
 
+async def _deliver(app: Application, sections: list[str], label: str) -> None:
+    """브리핑을 보낸다. 전송에 실패하면 예외를 그대로 올린다.
+
+    여기서 로그만 남기고 정상 반환하면 `/briefing morning`이 한 글자도 보내지
+    못한 채 "처리 완료"로 끝난다 — 운영자가 journalctl을 열기 전에는 실패를
+    알 수 없다. 부를 사람이 없는 예약 실행만 스케줄러 경계에서 잡는다
+    (`features/briefing/feature.py`).
+    """
+    await app.bot.send_message(
+        chat_id=TELEGRAM_CHAT_ID,
+        text=truncate_html("\n\n".join(sections), TELEGRAM_MESSAGE_LIMIT),
+        parse_mode="HTML",
+    )
+    logger.info("[BRIEFING] %s 전송 완료", label)
+
+
 def _news_headlines_payload(news_items: list[dict]) -> list[dict]:
     return [
         {
@@ -139,15 +155,7 @@ async def send_morning_briefing(app: Application, force: bool = False) -> None:
     if len(sections) == 1:
         sections.append("표시할 데이터가 없습니다.")
 
-    try:
-        await app.bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=truncate_html("\n\n".join(sections), TELEGRAM_MESSAGE_LIMIT),
-            parse_mode="HTML",
-        )
-        logger.info("[BRIEFING] 모닝 브리핑 전송 완료")
-    except Exception as e:
-        logger.error("[BRIEFING] 모닝 브리핑 전송 실패: %s", e)
+    await _deliver(app, sections, "모닝 브리핑")
 
 
 async def send_evening_briefing(app: Application, force: bool = False) -> None:
@@ -204,15 +212,7 @@ async def send_evening_briefing(app: Application, force: bool = False) -> None:
     if len(sections) == 1:
         sections.append("표시할 데이터가 없습니다.")
 
-    try:
-        await app.bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=truncate_html("\n\n".join(sections), TELEGRAM_MESSAGE_LIMIT),
-            parse_mode="HTML",
-        )
-        logger.info("[BRIEFING] 마감 브리핑 전송 완료")
-    except Exception as e:
-        logger.error("[BRIEFING] 마감 브리핑 전송 실패: %s", e)
+    await _deliver(app, sections, "마감 브리핑")
 
 
 async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
