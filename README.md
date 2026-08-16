@@ -62,12 +62,22 @@ $env:RUN_CLOUDFLARE_SMOKE='1'
 python -m pytest -q -m cloudflare_smoke
 ```
 
-Polymarket Gamma API 읽기 스모크도 같은 방식으로 제외되어 있습니다. 인증과 LLM을
-쓰지 않으므로 Neurons를 소비하지 않지만, 운영 서버는 출구 IP가 달라 로컬에서
-열린다고 서버에서 열리는 것이 아닙니다. 수집을 켜기 전에 서버에서 돌립니다.
+Polymarket 읽기 스모크(Gamma 시장 목록과 CLOB 과거 시세)도 같은 방식으로
+제외되어 있습니다. 인증과 LLM을 쓰지 않으므로 Neurons를 소비하지 않지만, 운영
+서버는 출구 IP가 달라 로컬에서 열린다고 서버에서 열리는 것이 아닙니다. 수집을
+켜기 전에 서버에서 돌립니다.
 
 ```bash
 RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
+```
+
+승격 게이트는 30일을 기다리지 않고 과거 시세로 먼저 판정합니다. 읽기 전용이며
+`data/market_sentiment/polymarket_backfill.json`에만 씁니다(라이브 스냅숏은
+건드리지 않습니다). 백필로 답할 수 없는 항목은
+`app/features/market_sentiment/polymarket_history.py` 첫머리에 있습니다.
+
+```powershell
+.\venv\Scripts\python.exe app\polymarket_backfill.py
 ```
 
 ## 주요 기능

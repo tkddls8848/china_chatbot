@@ -73,6 +73,12 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   입력·브리핑 payload에 넣지 않고 `/market` 하단 별도 패널에만 그린다. 방향은
   `polymarket_rules.py`의 명시적 allowlist로만 정하고 LLM에 묻지 않는다.
   판정 근거는 `/system polymarket`이 계산한다. 자세한 규약은 `docs/aws-next-steps.md`.
+- **승격 판정은 30일을 기다리지 않는다.** `app/polymarket_backfill.py`가 CLOB
+  과거 시세로 지난 31일 스냅숏을 소급 작성해 같은 게이트를 돌린다. 결과는
+  `polymarket_backfill.json`에 따로 쓰고 라이브 스냅숏과 섞지 않는다 — 백필에는
+  과거 호가가 없고 수량 게이트가 조회 시점 값으로 적용돼 있다. 백필로 답할 수
+  없는 두 가지(median spread, job 가동률)는 `polymarket_history.py` 첫머리에
+  적어 두었고, 지운 채로 승격하지 않는다.
 - 종목 canonical code는 시장마다 형식이 다르다. CN·HK는 **접두사 없는 숫자 코드**
   (`600519`, `00700`)이고, US·KR만 `US:NASDAQ:AAPL`·`KR:KOSPI:005930` 형식이다
   (`stocks/universe.py`의 `stock_key`). KR 6자리는 A주 코드와 겹치므로 US·KR에만

@@ -304,7 +304,13 @@ MARKET_DIGEST_COUNT_TOLERANCE_RATIO = 0.2
 # 그린다. 수집과 표시를 분리해 두는 이유는 30일 섀도 파일럿 때문이다 —
 # 수집만 켜 두고(ENABLED) 승격 게이트를 통과할 때까지 패널은 끈다(PANEL).
 POLYMARKET_CONSENSUS_FILE = DATA_DIR / "market_sentiment" / "polymarket_consensus.json"
+# 백필(`app/polymarket_backfill.py`)이 쓰는 별도 파일. 라이브 스냅숏과 섞지
+# 않는다 — 백필 값에는 과거 호가가 없고 수량 게이트가 조회 시점 값으로
+# 적용돼 있어, 같은 파일에 넣으면 라이브 판정의 근거가 오염된다.
+POLYMARKET_BACKFILL_FILE = DATA_DIR / "market_sentiment" / "polymarket_backfill.json"
 POLYMARKET_BASE_URL = "https://gamma-api.polymarket.com"
+# 과거 시세는 Gamma가 아니라 CLOB에 있다. 인증은 마찬가지로 없다.
+POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
 POLYMARKET_ENABLED = _env_bool("POLYMARKET_ENABLED", "false")
 POLYMARKET_PANEL_ENABLED = _env_bool("POLYMARKET_PANEL_ENABLED", "false")
 POLYMARKET_TIMEOUT = 20

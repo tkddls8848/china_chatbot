@@ -35,8 +35,13 @@
 Neurons를 쓰지 않는다).
 
 ```
-2. 서버 설정 확인·필요 시 반영  →  1. Neurons 실측(며칠)  →  3. Polymarket 파일럿(30일)  →  판정
+2. 서버 설정 확인·필요 시 반영  →  1. Neurons 실측(며칠)  →  3. Polymarket 가동률 확인(일주일)  →  승격
 ```
+
+**Polymarket 판정은 더 이상 30일을 기다리지 않는다.** 승격 게이트의 실질은
+로컬 백필(`docs/next-steps.md` 1)이 하루 만에 판정하고, 서버에 남는 일은 수집
+job이 실제로 매일 도는지 확인하는 것뿐이다. 백필이 미달이면 서버에서 할 일은
+켜는 게 아니라 3-3의 철수다.
 
 ---
 
@@ -110,7 +115,7 @@ SCHEDULER_INTERVAL_MINUTES=20      # 5
 
 ---
 
-## 3. Polymarket 컨센서스 — 30일 섀도 파일럿 (조건부)
+## 3. Polymarket 컨센서스 — 백필 판정 뒤 가동률 확인 (조건부)
 
 ### 전제: 즉시 편입은 비권고
 
@@ -141,8 +146,7 @@ HTTP 200으로 열린다. 기술 통합은 가능하고 LLM 비용도 0이다. �
 
 그래서 `/markets` + offset 순회로 바꾸고 `end_date_max`를 서버에 넘긴다. 수정 뒤
 실측으로 **계약 24건 / theme 5개 / 이벤트 20개**가 선정된다(승격 기준은 theme 3개,
-일 3이벤트). 남은 건 **서버에서 스모크를 통과시킨 뒤 수집만 켜고 30일 관찰해 승격
-여부를 판정하는 운영**이다.
+일 3이벤트).
 
 | 자리 | 파일 |
 |---|---|
@@ -150,6 +154,7 @@ HTTP 200으로 열린다. 기술 통합은 가능하고 LLM 비용도 0이다. �
 | 게이트·theme allowlist·polarity | `app/features/market_sentiment/polymarket_rules.py` |
 | 08:35 KST 스냅숏 job | `app/features/market_sentiment/snapshot.py` |
 | 스냅숏 저장·일별 정렬·게이트 계산 | `app/state/polymarket_consensus.py` |
+| 과거 시세 백필(일회성 도구) | `app/features/market_sentiment/polymarket_history.py`, `app/polymarket_backfill.py` |
 | 하단 패널 | `app/features/market_sentiment/chart.py` |
 
 설계상 지킨 것(회귀 테스트가 붙어 있으니 바꿀 때 함께 본다):
@@ -168,10 +173,13 @@ HTTP 200으로 열린다. 기술 통합은 가능하고 LLM 비용도 0이다. �
 - 방향은 명시적 allowlist로만 정한다. **LLM에게 묻지 않는다.** GDP 구간·금리
   결정처럼 국면 의존적인 질문은 제외한다.
 
-### 3-1. 서버 읽기 스모크 (착수 조건)
+### 3-1. 착수 조건: 로컬 백필 판정과 서버 읽기 스모크
 
-운영 Lightsail은 출구 IP가 달라 **한국 PC에서 열렸다는 사실이 서버 접근을
-보장하지 않는다.** 켜기 전에 서버에서 한 번 돌린다.
+**먼저 로컬에서 백필을 돌려 게이트를 판정한다**(`docs/next-steps.md` 1). 미달이면
+서버에서 켤 일이 없다 — 곧장 3-3의 철수다.
+
+백필이 통과했다면 서버에서 스모크를 한 번 돌린다. 운영 Lightsail은 출구 IP가
+달라 **한국 PC에서 열렸다는 사실이 서버 접근을 보장하지 않는다.**
 
 ```bash
 RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
@@ -179,9 +187,9 @@ RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
 
 - 통과하면 3-2로 간다.
 - 서버에서 막히면 **거기서 끝낸다.** 프록시를 붙여 우회하지 않는다 — 우회로를
-  유지할 가치가 있는 신호가 아니다. 3-4의 철수 절차를 밟는다.
+  유지할 가치가 있는 신호가 아니다. 3-3의 철수 절차를 밟는다.
 
-### 3-2. 30일 섀도 운영
+### 3-2. 일주일 가동률 확인 뒤 승격
 
 서버 `.env`에 아래 한 줄만 넣는다. `POLYMARKET_PANEL_ENABLED`는 `false` 그대로
 둔다 — **수집하되 표시하지 않는다.**
@@ -190,6 +198,13 @@ RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
 POLYMARKET_ENABLED=true
 ```
 
+여기서 보는 것은 **하나뿐이다: job이 실제로 매일 스냅숏을 남기는가.** 게이트의
+실질(theme 수·기여도·일별 변화의 밀도)은 백필이 이미 판정했고, 그 값은 일주일
+더 본다고 달라지지 않는다. 반대로 가동률은 백필이 절대 답하지 못한다.
+
+- 일주일 뒤 `/system polymarket`의 **성공 스냅숏**이 7일 중 6일 이상이면
+  `POLYMARKET_PANEL_ENABLED=true`로 올린다. 이 화면의 나머지 항목은 아직 창이
+  짧아 미달로 뜬다 — 판정 근거는 백필 쪽이다.
 - 스냅숏은 매일 08:35 KST에 찍고, 실패하면 **09:35·10:35에 재시도**한다. 세 번
   모두 놓친 날만 비고, 그날과 다음 날 변화가 계산되지 않는다. 그 이상 늦은
   따라잡기는 **일부러 넣지 않았다**(오후에 찍은 값은 다른 날과 같은 축에 놓을 수
@@ -199,46 +214,44 @@ POLYMARKET_ENABLED=true
   시간대를 비켜서 한다. 창을 벗어난 재시작은 스냅숏에 영향을 주지 않는다.
 - 진행 상황은 `/system polymarket`으로 아무 때나 볼 수 있다. 시스템 상태 화면의
   **🎲 폴리마켓** 버튼(`nav:system:polymarket`)이 같은 보고서를 연다.
-- 게이트 임계값(`POLYMARKET_MIN_VOLUME` 등)은 파일럿 도중에 바꾸지 않는다.
-  바꾸면 앞뒤 기간의 표본이 달라져 30일을 한 창으로 볼 수 없다. 그래서 env가
-  아니라 `config.py`의 상수다 — 바꾸려면 코드를 고쳐야 하고 git에 남는다.
+- 게이트 임계값(`POLYMARKET_MIN_VOLUME` 등)은 백필과 라이브 사이에 바꾸지
+  않는다. 바꾸면 두 표본이 달라져 백필 판정을 라이브에 얹을 수 없다. 그래서
+  env가 아니라 `config.py`의 상수다 — 바꾸려면 코드를 고쳐야 하고 git에 남는다.
   env로 남은 Polymarket 키는 `POLYMARKET_ENABLED`·`POLYMARKET_PANEL_ENABLED`
   둘뿐이다.
 
-### 3-3. 승격 판정
+승격 게이트는 `/system polymarket`과 백필이 같은 코드로 계산한다. 임계값·부등호·
+분모가 코드와 이 표에서 일치하는지는 확인했다(6개 전부 일치, 최소 조건 `>=`·
+최대 조건 `<=`로 경계 포함, 밀집일 비율의 분모는 30일이 아니라 유효 daily delta 수).
 
-`/system polymarket`이 아래를 계산해 보여 준다. **모두 통과할 때만**
-`POLYMARKET_PANEL_ENABLED=true`로 올린다.
-
-임계값·부등호·분모가 코드와 이 표에서 일치하는지는 파일럿 착수 전에 확인했다
-(6개 전부 일치, 최소 조건 `>=`·최대 조건 `<=`로 경계 포함, 밀집일 비율의 분모는
-30일이 아니라 유효 daily delta 수). 파일럿 도중에는 이 값을 바꾸지 않는다.
-
-| 게이트 | 기준 |
-|---|---|
-| 성공 스냅숏 | 30일 중 24일 이상(80%) |
-| 유효 daily delta | 24일 이상 |
-| 공통 이벤트 3개 이상인 날 | 유효일의 80% 이상 |
-| 독립 theme | 3개 이상 |
-| 최대 theme 기여도 | 50% 이하 |
-| median spread | 5%p 이하 |
+| 게이트 | 기준 | 백필로 판정되나 |
+|---|---|---|
+| 성공 스냅숏 | 30일 중 24일 이상(80%) | 데이터 유무만. 가동률은 라이브 |
+| 유효 daily delta | 24일 이상 | 예 |
+| 공통 이벤트 3개 이상인 날 | 유효일의 80% 이상 | 예 |
+| 독립 theme | 3개 이상 | 예 |
+| 최대 theme 기여도 | 50% 이하 | 예 |
+| median spread | 5%p 이하 | 아니오(과거 호가가 없어 오늘 값만) |
 
 승격한 뒤에는 `/market`을 한 번 호출해 하단 패널이 붙는지, 위 순위·캡션이
 그대로인지 눈으로 확인한다.
 
-### 3-4. 실패 시 철수 (하나라도 미달이면)
+### 3-3. 실패 시 철수 (하나라도 미달이면)
 
 기준 미달을 "조금만 더 보자"로 넘기지 않는다. 아래를 그대로 실행하고 이 항목을
 이 문서에서 지운다.
 
 1. 서버 `.env`에서 `POLYMARKET_*` 전부 제거, 봇 재기동.
-2. 서버 `data/market_sentiment/polymarket_consensus.json` 삭제.
+2. 서버·로컬의 `data/market_sentiment/polymarket_consensus.json`과
+   `polymarket_backfill.json` 삭제.
 3. 코드 제거 — 파일 통째 삭제:
    - `app/features/market_sentiment/polymarket.py`
    - `app/features/market_sentiment/polymarket_rules.py`
+   - `app/features/market_sentiment/polymarket_history.py`
    - `app/features/market_sentiment/snapshot.py`
+   - `app/polymarket_backfill.py`
    - `app/state/polymarket_consensus.py`
-   - `tests/test_polymarket_{client,rules,consensus,panel,wiring,smoke}.py`
+   - `tests/test_polymarket_{client,rules,consensus,panel,wiring,history,smoke}.py`
 4. 코드 제거 — 부분 되돌리기:
    - `app/core/config.py`의 `POLYMARKET_*` 블록
    - `app/features/market_sentiment/feature.py`의 서비스·job 조립

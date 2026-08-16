@@ -14,10 +14,14 @@ Neurons는 0/일이다. 여기서는 공개 시세만 읽으며 주문·체결 A
 전부 `horizon_too_far`로 떨어져 선정이 0건이 된다. 정렬은 거래량 내림차순이라
 뒤 페이지일수록 얇아진다 — 그래서 `_MAX_PAGES`에서 끊는다.
 
-Gamma가 돌려주는 `outcomes`·`outcomePrices`는 **JSON 문자열**이다
+Gamma가 돌려주는 `outcomes`·`outcomePrices`·`clobTokenIds`는 **JSON 문자열**이다
 (`'["Yes", "No"]'`). 리스트로 오는 응답도 있어 둘 다 같은 코드로 읽는다.
 우리가 정한 형식이 아니라 외부 응답 형식이므로 이 모듈에서 한 번만 흡수하고,
 바깥으로는 `PolymarketContract` 한 가지 모양만 내보낸다.
+
+HTTP 요청·재시도·오류 분류는 `_JsonEndpoint`에 모아 둔다. 과거 시세를 읽는
+`polymarket_history.py`는 host도 경로도 다르지만 재시도 규칙은 같아야 해서
+같은 base를 쓴다 — 재시도를 두 벌로 두면 한쪽만 고치는 날이 온다.
 """
 
 from __future__ import annotations
@@ -81,6 +85,10 @@ class PolymarketContract:
 
     `event_id`는 같은 이벤트의 자식 계약(S&P 임계값 8개 등)을 하나로 축약할 때
     쓴다. 비어 있으면 축약 단계에서 `condition_id`를 이벤트로 취급한다.
+
+    `yes_token_id`는 CLOB 과거 시세(`polymarket_history.py`)를 조회하는 키다.
+    Gamma의 `conditionId`로는 시세 이력을 부를 수 없어 Yes 다리의 토큰 id를
+    여기서 함께 들고 나온다. 일별 스냅숏 경로는 이 값을 쓰지 않는다.
     """
 
     condition_id: str
@@ -93,6 +101,7 @@ class PolymarketContract:
     end_date: datetime | None
     active: bool
     closed: bool
+    yes_token_id: str = ""
 
 
 def _truncate(text: Any, limit: int = _MAX_ERROR_DETAIL_CHARS) -> str:
@@ -149,8 +158,11 @@ def _parse_end_date(value: Any) -> datetime | None:
     return ensure_kst(parsed)
 
 
-def _yes_price(record: dict[str, Any]) -> float | None:
-    """Yes 결과의 확률을 뽑는다. 이진 Yes/No 시장이 아니면 None."""
+def _yes_leg(record: dict[str, Any]) -> tuple[int, float] | None:
+    """Yes 결과의 (자리, 확률)을 뽑는다. 이진 Yes/No 시장이 아니면 None.
+
+    자리를 함께 돌려주는 이유는 `clobTokenIds`가 `outcomes`와 같은 순서라서다.
+    """
     outcomes = _as_list(record.get("outcomes"))
     prices = _as_list(record.get("outcomePrices"))
     if not outcomes or not prices or len(outcomes) != len(prices) or len(outcomes) != 2:
@@ -167,7 +179,16 @@ def _yes_price(record: dict[str, Any]) -> float | None:
         return None
     if abs(sum(parsed) - 1.0) > _PRICE_SUM_TOLERANCE:
         return None
-    return parsed[labels.index("yes")]
+    index = labels.index("yes")
+    return index, parsed[index]
+
+
+def _token_id(record: dict[str, Any], index: int) -> str:
+    """Yes 다리의 CLOB 토큰 id. 없으면 빈 문자열(과거 시세 조회만 못 한다)."""
+    token_ids = _as_list(record.get("clobTokenIds"))
+    if not token_ids or index >= len(token_ids):
+        return ""
+    return str(token_ids[index] or "").strip()
 
 
 def _event_id(record: dict[str, Any]) -> str:
@@ -189,9 +210,10 @@ def parse_contract(record: Any) -> PolymarketContract | None:
     question = str(record.get("question") or "").strip()
     if not condition_id or not question:
         return None
-    yes_price = _yes_price(record)
-    if yes_price is None:
+    leg = _yes_leg(record)
+    if leg is None:
         return None
+    yes_index, yes_price = leg
     return PolymarketContract(
         condition_id=condition_id,
         event_id=_event_id(record),
@@ -205,6 +227,7 @@ def parse_contract(record: Any) -> PolymarketContract | None:
         end_date=_parse_end_date(record.get("endDate")),
         active=_as_bool(record.get("active"), True),
         closed=_as_bool(record.get("closed"), False),
+        yes_token_id=_token_id(record, yes_index),
     )
 
 
@@ -229,21 +252,30 @@ def _horizon_cutoff(max_horizon_days: int) -> str:
     반드시 UTC로 변환한 뒤 찍는다.
     """
     cutoff = now() + timedelta(days=max(1, max_horizon_days))
-    return cutoff.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _gamma_timestamp(cutoff)
 
 
-class PolymarketClient:
-    """Gamma `/markets` 읽기 전용 클라이언트."""
+def _days_ago_cutoff(days: int) -> str:
+    """과거 쪽 만기 경계. 백필이 `end_date_min`으로 넘긴다."""
+    return _gamma_timestamp(now() - timedelta(days=max(0, days)))
+
+
+def _gamma_timestamp(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class _JsonEndpoint:
+    """재시도와 오류 분류를 담은 읽기 전용 JSON 엔드포인트."""
 
     def __init__(
         self,
         *,
-        base_url: str,
+        url: str,
         timeout: float,
         session: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ):
-        self._url = f"{base_url.rstrip('/')}/markets"
+        self._url = url
         self._timeout = timeout
         self._session = session if session is not None else requests.Session()
         self._sleep = sleep
@@ -251,43 +283,6 @@ class PolymarketClient:
     @property
     def url(self) -> str:
         return self._url
-
-    def fetch_open_contracts(
-        self,
-        *,
-        min_volume: float,
-        min_liquidity: float,
-        max_horizon_days: int,
-    ) -> list[PolymarketContract]:
-        """열려 있는 이진 계약을 거래량 상위부터 읽어 온다.
-
-        수량·지평 필터는 서버에도 넘겨 페이지를 아끼지만, 최종 판정은 규칙
-        모듈의 게이트가 다시 한다(서버가 필터를 무시해도 값이 새지 않는다).
-        """
-        contracts: list[PolymarketContract] = []
-        pages = 0
-        while pages < _MAX_PAGES:
-            payload = self._request(
-                {
-                    "closed": "false",
-                    "active": "true",
-                    "limit": _PAGE_SIZE,
-                    "offset": pages * _PAGE_SIZE,
-                    "volume_num_min": min_volume,
-                    "liquidity_num_min": min_liquidity,
-                    "end_date_max": _horizon_cutoff(max_horizon_days),
-                    # 거래량 내림차순. 앞 페이지일수록 게이트를 통과할 확률이 높다.
-                    "order": "volumeNum",
-                    "ascending": "false",
-                }
-            )
-            pages += 1
-            records = _extract_records(payload)
-            contracts.extend(parse_contracts(records))
-            if len(records) < _PAGE_SIZE:
-                break
-        logger.info("[POLYMARKET] pages=%d contracts=%d", pages, len(contracts))
-        return contracts
 
     def _request(self, params: dict[str, Any]) -> Any:
         last_error: PolymarketError | None = None
@@ -371,6 +366,95 @@ class PolymarketClient:
             error.detail or "-",
         )
         return error
+
+
+class PolymarketClient(_JsonEndpoint):
+    """Gamma `/markets` 읽기 전용 클라이언트."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout: float,
+        session: Any | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        super().__init__(
+            url=f"{base_url.rstrip('/')}/markets",
+            timeout=timeout,
+            session=session,
+            sleep=sleep,
+        )
+
+    def fetch_open_contracts(
+        self,
+        *,
+        min_volume: float,
+        min_liquidity: float,
+        max_horizon_days: int,
+    ) -> list[PolymarketContract]:
+        """열려 있는 이진 계약을 거래량 상위부터 읽어 온다.
+
+        수량·지평 필터는 서버에도 넘겨 페이지를 아끼지만, 최종 판정은 규칙
+        모듈의 게이트가 다시 한다(서버가 필터를 무시해도 값이 새지 않는다).
+        """
+        return self._walk(
+            {
+                "closed": "false",
+                "active": "true",
+                "volume_num_min": min_volume,
+                "liquidity_num_min": min_liquidity,
+                "end_date_max": _horizon_cutoff(max_horizon_days),
+            }
+        )
+
+    def fetch_expired_contracts(
+        self,
+        *,
+        min_volume: float,
+        since_days: int,
+    ) -> list[PolymarketContract]:
+        """최근 `since_days` 안에 만기가 온 계약을 읽어 온다(백필 전용).
+
+        일별 스냅숏 경로는 이 메서드를 쓰지 않는다. 과거를 재구성할 때만 필요한데,
+        열린 계약만 모아 과거를 그리면 **살아남은 계약만 남는다** — 그 기간에
+        만기로 사라진 계약이 통째로 빠져 짝이 끊기는 일이 없는 것처럼 보인다.
+
+        **유동성·호가 필터를 넘기지 않는다.** 청산된 계약의 `liquidityNum`·
+        `spread`는 결제 후 값이라 당시 유동성이 아니다. 거래량은 누적이라 만기
+        뒤에도 남으므로 그것만 서버에 넘긴다.
+        """
+        return self._walk(
+            {
+                "closed": "true",
+                "volume_num_min": min_volume,
+                "end_date_min": _days_ago_cutoff(since_days),
+                "end_date_max": _days_ago_cutoff(0),
+            }
+        )
+
+    def _walk(self, params: dict[str, Any]) -> list[PolymarketContract]:
+        """offset을 돌며 거래량 상위부터 계약을 모은다."""
+        contracts: list[PolymarketContract] = []
+        pages = 0
+        while pages < _MAX_PAGES:
+            payload = self._request(
+                {
+                    **params,
+                    "limit": _PAGE_SIZE,
+                    "offset": pages * _PAGE_SIZE,
+                    # 거래량 내림차순. 앞 페이지일수록 게이트를 통과할 확률이 높다.
+                    "order": "volumeNum",
+                    "ascending": "false",
+                }
+            )
+            pages += 1
+            records = _extract_records(payload)
+            contracts.extend(parse_contracts(records))
+            if len(records) < _PAGE_SIZE:
+                break
+        logger.info("[POLYMARKET] pages=%d contracts=%d", pages, len(contracts))
+        return contracts
 
 
 def _parse_retry_after(value: Any) -> float:

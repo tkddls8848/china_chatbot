@@ -178,6 +178,50 @@ class SelectedContract:
     polarity: int
 
 
+def static_rejection(
+    contract: PolymarketContract,
+    *,
+    min_volume: float,
+    min_liquidity: float,
+    max_spread: float,
+) -> str:
+    """시점과 무관한 수량·호가 게이트. 통과하면 빈 문자열.
+
+    **여기 쓰이는 값은 언제나 "지금"의 값이다.** Gamma는 과거 시점의 유동성·
+    호가를 주지 않으므로, 백필은 이 게이트를 과거 각 날짜가 아니라 조회 시점의
+    값으로 한 번만 적용한다(`polymarket_history.py`가 그 한계를 적어 둔다).
+    """
+    if contract.volume < min_volume:
+        return "volume"
+    if contract.liquidity < min_liquidity:
+        return "liquidity"
+    if contract.spread > max_spread:
+        return "spread"
+    return ""
+
+
+def moment_rejection(
+    contract: PolymarketContract,
+    price: float,
+    moment: datetime,
+    *,
+    max_horizon_days: int,
+) -> str:
+    """그 시점에만 뜻이 있는 게이트(잔여 지평·가격 극단). 통과하면 빈 문자열.
+
+    백필은 과거 날짜마다 이 함수를 다시 부른다. 만기 이틀 전부터는 확률이 0/1로
+    수렴하는 기계적 움직임이 커서, 같은 계약이라도 어제는 되고 오늘은 안 된다.
+    """
+    horizon_reason = _horizon_reason(contract, moment)
+    if horizon_reason:
+        return horizon_reason
+    if (contract.end_date - moment).days > max_horizon_days:
+        return "horizon_too_far"
+    if not (_EXTREME_PRICE_MARGIN <= price <= 1 - _EXTREME_PRICE_MARGIN):
+        return "price_extreme"
+    return ""
+
+
 def _horizon_reason(contract: PolymarketContract, moment: datetime) -> str:
     if contract.end_date is None:
         return "no_end_date"
@@ -218,26 +262,23 @@ def select_contracts(
         if not contract.active:
             reject("inactive")
             continue
-        if contract.volume < min_volume:
-            reject("volume")
+        static_reason = static_rejection(
+            contract,
+            min_volume=min_volume,
+            min_liquidity=min_liquidity,
+            max_spread=max_spread,
+        )
+        if static_reason:
+            reject(static_reason)
             continue
-        if contract.liquidity < min_liquidity:
-            reject("liquidity")
-            continue
-        if contract.spread > max_spread:
-            reject("spread")
-            continue
-        horizon_reason = _horizon_reason(contract, moment)
-        if horizon_reason:
-            reject(horizon_reason)
-            continue
-        if (contract.end_date - moment).days > max_horizon_days:
-            reject("horizon_too_far")
-            continue
-        if not (
-            _EXTREME_PRICE_MARGIN <= contract.yes_price <= 1 - _EXTREME_PRICE_MARGIN
-        ):
-            reject("price_extreme")
+        moment_reason = moment_rejection(
+            contract,
+            contract.yes_price,
+            moment,
+            max_horizon_days=max_horizon_days,
+        )
+        if moment_reason:
+            reject(moment_reason)
             continue
         classified = classify_theme(contract.question)
         if classified is None:
