@@ -31,16 +31,12 @@ from core.config import (
 )
 from features.market_sentiment.polymarket import PolymarketClient, PolymarketError
 from features.market_sentiment.polymarket_history import (
+    BACKFILL_CAVEATS,
     PolymarketHistoryClient,
     run_backfill,
 )
 from state import PolymarketConsensusStore
 
-# 백필로는 답할 수 없는 게이트. 표에서 결과 대신 이 사유를 보여 준다.
-_UNDECIDABLE = {
-    "median_spread": "과거 호가가 없어 오늘 선정분으로만 계산됨",
-    "snapshot_days": "수집 job 가동률은 라이브에서만 확인됨",
-}
 _LABELS = {
     "snapshot_days": "성공 스냅숏(일)",
     "delta_days": "유효 일별 변화(일)",
@@ -74,7 +70,7 @@ def _print_report(report: dict) -> None:
     print(f"■ 승격 게이트 (백필 {report['window_days']}일)")
     for key, item in report["criteria"].items():
         mark = "PASS" if item["passed"] else "FAIL"
-        note = _UNDECIDABLE.get(key, "")
+        note = BACKFILL_CAVEATS.get(key, "")
         line = (
             f"  [{mark}] {_LABELS.get(key, key)}: "
             f"{item['value']} (기준 {item['threshold']})"
@@ -82,7 +78,8 @@ def _print_report(report: dict) -> None:
         print(f"{line}  ※ {note}" if note else line)
     print()
     print(
-        "모든 항목 통과. 남은 확인은 수집 job 가동률뿐이다."
+        "모든 항목 통과. 남은 확인은 수집 job 가동률뿐이다"
+        " — `/system polymarket`에서 나란히 본다."
         if report["passed"]
         else "미달 항목이 있다. 라이브 30일을 더 기다려도 같은 항목이 통과할 근거는 없다."
     )

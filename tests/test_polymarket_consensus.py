@@ -266,3 +266,42 @@ def test_empty_store_fails_every_gate_without_crashing(store):
 
     assert report["passed"] is False
     assert all(not item["passed"] for item in report["criteria"].values())
+
+
+# ── 가동률 ────────────────────────────────────────────
+
+def test_uptime_counts_only_the_recent_window(store):
+    """라이브가 답하는 유일한 질문이다 — 백필에는 우리 job의 흔적이 없다."""
+    day = today()
+
+    async def scenario():
+        for offset in (0, 1, 2, 20):
+            await store.put_snapshot(day - timedelta(days=offset), {"a": _entry(0.4)})
+        return await store.uptime()
+
+    uptime = asyncio.run(scenario())
+
+    # 20일 전 스냅숏은 7일 창 밖이다.
+    assert uptime["value"] == 3
+    assert uptime["window_days"] == 7
+    assert uptime["last_date"] == day.isoformat()
+
+
+def test_uptime_passes_once_six_of_seven_days_are_captured(store):
+    day = today()
+
+    async def scenario(days):
+        for offset in range(days):
+            await store.put_snapshot(day - timedelta(days=offset), {"a": _entry(0.4)})
+        return await store.uptime()
+
+    assert asyncio.run(scenario(5))["passed"] is False
+    assert asyncio.run(scenario(6))["passed"] is True
+
+
+def test_empty_store_reports_no_uptime(store):
+    uptime = asyncio.run(store.uptime())
+
+    assert uptime["value"] == 0
+    assert uptime["last_date"] == ""
+    assert uptime["passed"] is False

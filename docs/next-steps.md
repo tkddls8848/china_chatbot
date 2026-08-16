@@ -13,6 +13,11 @@ SSH 개인키, Lightsail IAM 권한이 모두 없다.
 세우거나 `POLYMARKET_ENABLED`를 켤 필요가 없고, 읽기 전용이라 Neurons도 쓰지
 않는다.
 
+**여기서 돌리는 것은 판정을 하루라도 빨리 보기 위해서다.** 서버에서는 수집을
+켜는 날 백필도 함께 돌린다(`docs/aws-next-steps.md` 3-2) — `/system polymarket`이
+두 축을 한 화면에 그리려면 백필 파일이 서버에 있어야 한다. 둘 중 어느 쪽을
+먼저 하든 판정 결과는 같다.
+
 ```powershell
 $env:RUN_POLYMARKET_SMOKE=1; .\venv\Scripts\python.exe -m pytest -q -m polymarket_smoke
 .\venv\Scripts\python.exe app\polymarket_backfill.py
@@ -37,7 +42,7 @@ $env:RUN_POLYMARKET_SMOKE=1; .\venv\Scripts\python.exe -m pytest -q -m polymarke
 
 **판정과 조치**
 
-- 여유 있게 통과 → `docs/aws-next-steps.md` 3-2로 간다(수집만 켜고 일주일,
-  가동률만 확인한 뒤 패널 승격).
+- 여유 있게 통과 → `docs/aws-next-steps.md` 3-2로 간다(수집을 켜고 백필을 서버에서
+  한 번 더 돌린 뒤, 일주일 가동률만 확인하고 패널 승격).
 - 미달 → 3-3의 철수 절차를 그대로 밟는다. 라이브로 30일을 더 봐도 같은 항목이
   통과할 근거는 없다.

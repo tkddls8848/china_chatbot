@@ -38,8 +38,13 @@ from core.clock import now, today
 
 logger = logging.getLogger(__name__)
 
-# 승격 게이트(docs/aws-next-steps.md). 30일 섀도 파일럿을 이 기준으로 판정한다.
+# 승격 게이트(docs/aws-next-steps.md). 백필이 이 기준으로 판정한다.
 PROMOTION_WINDOW_DAYS = 30
+# 라이브 수집에서 확인하는 것은 **가동률뿐이다.** 게이트의 실질은 백필이 이미
+# 판정했고 일주일 더 본다고 달라지지 않는다. 반대로 "매일 08:35에 봇이 살아
+# 있는가"는 백필이 절대 답하지 못한다 — 과거 시세에는 우리 job의 흔적이 없다.
+UPTIME_WINDOW_DAYS = 7
+_MIN_UPTIME_DAYS = 6
 _MIN_SNAPSHOT_DAYS = 24
 _MIN_DELTA_DAYS = 24
 _MIN_EVENTS_PER_DAY = 3
@@ -215,6 +220,22 @@ class PolymarketConsensusStore:
                     continue
                 changes.append({"date": day.isoformat(), **change})
         return changes
+
+    async def uptime(self, window_days: int = UPTIME_WINDOW_DAYS) -> dict[str, Any]:
+        """최근 기간에 스냅숏이 남은 날 수. 승격의 나머지 절반이다.
+
+        백필과 나란히 돌리는 라이브 수집이 답하는 유일한 질문이라, 게이트 표와
+        같은 모양(value·threshold·passed)으로 돌려준다.
+        """
+        oldest = today() - timedelta(days=max(1, window_days) - 1)
+        days = [day for day in await self.snapshot_dates() if day >= oldest]
+        return {
+            "window_days": window_days,
+            "value": len(days),
+            "threshold": _MIN_UPTIME_DAYS,
+            "passed": len(days) >= _MIN_UPTIME_DAYS,
+            "last_date": days[-1].isoformat() if days else "",
+        }
 
     async def _spreads(self, window_days: int) -> list[float]:
         current_day = today()

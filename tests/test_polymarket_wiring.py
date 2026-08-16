@@ -146,32 +146,100 @@ def _run_system(bot_data, args):
     return message.texts[-1]
 
 
-def test_system_polymarket_reports_that_collection_is_off():
+class _UptimeStore:
+    def __init__(self, value=6, passed=True):
+        self._value = value
+        self._passed = passed
+
+    async def uptime(self, window_days=7):
+        return {
+            "window_days": window_days,
+            "value": self._value,
+            "threshold": 6,
+            "passed": self._passed,
+            "last_date": "2026-08-16",
+        }
+
+
+def _backfill_report(passed=False):
+    return {
+        "window_days": 30,
+        "criteria": {
+            "snapshot_days": {"value": 28, "threshold": 24, "passed": True},
+            "delta_days": {"value": 20, "threshold": 24, "passed": passed},
+        },
+        "passed": passed,
+    }
+
+
+class _BackfillStore:
+    def __init__(self, passed=False):
+        self._passed = passed
+
+    async def promotion_report(self, window_days=30):
+        return _backfill_report(self._passed)
+
+
+def test_system_polymarket_reports_that_nothing_has_started(monkeypatch):
+    monkeypatch.setattr(admin, "_backfill_store", lambda: None)
+
     text = _run_system({}, ["polymarket"])
 
     assert "POLYMARKET_ENABLED" in text
 
 
-def test_system_polymarket_lists_every_promotion_gate(monkeypatch):
-    class StoreStub:
-        async def promotion_report(self, window_days=30):
-            return {
-                "window_days": 30,
-                "criteria": {
-                    "snapshot_days": {"value": 28, "threshold": 24, "passed": True},
-                    "delta_days": {"value": 20, "threshold": 24, "passed": False},
-                },
-                "passed": False,
-            }
-
+def test_system_polymarket_shows_uptime_and_backfill_side_by_side(monkeypatch):
+    """수집과 백필은 서로를 대신하지 못한다. 한 화면에 둘 다 있어야 한다."""
     monkeypatch.setattr(admin, "POLYMARKET_PANEL_ENABLED", False)
+    monkeypatch.setattr(admin, "_backfill_store", _BackfillStore)
 
-    text = _run_system({"polymarket_store": StoreStub()}, ["polymarket"])
+    text = _run_system({"polymarket_store": _UptimeStore()}, ["polymarket"])
 
     assert "꺼짐(수집만)" in text
+    assert "✅ 최근 7일 스냅숏: 6일 (기준 6일)" in text
+    assert "마지막 스냅숏: 2026-08-16" in text
     assert "✅ 성공 스냅숏: 28일 (기준 24일)" in text
     assert "❌ 유효 일별 변화: 20일 (기준 24일)" in text
     assert "승격하지 않습니다" in text
+
+
+def test_backfill_caveats_are_shown_next_to_the_gate(monkeypatch):
+    """백필이 판정하지 못하는 항목을 통과로 읽으면 안 된다."""
+    monkeypatch.setattr(admin, "_backfill_store", _BackfillStore)
+
+    text = _run_system({"polymarket_store": _UptimeStore()}, ["polymarket"])
+
+    assert "job 가동률은 라이브에서 확인" in text
+
+
+def test_promotion_needs_both_uptime_and_backfill(monkeypatch):
+    monkeypatch.setattr(admin, "_backfill_store", lambda: _BackfillStore(passed=True))
+
+    passing = _run_system({"polymarket_store": _UptimeStore()}, ["polymarket"])
+    short_uptime = _run_system(
+        {"polymarket_store": _UptimeStore(value=3, passed=False)}, ["polymarket"]
+    )
+
+    assert "승격할 수 있습니다" in passing
+    assert "승격하지 않습니다" in short_uptime
+
+
+def test_backfill_alone_is_reported_while_collection_is_still_off(monkeypatch):
+    """백필을 먼저 돌리고 수집을 나중에 켜도 화면이 비지 않는다."""
+    monkeypatch.setattr(admin, "_backfill_store", _BackfillStore)
+
+    text = _run_system({}, ["polymarket"])
+
+    assert "수집이 꺼져 있습니다" in text
+    assert "❌ 유효 일별 변화" in text
+
+
+def test_collection_without_a_backfill_says_so(monkeypatch):
+    monkeypatch.setattr(admin, "_backfill_store", lambda: None)
+
+    text = _run_system({"polymarket_store": _UptimeStore()}, ["polymarket"])
+
+    assert "백필을 아직 돌리지 않았습니다" in text
 
 
 def test_system_status_advertises_the_pilot_subcommand():

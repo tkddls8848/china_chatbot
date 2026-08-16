@@ -55,6 +55,14 @@ from features.market_sentiment.snapshot import SNAPSHOT_HOUR, SNAPSHOT_MINUTE
 
 logger = logging.getLogger(__name__)
 
+# 백필이 판정하지 못하는 게이트와 그 사유. 백필 보고서를 그리는 곳이 둘
+# (`app/polymarket_backfill.py`와 `/system polymarket`)이라 여기서 한 번만
+# 적는다 — 두 벌로 두면 한쪽에서 조용히 사라진다.
+BACKFILL_CAVEATS = {
+    "median_spread": "과거 호가가 없어 오늘 선정분으로만 계산됨",
+    "snapshot_days": "데이터 유무일 뿐, job 가동률은 라이브에서 확인",
+}
+
 # 시세 이력의 해상도(분). 08:35 직전 값을 집으므로 시간 단위면 충분하고,
 # 31일 × 24점이면 계약당 응답도 가볍다.
 _FIDELITY_MINUTES = 60

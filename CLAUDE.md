@@ -79,6 +79,10 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   과거 호가가 없고 수량 게이트가 조회 시점 값으로 적용돼 있다. 백필로 답할 수
   없는 두 가지(median spread, job 가동률)는 `polymarket_history.py` 첫머리에
   적어 두었고, 지운 채로 승격하지 않는다.
+- **수집과 백필은 같이 돌린다.** 승격 조건은 백필 게이트 전부 통과 **그리고**
+  최근 7일 중 6일 스냅숏이다. 서로를 대신하지 못한다 — 백필은 지표의 실질을
+  하루에 판정하지만 job이 매일 도는지는 모르고, 라이브는 그 반대다.
+  `/system polymarket`이 두 축을 한 화면에 그린다.
 - 종목 canonical code는 시장마다 형식이 다르다. CN·HK는 **접두사 없는 숫자 코드**
   (`600519`, `00700`)이고, US·KR만 `US:NASDAQ:AAPL`·`KR:KOSPI:005930` 형식이다
   (`stocks/universe.py`의 `stock_key`). KR 6자리는 A주 코드와 겹치므로 US·KR에만
