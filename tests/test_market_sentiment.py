@@ -256,6 +256,87 @@ def test_caption_reports_daily_sample_size(monkeypatch):
     assert "하루 평균 표본 20건" in message.photo["caption"]
 
 
+class _CapturingMessage:
+    """마지막 상태 메시지를 남겨 실패 문구를 확인할 수 있게 한다."""
+
+    def __init__(self, photo_error=None):
+        self._photo_error = photo_error
+        self.status = None
+        self.photo = None
+
+    async def reply_text(self, text):
+        self.status = _Status()
+        return self.status
+
+    async def reply_photo(self, **kwargs):
+        self.photo = kwargs
+        if self._photo_error is not None:
+            raise self._photo_error
+
+
+def _run_chart(monkeypatch, message, *, render_error=None):
+    today = datetime.now().date()
+
+    class StoreStub:
+        async def series(self, markets, days):
+            return _ready_series(("CN", "US"), today)
+
+        async def missing_digest_days(self, markets, days):
+            return {market: [] for market in markets}
+
+    async def fake_run_non_urgent(func, *args):
+        if render_error is not None:
+            raise render_error
+        return b"chart"
+
+    monkeypatch.setattr(commands, "market_history_gaps", lambda *a, **k: {})
+    monkeypatch.setattr(commands, "run_non_urgent", fake_run_non_urgent)
+
+    update = SimpleNamespace(effective_message=message, callback_query=None)
+    context = SimpleNamespace(
+        args=["7"], bot_data={"market_digest_store": StoreStub()}
+    )
+    asyncio.run(commands.cmd_market(update, context))
+
+
+def test_upload_failure_is_not_reported_as_a_rendering_failure(monkeypatch, caplog):
+    """차트를 다 만든 뒤 끊긴 것을 렌더링 실패로 찍으면 matplotlib을 보게 된다.
+
+    운영에서 실제로 발생했다. reply_photo의 ReadTimeout이 'chart rendering
+    failed'로 남아 원인이 네트워크라는 사실이 로그에서 지워졌다.
+    """
+    message = _CapturingMessage(photo_error=TimeoutError("Timed out"))
+
+    with caplog.at_level("ERROR"):
+        _run_chart(monkeypatch, message)
+
+    assert "chart upload failed" in caplog.text
+    assert "chart rendering failed" not in caplog.text
+    assert "전송하지 못했습니다" in message.status.text
+
+
+def test_rendering_failure_still_says_rendering(monkeypatch, caplog):
+    message = _CapturingMessage()
+
+    with caplog.at_level("ERROR"):
+        _run_chart(monkeypatch, message, render_error=RuntimeError("font"))
+
+    assert "chart rendering failed" in caplog.text
+    assert "chart upload failed" not in caplog.text
+    assert "만들지 못했습니다" in message.status.text
+    assert message.photo is None
+
+
+def test_chart_upload_outlives_the_five_second_default(monkeypatch):
+    """기본 5초로는 Lightsail에서 올린 뒤 응답을 기다리다 끊긴다."""
+    message = _CapturingMessage()
+
+    _run_chart(monkeypatch, message)
+
+    assert message.photo["read_timeout"] >= 20
+    assert message.photo["write_timeout"] >= 20
+
+
 def test_missing_store_reports_instead_of_crashing():
     message = _Message()
     update = SimpleNamespace(effective_message=message, callback_query=None)

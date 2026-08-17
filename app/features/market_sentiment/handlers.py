@@ -37,6 +37,10 @@ _PANEL_MIN_POINTS = 3
 # 스냅숏은 08:35에 찍히므로 오전에는 최신값이 어제치다. 이틀 넘게 밀렸다면
 # 수집이 멈춘 것이므로 낡은 선을 최신인 양 그리지 않는다.
 _PANEL_MAX_STALE_DAYS = 2
+# python-telegram-bot 기본값은 5초인데, Lightsail에서 PNG를 올리고 텔레그램이
+# 처리한 뒤 응답 헤더를 돌려줄 때까지 그 안에 끝나지 않아 ReadTimeout으로
+# 끊긴다. 차트는 이미 만들어진 뒤라 여기서 죽으면 백필까지 통째로 버린다.
+_CHART_UPLOAD_TIMEOUT_SECONDS = 30
 
 
 def _spread_backfill_days(days: list, limit: int) -> list:
@@ -83,6 +87,20 @@ async def _set_market_status(message, callback_data: str, status, text: str) -> 
         await set_menu_button_text(message, callback_data, text)
     elif status is not None:
         await status.edit_text(text)
+
+
+async def _report_market_failure(
+    message, callback_data: str, status, exc: Exception, what_failed: str
+) -> None:
+    """실패를 알린다. 어디서 끊겼는지를 문구에 남긴다.
+
+    버튼 경로는 라벨 길이가 제한돼 단계 구분을 넣지 못하므로, 자세한 구분은
+    로그와 명령 경로의 회신 문구가 맡는다.
+    """
+    if callback_data:
+        await set_menu_button_text(message, callback_data, "❌ 생성 실패")
+    elif status is not None:
+        await status.edit_text(f"시장 감성 차트를 {what_failed}: {exc}")
 
 
 async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -223,26 +241,31 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if consensus
             else ""
         )
-        await message.reply_photo(
-            photo=image,
-            caption=(
-                f"국가·증시별 뉴스 감성 — 최근 {days}일\n{ranking}{sample_note}\n\n"
-                "점수는 하루치 헤드라인을 종합한 분위기 지표(-1~+1)이며 투자 조언이 아닙니다."
-                f"{consensus_note}"
-            ),
-        )
+        try:
+            await message.reply_photo(
+                photo=image,
+                caption=(
+                    f"국가·증시별 뉴스 감성 — 최근 {days}일\n{ranking}{sample_note}\n\n"
+                    "점수는 하루치 헤드라인을 종합한 분위기 지표(-1~+1)이며 투자 조언이 아닙니다."
+                    f"{consensus_note}"
+                ),
+                read_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,
+                write_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            # 전송 실패를 렌더링 실패와 같은 줄로 찍으면 matplotlib을 들여다보게
+            # 된다. 여기까지 왔다면 차트는 이미 만들어졌고 끊긴 곳은 네트워크다.
+            logger.exception("[MARKET] chart upload failed")
+            await _report_market_failure(
+                message, callback_data, status, exc, "전송하지 못했습니다"
+            )
+            return
         if callback_data:
             await set_menu_button_text(message, callback_data, f"{days}일")
         else:
             await status.delete()
     except Exception as exc:
         logger.exception("[MARKET] chart rendering failed")
-        if callback_data:
-            await _set_market_status(
-                message,
-                callback_data,
-                status,
-                "❌ 생성 실패",
-            )
-        else:
-            await status.edit_text(f"시장 감성 차트를 만들지 못했습니다: {exc}")
+        await _report_market_failure(
+            message, callback_data, status, exc, "만들지 못했습니다"
+        )
