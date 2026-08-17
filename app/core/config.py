@@ -75,7 +75,10 @@ PROMPT_DIR        = BASE_DIR / "prompts"
 
 # ── 번역 ──────────────────────────────────────────────
 TRANSLATION_ENABLED = _env_bool("TRANSLATION_ENABLED", "true")
-TRANSLATION_NUM_PREDICT = 1536
+# 기사 본문이 200자 내외라 출력 토큰 상한도 함께 내렸다. 남겨 둘 이유가 없다 —
+# 이 값이 곧 한 기사의 최대 지연이다. 다만 잘리면 JSON 파싱이 실패해 그 기사가
+# 통째로 버려지므로, 제목·종목 배열까지 합친 봉투에 여유를 두고 잡았다.
+TRANSLATION_NUM_PREDICT = 768
 # 한 주기에 묶어 처리하는 기사가 늘어난 만큼 번역도 병렬로 돌린다. 소스별
 # 준비 루프는 기사를 순차 처리하므로, 동시 실행 폭은 이 세마포어가 정한다.
 TRANSLATION_CONCURRENCY = 3
@@ -151,6 +154,13 @@ NEWS_DIGEST_SEND_LIMIT = max(
     int(os.environ.get("NEWS_DIGEST_SEND_LIMIT", "3")),
 )
 NEWS_DIGEST_MESSAGE_MAX_CHARS = 3500
+# 다이제스트 한 기사의 제목·본문 표시 상한. 프롬프트도 본문을 200자 내외로
+# 지시하지만 그것은 지시일 뿐이라, 모델이 길게 답하는 주기가 섞이면 메시지가
+# 다시 부풀고 chunk_message_items가 메시지 수만 늘린다. 표시 단계에서 상한을
+# 확정해 20분마다 올라오는 총량을 예측 가능하게 둔다. 운영자가 조정하는 값이
+# 아니라 읽기 경험의 규약이므로 env가 아닌 상수다.
+NEWS_DIGEST_ARTICLE_MAX_CHARS = 220
+NEWS_DIGEST_TITLE_MAX_CHARS = 80
 NEWS_SOURCE_FETCH_TIMEOUT_SECONDS = 45.0
 NEWS_LIVE_MAX_AGE_HOURS = 48
 # 소스 한 곳을 얼마나 깊이 읽을지. 하루 기사 수량을 정하는 상한은 번역

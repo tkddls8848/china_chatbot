@@ -1,7 +1,12 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from core.config import NEWS_DIGEST_MESSAGE_MAX_CHARS, TELEGRAM_MESSAGE_LIMIT
+from core.config import (
+    NEWS_DIGEST_ARTICLE_MAX_CHARS,
+    NEWS_DIGEST_MESSAGE_MAX_CHARS,
+    NEWS_DIGEST_TITLE_MAX_CHARS,
+    TELEGRAM_MESSAGE_LIMIT,
+)
 from news.pipeline import (
     PreparedGlobalArticle,
     archive_unsent_articles,
@@ -250,15 +255,22 @@ def test_send_failure_releases_only_the_sent_group():
     assert len(news_log.records) == 2
 
 
-def test_long_summary_article_still_fits_one_digest_message():
-    """요약이 400자로 길어져도 기사 하나가 메시지 상한을 넘지 않는다."""
+def test_long_model_response_is_capped_before_display():
+    """모델이 상한보다 길게 답해도 기사 하나의 표시 분량은 확정된다.
+
+    프롬프트는 본문을 200자 내외로 지시하지만 그것은 지시일 뿐이다. 길게
+    답하는 주기가 섞여도 20분마다 올라오는 총량이 예측 가능해야 한다.
+    """
     text = format_digest_article(
-        "제" * 130,  # 제목은 120자로 잘린다
-        "본" * 450,  # 400자 내외 지시의 상단
+        "제" * 130,
+        "본" * 450,
         "09:15:00 KST",
         "- 감성 : 긍정 +0.50 · 영향 높음",
         url="https://example.com/news?" + "a" * 470,
     )
+
+    assert "제" * NEWS_DIGEST_TITLE_MAX_CHARS not in text
+    assert "본" * NEWS_DIGEST_ARTICLE_MAX_CHARS not in text
     bot = _RecordingBot()
     rows = [
         PreparedGlobalArticle(
@@ -329,6 +341,34 @@ def test_digest_article_uses_text_file_layout():
         "- 기사 본문\n"
         "- 감성 : 긍정 +0.50 · 영향 높음"
     )
+
+
+def test_digest_article_caps_body_at_the_display_limit():
+    body = format_digest_article("제목", "본" * 400, "09:15:00 KST").split("\n")[1]
+
+    assert len(body) == len("- ") + NEWS_DIGEST_ARTICLE_MAX_CHARS
+    assert body.endswith("...")
+
+
+def test_digest_article_caps_title_at_the_display_limit():
+    title_line = format_digest_article("제" * 150, "본문", "09:15:00 KST").split("\n")[0]
+
+    assert title_line == (
+        "• " + "제" * (NEWS_DIGEST_TITLE_MAX_CHARS - 3) + "... (09:15:00 KST)"
+    )
+
+
+def test_digest_article_truncates_before_escaping():
+    """자른 뒤에 escape한다 — HTML 엔티티가 중간에서 잘리지 않는다.
+
+    순서를 뒤집으면 `&amp;`가 `&am`으로 끊겨 텔레그램이 메시지 전체를
+    파싱 오류로 거부한다.
+    """
+    body = format_digest_article("제목", "&" * 400, "09:15:00 KST").split("\n")[1]
+
+    assert body.count("&amp;") == NEWS_DIGEST_ARTICLE_MAX_CHARS - 3
+    assert body.endswith("...")
+    assert "&am" not in body.replace("&amp;", "")
 
 
 def test_digest_article_keeps_original_link_on_title():

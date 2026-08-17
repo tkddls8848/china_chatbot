@@ -50,6 +50,13 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   **탈락분을 release하지 않는다** — release하면 다음 주기에 같은 기사를 다시
   번역해 Neurons만 태운다. 확정하고 `news_log`·`prediction_log`에는 그대로 남겨
   `/view`·`/market`·signal_scoring이 읽게 한다(`archive_unsent_articles`).
+- **기사 본문은 200자 내외이고 상한을 두 곳에서 지킨다.** `prompts/global_ko.txt`가
+  180~220자를 지시하고, `format_digest_article`이 표시 직전에
+  `NEWS_DIGEST_ARTICLE_MAX_CHARS`·`NEWS_DIGEST_TITLE_MAX_CHARS`로 다시 자른다.
+  프롬프트만 믿지 않는다 — 모델이 길게 답하는 주기가 섞이면 20분마다 올라오는
+  총량이 예측 불가능해지고 채팅을 읽을 수 없다. 자르는 순서는 **절단 뒤
+  escape**다(뒤집으면 `&amp;`가 끊겨 메시지 전체가 파싱 오류로 거부된다).
+  본문 길이를 되돌릴 때는 `TRANSLATION_NUM_PREDICT`도 함께 본다.
 - **하루 기사 수량을 정하는 상한은 번역 상한이 아니라 `NEWS_SOURCE_ARTICLE_LIMIT`다.**
   소스를 이 깊이까지만 읽으므로 여기서 잘린 기사는 다음 주기에도 보이지 않는다.
   `gnews`는 이 값을 시장 수로, `gnews_us`·`gnews_kr`은 질의 수로 다시 나눠 쓴다.

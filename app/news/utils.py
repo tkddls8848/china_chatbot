@@ -14,6 +14,10 @@ from typing import Any, Callable, TypeVar
 import pandas as pd
 
 from core.clock import KST as _KST
+from core.config import (
+    NEWS_DIGEST_ARTICLE_MAX_CHARS,
+    NEWS_DIGEST_TITLE_MAX_CHARS,
+)
 from llm.translator import TranslationResult, TranslationService
 
 T = TypeVar("T")
@@ -165,8 +169,14 @@ def format_digest_article(
     alert: str = "",
     url: str = "",
 ) -> str:
-    """요청한 기사 3줄 형식으로 텔레그램 HTML을 만든다."""
-    safe_title = html.escape(truncate_text(title, 120))
+    """요청한 기사 3줄 형식으로 텔레그램 HTML을 만든다.
+
+    제목과 본문을 표시 상한에서 자른다. 프롬프트가 본문을 200자 내외로
+    지시하지만 모델이 길게 답하는 주기가 섞이면 20분마다 올라오는 총량이
+    다시 부풀기 때문에, 상한은 여기서 확정한다.
+    """
+    safe_title = html.escape(truncate_text(title, NEWS_DIGEST_TITLE_MAX_CHARS))
+    content = truncate_text(content, NEWS_DIGEST_ARTICLE_MAX_CHARS)
     if url:
         safe_title = f'<a href="{html.escape(url)}">{safe_title}</a>'
 
