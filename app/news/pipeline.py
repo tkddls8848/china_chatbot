@@ -24,9 +24,9 @@ from core.config import (
     NEWS_GLOBAL_LIMIT,
     NEWS_LIVE_MAX_AGE_HOURS,
     NEWS_NEGATIVE_ALERT_THRESHOLD,
-    NEWS_SENTIMENT_ENABLED,
     NEWS_SOURCE_MARKETS,
     NEWS_SOURCE_FETCH_TIMEOUT_SECONDS,
+    NEWS_TRANSLATION_QUALITY_REJECT_LIMIT,
     TELEGRAM_CHAT_ID,
 )
 from core.workers import urgent_phase
@@ -35,6 +35,7 @@ from news.sources import GlobalArticle
 from news.utils import (
     chunk_message_items,
     compact_kst_time,
+    compact_sentiment_line,
     filter_recent_articles,
     format_china_time_as_kst,
     format_digest_article,
@@ -45,13 +46,27 @@ from news.utils import (
     translate_article,
 )
 from state import NewsLog, PredictionLog, SentNewsTracker
-from llm.translator import TranslationResult, TranslationService
+from llm.translator import (
+    TranslationQualityError,
+    TranslationResult,
+    TranslationService,
+)
 from watchlist import WatchlistManager
 
 logger = logging.getLogger(__name__)
 _DIGEST_ARTICLE_SEPARATOR = "\n\n"
 _DIGEST_SOURCE_SEPARATOR = "\n\n"
 _DIGEST_HEADER_RESERVE = 160
+
+
+@dataclass(frozen=True)
+class SourceCandidate:
+    """번역 전 후보 한 건. 주간 번역과 야간 큐가 같은 목록을 본다."""
+
+    spec: SourceSpec
+    article: GlobalArticle
+    prefilter_candidate_id: str = ""
+    event_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -96,36 +111,19 @@ def _negative_alert_prefix(sentiment: float | None, related_to_watchlist: bool) 
     return ""
 
 
-def _compact_sentiment_line(sentiment: float | None, impact: str = "") -> str:
-    if not NEWS_SENTIMENT_ENABLED:
-        return ""
-    if sentiment is None:
-        return "- 감성 : 분석 불가"
-    if sentiment >= 0.15:
-        marker = "긍정"
-    elif sentiment <= -0.15:
-        marker = "부정"
-    else:
-        marker = "중립"
-    impact_labels = {"high": "높음", "medium": "중간", "low": "낮음"}
-    impact_part = (
-        f" · 영향 {impact_labels[impact]}"
-        if impact in impact_labels
-        else ""
-    )
-    return f"- 감성 : {marker} {sentiment:+.2f}{impact_part}"
-
-
-async def prepare_global_source(
+async def collect_source_candidates(
     spec: SourceSpec,
     registry: NewsSourceRegistry,
-    tracker: SentNewsTracker,
-    translator: TranslationService,
-    translate_semaphore: asyncio.Semaphore,
     watchlist: dict[str, str],
     prefilter=None,
     cycle_id: str = "",
-) -> list[PreparedGlobalArticle]:
+) -> list[SourceCandidate]:
+    """소스 하나를 읽어 번역 전 후보를 만든다(LLM을 부르지 않는다).
+
+    주간 번역 경로와 야간 수집 경로가 같은 목록을 봐야 한다. 여기서 소스 실패
+    격리·발행시각 필터·사전선별 순서를 한 번만 정하고, 그 뒤에 번역할지
+    큐에 담을지만 갈린다.
+    """
     try:
         articles: list[GlobalArticle] = await _fetch_source(spec.fetch)
         registry.record_success(spec.key)
@@ -182,14 +180,55 @@ async def prepare_global_source(
             # 무관하게 실패한 주기만 기존 최신순으로 처리한다.
             logger.error("[%s] 뉴스 사전선별 실패, 최신순으로 계속: %s", spec.key, e)
 
-    metrics = {"duplicate": 0, "translate_failed": 0, "prepared": 0}
+    candidates = []
+    for article in articles:
+        context = prefilter_contexts.get(article.article_id)
+        candidates.append(
+            SourceCandidate(
+                spec=spec,
+                article=article,
+                prefilter_candidate_id=getattr(context, "candidate_id", ""),
+                event_id=getattr(context, "event_id", ""),
+            )
+        )
+    logger.info(
+        "[%s] 후보 준비: 수집 %d / 발행시각 통과 %d",
+        spec.key,
+        fetched_count,
+        len(candidates),
+    )
+    return candidates
 
-    async def prepare_article(article: GlobalArticle, already_reserved: bool = False):
+
+async def prepare_global_source(
+    spec: SourceSpec,
+    registry: NewsSourceRegistry,
+    tracker: SentNewsTracker,
+    translator: TranslationService,
+    translate_semaphore: asyncio.Semaphore,
+    watchlist: dict[str, str],
+    prefilter=None,
+    cycle_id: str = "",
+) -> list[PreparedGlobalArticle]:
+    candidates = await collect_source_candidates(
+        spec,
+        registry,
+        watchlist,
+        prefilter,
+        cycle_id,
+    )
+    metrics = {
+        "duplicate": 0,
+        "translate_failed": 0,
+        "quality_rejected": 0,
+        "prepared": 0,
+    }
+
+    async def prepare_article(candidate: SourceCandidate):
+        """예약이 끝난 후보 하나를 번역해 표시 문자열까지 만든다."""
+        article = candidate.article
         article_id = article.article_id
         try:
-            if not already_reserved and not await tracker.reserve(article_id):
-                metrics["duplicate"] += 1
-                return None
             translated = await translate_article(
                 translator,
                 translate_semaphore,
@@ -198,7 +237,7 @@ async def prepare_global_source(
             )
             safe_url = article.url if len(article.url) <= 500 else ""
             hits = _watchlist_hits(translated.mentioned_stocks, watchlist)
-            sentiment_line = _compact_sentiment_line(
+            sentiment_line = compact_sentiment_line(
                 translated.sentiment,
                 translated.impact,
             )
@@ -220,14 +259,20 @@ async def prepare_global_source(
                 safe_url,
             )
             metrics["prepared"] += 1
-            context = prefilter_contexts.get(article.article_id)
             return PreparedGlobalArticle(
                 spec,
                 article,
                 text,
                 translated,
-                getattr(context, "candidate_id", ""),
+                candidate.prefilter_candidate_id,
             )
+        except TranslationQualityError as e:
+            # 형식 오류와 달리 같은 원문에는 대체로 같은 응답이 다시 온다.
+            # release하면 매 주기 같은 기사에 Neurons를 태우므로 확정해 둔다.
+            await tracker.confirm(article_id)
+            metrics["quality_rejected"] += 1
+            logger.warning("[%s] 번역 품질 미달로 제외: %s", spec.key, e)
+            return None
         except Exception as e:
             await tracker.release(article_id)
             metrics["translate_failed"] += 1
@@ -241,13 +286,13 @@ async def prepare_global_source(
     scan_limit = max(NEWS_GLOBAL_LIMIT * 20, NEWS_GLOBAL_LIMIT)
     scanned = 0
     prepared_rows: list[PreparedGlobalArticle] = []
-    for article in articles[:scan_limit]:
+    for candidate in candidates[:scan_limit]:
         scanned += 1
-        if not await tracker.reserve(article.article_id):
+        if not await tracker.reserve(candidate.article.article_id):
             metrics["duplicate"] += 1
             continue
         try:
-            prepared = await prepare_article(article, already_reserved=True)
+            prepared = await prepare_article(candidate)
         except Exception:
             logger.error("[%s] 타임아웃으로 이번 주기 남은 번역을 중단합니다.", spec.key)
             break
@@ -255,15 +300,24 @@ async def prepare_global_source(
             prepared_rows.append(prepared)
             if len(prepared_rows) >= NEWS_GLOBAL_LIMIT:
                 break
+        elif metrics["quality_rejected"] >= NEWS_TRANSLATION_QUALITY_REJECT_LIMIT:
+            logger.warning(
+                "[%s] 품질 미달 %d건으로 이번 주기 남은 번역을 중단합니다.",
+                spec.key,
+                metrics["quality_rejected"],
+            )
+            break
 
     logger.info(
-        "[%s] 기사 준비: 수집 %d / 확인 %d / 중복 %d / 번역 준비 %d / 번역 실패 %d",
+        "[%s] 기사 준비: 후보 %d / 확인 %d / 중복 %d / 번역 준비 %d /"
+        " 번역 실패 %d / 품질 미달 %d",
         spec.key,
-        fetched_count,
+        len(candidates),
         scanned,
         metrics["duplicate"],
         metrics["prepared"],
         metrics["translate_failed"],
+        metrics["quality_rejected"],
     )
     return prepared_rows[::-1]
 

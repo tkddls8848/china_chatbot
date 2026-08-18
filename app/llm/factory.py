@@ -23,6 +23,10 @@ from core.config import (
     MARKET_DIGEST_NUM_PREDICT,
     MARKET_DIGEST_PROMPT_FILE,
     MARKET_DIGEST_TIMEOUT,
+    NEWS_NIGHT_DIGEST_MAX_HIGHLIGHTS,
+    NEWS_NIGHT_DIGEST_NUM_PREDICT,
+    NEWS_NIGHT_DIGEST_PROMPT_FILE,
+    NEWS_NIGHT_DIGEST_TIMEOUT,
     PROMPT_DIR,
     RESEARCH_ANALYSIS_NUM_PREDICT,
     RESEARCH_ANALYSIS_PROMPT_FILE,
@@ -36,6 +40,7 @@ from llm.backends import CloudflareWorkersAIBackend, LLMBackend, ResilientBacken
 from llm.briefing_writer import BriefingWriter
 from llm.market_digest import MarketDigestAnalyzer
 from llm.market_view import MarketViewAnalyzer
+from llm.night_digest import NightDigestAnalyzer
 from llm.translator import TranslationService
 
 logger = logging.getLogger(__name__)
@@ -98,6 +103,19 @@ def build_market_digest_analyzer() -> MarketDigestAnalyzer:
         prompt_file=MARKET_DIGEST_PROMPT_FILE,
         num_predict=MARKET_DIGEST_NUM_PREDICT,
         count_tolerance_ratio=MARKET_DIGEST_COUNT_TOLERANCE_RATIO,
+    )
+
+
+def build_night_digest_analyzer() -> NightDigestAnalyzer:
+    return NightDigestAnalyzer(
+        backend=build_backend(
+            "night_digest",
+            model=CLOUDFLARE_MODEL,
+            timeout=NEWS_NIGHT_DIGEST_TIMEOUT,
+        ),
+        prompt_file=NEWS_NIGHT_DIGEST_PROMPT_FILE,
+        num_predict=NEWS_NIGHT_DIGEST_NUM_PREDICT,
+        max_highlights=NEWS_NIGHT_DIGEST_MAX_HIGHLIGHTS,
     )
 
 

@@ -50,7 +50,14 @@ def _observations(tmp_path):
     ]
 
 
-def _service(tmp_path, *, mode="shadow", exploration_slots=0, translate_limit=2):
+def _service(
+    tmp_path,
+    *,
+    mode="shadow",
+    exploration_slots=0,
+    translate_limit=2,
+    translated_event_cooldown_hours=24,
+):
     return NewsPrefilter(
         stock_db=_StockDb(),
         event_file=tmp_path / "events.json",
@@ -64,8 +71,15 @@ def _service(tmp_path, *, mode="shadow", exploration_slots=0, translate_limit=2)
         similarity_threshold=0.7,
         exploration_slots=exploration_slots,
         translate_limit=translate_limit,
+        translated_event_cooldown_hours=translated_event_cooldown_hours,
         daily_cpu_budget_seconds=100,
     )
+
+
+_DISTINCT_TITLES = (
+    "Apple earnings beat guidance",
+    "중국 인민은행 금리 인하 발표",
+)
 
 
 def _article(index, title, content="본문"):
@@ -195,7 +209,9 @@ def test_training_samples_are_read_incrementally(tmp_path):
             service.rank_articles(
                 source="gnews_us",
                 market="US",
-                articles=[_article(index, f"Apple earnings {index}")],
+                # 사건이 겹치면 재탕 차단에 걸려 후보가 사라진다. 이 테스트가
+                # 보는 것은 관측 적재라 매번 다른 사건을 넣는다.
+                articles=[_article(index, _DISTINCT_TITLES[index])],
                 watchlist={},
                 cycle_id=f"cycle-{index}",
             )
@@ -390,3 +406,103 @@ def test_optimizer_trains_on_original_titles_with_time_split():
         {name: 0.0 for name in FEATURE_NAMES},
     )
 
+
+
+def test_translated_event_is_not_translated_again_from_another_article(tmp_path):
+    """같은 발표를 다른 기사로 다시 번역하면 Neurons만 두 번 쓴다."""
+    service = _service(tmp_path)
+
+    def rank(index, title, cycle):
+        return asyncio.run(
+            service.rank_articles(
+                source="gnews_us",
+                market="US",
+                articles=[_article(index, title)],
+                watchlist={},
+                cycle_id=cycle,
+            )
+        )
+
+    first = rank(0, "Apple earnings beat guidance", "cycle-0")
+    asyncio.run(
+        service.record_outcome(
+            candidate_id=first[0].candidate_id, impact="high", sentiment=0.5
+        )
+    )
+
+    # 거의 같은 본문의 후속 기사는 후보에서 빠진다.
+    assert rank(1, "Apple earnings beat guidance", "cycle-1") == []
+    # 다른 사건은 그대로 통과한다.
+    assert len(rank(2, "중국 인민은행 금리 인하 발표", "cycle-2")) == 1
+
+
+def test_same_event_is_translated_once_per_cycle_across_sources(tmp_path):
+    """소스 여섯 곳이 같은 발표를 옮겨 적는 것이 한 주기의 가장 흔한 중복이다."""
+    service = _service(tmp_path)
+
+    def rank(source, index):
+        return asyncio.run(
+            service.rank_articles(
+                source=source,
+                market="US",
+                articles=[_article(index, "Apple earnings beat guidance")],
+                watchlist={},
+                cycle_id="cycle-0",
+            )
+        )
+
+    assert len(rank("gnews_us", 0)) == 1
+    assert rank("futu", 1) == []
+
+
+def test_duplicate_gate_counts_are_written_to_the_cycle_observation(tmp_path):
+    """무엇이 왜 빠졌는지 관측에 남아야 승격 판정에서 읽을 수 있다."""
+    service = _service(tmp_path)
+
+    asyncio.run(
+        service.rank_articles(
+            source="gnews_us",
+            market="US",
+            articles=[
+                _article(0, "Apple earnings beat guidance"),
+                _article(1, "Apple earnings beat guidance"),
+            ],
+            watchlist={},
+            cycle_id="cycle-0",
+        )
+    )
+
+    cycle_rows = [row for row in _observations(tmp_path) if row["type"] == "cycle"]
+    assert cycle_rows[-1]["candidates"] == 1
+    assert cycle_rows[-1]["gated_source_duplicate"] == 1
+
+
+def test_translated_event_gate_expires_after_the_cooldown(tmp_path):
+    """차단 창을 0으로 두면 재탕 차단이 꺼진다 — 창은 설정이지 규칙이 아니다."""
+    service = _service(tmp_path, translated_event_cooldown_hours=0)
+
+    first = asyncio.run(
+        service.rank_articles(
+            source="gnews_us",
+            market="US",
+            articles=[_article(0, "Apple earnings beat guidance")],
+            watchlist={},
+            cycle_id="cycle-0",
+        )
+    )
+    asyncio.run(
+        service.record_outcome(
+            candidate_id=first[0].candidate_id, impact="high", sentiment=0.5
+        )
+    )
+    again = asyncio.run(
+        service.rank_articles(
+            source="gnews_us",
+            market="US",
+            articles=[_article(1, "Apple earnings beat guidance")],
+            watchlist={},
+            cycle_id="cycle-1",
+        )
+    )
+
+    assert len(again) == 1

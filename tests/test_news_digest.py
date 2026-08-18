@@ -17,10 +17,12 @@ from news.sources import GlobalArticle
 from news.utils import (
     chunk_message_items,
     compact_kst_time,
+    compact_sentiment_line,
     filter_articles_for_kst_day,
     filter_recent_articles,
     format_china_time_as_kst,
     format_digest_article,
+    truncate_at_sentence,
     truncate_text,
 )
 
@@ -380,3 +382,141 @@ def test_digest_article_keeps_original_link_on_title():
     ).startswith(
         '• <a href="https://example.com/news?a=1&amp;b=2">기사 제목</a> '
     )
+
+
+def test_body_is_cut_at_a_sentence_boundary_not_mid_word():
+    """상한에 걸린 본문을 문장 한가운데에서 끊으면 반 문장만 남는다."""
+    first = "가" * 140 + "다."
+    body = first + " " + "두 번째 문장이 길게 이어진다" * 20
+
+    result = truncate_at_sentence(body, NEWS_DIGEST_ARTICLE_MAX_CHARS)
+
+    assert result == first
+
+
+def test_body_falls_back_to_character_cut_when_the_sentence_ends_too_early():
+    """경계가 너무 앞이면 버리는 내용이 더 많다. 그때는 글자로 자른다."""
+    body = "짧다. " + "이어지는 긴 문장이 계속된다" * 30
+
+    result = truncate_at_sentence(body, NEWS_DIGEST_ARTICLE_MAX_CHARS)
+
+    assert result.endswith("...")
+    assert len(result) == NEWS_DIGEST_ARTICLE_MAX_CHARS
+
+
+def test_body_within_the_limit_is_untouched():
+    assert truncate_at_sentence("한 문장이다. 두 문장이다.", 100) == "한 문장이다. 두 문장이다."
+
+
+def test_digest_article_without_a_body_keeps_only_the_title_line():
+    """야간 다이제스트는 제목만 옮긴다. 빈 본문 줄을 남기면 '- '만 보인다."""
+    text = format_digest_article("제목", "", "09:15 KST", compact_sentiment_line(0.4, "high"))
+
+    assert text.splitlines() == [
+        "• 제목 (09:15 KST)",
+        "- 감성 : 긍정 +0.40 · 영향 높음",
+    ]
+
+
+def test_quality_rejected_article_is_confirmed_not_released():
+    """품질 미달은 다시 불러도 같은 응답이 온다 — release하면 매 주기 태운다."""
+    from llm.translator import TranslationError, TranslationQualityError
+    from news.pipeline import prepare_global_source
+    from news.registry import SourceSpec
+
+    articles = [
+        GlobalArticle(
+            article_id=f"futu-{index}",
+            title="标题",
+            content="本文",
+            published_at=datetime.now(timezone(timedelta(hours=9))).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+        )
+        for index in range(2)
+    ]
+    spec = SourceSpec(key="futu", label="푸투", fetch=lambda: articles)
+
+    class _Registry:
+        def record_success(self, key):
+            return None
+
+    class _Translator:
+        def translate_article(self, title, content):
+            raise TranslationQualityError("not Korean")
+
+    class _Tracker(_RecordingTracker):
+        async def reserve(self, article_id):
+            return True
+
+    tracker = _Tracker()
+    prepared = asyncio.run(
+        prepare_global_source(
+            spec,
+            _Registry(),
+            tracker,
+            _Translator(),
+            asyncio.Semaphore(1),
+            {},
+        )
+    )
+
+    assert prepared == []
+    assert tracker.released == []
+    assert sorted(tracker.confirmed) == ["futu-0", "futu-1"]
+    # 형식 오류와 달라야 이 분기가 의미를 가진다.
+    assert issubclass(TranslationQualityError, TranslationError)
+
+
+def test_quality_rejects_stop_the_cycle_before_burning_the_scan_window():
+    """소스가 통째로 나쁜 날 scan_limit까지 태우면 그 주기의 Neurons가 다 나간다."""
+    from core.config import (
+        NEWS_GLOBAL_LIMIT,
+        NEWS_TRANSLATION_QUALITY_REJECT_LIMIT,
+    )
+    from llm.translator import TranslationQualityError
+    from news.pipeline import prepare_global_source
+    from news.registry import SourceSpec
+
+    articles = [
+        GlobalArticle(
+            article_id=f"futu-{index}",
+            title="标题",
+            content="本文",
+            published_at=datetime.now(timezone(timedelta(hours=9))).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+        )
+        for index in range(NEWS_GLOBAL_LIMIT * 20)
+    ]
+    spec = SourceSpec(key="futu", label="푸투", fetch=lambda: articles)
+
+    class _Registry:
+        def record_success(self, key):
+            return None
+
+    class _Translator:
+        def __init__(self):
+            self.calls = 0
+
+        def translate_article(self, title, content):
+            self.calls += 1
+            raise TranslationQualityError("not Korean")
+
+    class _Tracker(_RecordingTracker):
+        async def reserve(self, article_id):
+            return True
+
+    translator = _Translator()
+    asyncio.run(
+        prepare_global_source(
+            spec,
+            _Registry(),
+            _Tracker(),
+            translator,
+            asyncio.Semaphore(1),
+            {},
+        )
+    )
+
+    assert translator.calls == NEWS_TRANSLATION_QUALITY_REJECT_LIMIT

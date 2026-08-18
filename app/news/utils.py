@@ -17,6 +17,7 @@ from core.clock import KST as _KST
 from core.config import (
     NEWS_DIGEST_ARTICLE_MAX_CHARS,
     NEWS_DIGEST_TITLE_MAX_CHARS,
+    NEWS_SENTIMENT_ENABLED,
 )
 from llm.translator import TranslationResult, TranslationService
 
@@ -161,6 +162,23 @@ def compact_kst_time(formatted_time: str) -> str:
     return match.group(1) if match else formatted_time
 
 
+def compact_sentiment_line(sentiment: float | None, impact: str = "") -> str:
+    """기사 아래에 붙는 감성·영향 한 줄. 주간 번역과 야간 요약이 함께 쓴다."""
+    if not NEWS_SENTIMENT_ENABLED:
+        return ""
+    if sentiment is None:
+        return "- 감성 : 분석 불가"
+    if sentiment >= 0.15:
+        marker = "긍정"
+    elif sentiment <= -0.15:
+        marker = "부정"
+    else:
+        marker = "중립"
+    impact_labels = {"high": "높음", "medium": "중간", "low": "낮음"}
+    impact_part = f" · 영향 {impact_labels[impact]}" if impact in impact_labels else ""
+    return f"- 감성 : {marker} {sentiment:+.2f}{impact_part}"
+
+
 def format_digest_article(
     title: str,
     content: str,
@@ -172,21 +190,49 @@ def format_digest_article(
     """요청한 기사 3줄 형식으로 텔레그램 HTML을 만든다.
 
     제목과 본문을 표시 상한에서 자른다. 프롬프트가 본문을 200자 내외로
-    지시하지만 모델이 길게 답하는 주기가 섞이면 20분마다 올라오는 총량이
+    지시하지만 모델이 길게 답하는 주기가 섞이면 한 번에 올라오는 총량이
     다시 부풀기 때문에, 상한은 여기서 확정한다.
+
+    본문은 문장 경계에서 자른다. 제목은 그대로 글자 수로 자른다 — 제목에는
+    끊을 문장 경계가 없다. 본문이 비면 본문 줄 자체를 빼고 제목 줄만 만든다.
     """
     safe_title = html.escape(truncate_text(title, NEWS_DIGEST_TITLE_MAX_CHARS))
-    content = truncate_text(content, NEWS_DIGEST_ARTICLE_MAX_CHARS)
+    content = truncate_at_sentence(content, NEWS_DIGEST_ARTICLE_MAX_CHARS)
     if url:
         safe_title = f'<a href="{html.escape(url)}">{safe_title}</a>'
 
-    text = (
-        f"• {alert}{safe_title} ({html.escape(published_time)})\n"
-        f"- {html.escape(content)}"
-    )
+    # 야간 다이제스트는 제목만 옮기고 본문을 만들지 않는다. 빈 본문 줄을
+    # 남기면 "- "만 있는 줄이 그대로 보인다.
+    text = f"• {alert}{safe_title} ({html.escape(published_time)})"
+    if content:
+        text += f"\n- {html.escape(content)}"
     if sentiment_line:
         text += f"\n{sentiment_line}"
     return text
+
+
+_SENTENCE_END_RE = re.compile(r"[.!?。！？](?=\s|$)|다\.")
+
+
+def truncate_at_sentence(text: str, max_chars: int) -> str:
+    """상한 안의 마지막 문장 끝에서 자른다. 경계가 너무 앞이면 글자로 자른다.
+
+    프롬프트가 "문장을 중간에 끊지 않는다"를 지시해도 모델이 길게 답한 주기는
+    표시 상한에 걸려 결국 문장 한가운데에서 끊긴다. 그러면 읽는 쪽에는 무슨
+    말인지 알 수 없는 반 문장이 남으므로, 상한 안의 마지막 마침표까지만 쓴다.
+    경계가 상한의 절반도 되지 않으면 버리는 내용이 더 많아지므로 그때는 기존
+    글자 절단으로 돌아간다(말줄임표가 잘렸음을 알린다).
+    """
+    normalized = str(text or "").strip()
+    if len(normalized) <= max_chars:
+        return normalized
+    window = normalized[:max_chars]
+    cut = 0
+    for match in _SENTENCE_END_RE.finditer(window):
+        cut = match.end()
+    if cut >= max_chars // 2:
+        return window[:cut].rstrip()
+    return truncate_text(normalized, max_chars)
 
 
 def truncate_text(text: str, max_chars: int) -> str:

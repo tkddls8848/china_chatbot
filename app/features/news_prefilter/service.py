@@ -91,6 +91,8 @@ class EventRecord:
     sources: list[str] = field(default_factory=list)
     article_ids: list[str] = field(default_factory=list)
     occurrences: int = 0
+    # 이 사건으로 실제 번역이 나간 마지막 시각. 재탕 차단이 읽는다.
+    translated_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -187,6 +189,7 @@ class NewsPrefilter:
         similarity_threshold: float,
         exploration_slots: int,
         translate_limit: int,
+        translated_event_cooldown_hours: int,
         daily_cpu_budget_seconds: float,
     ):
         self.mode = mode
@@ -200,6 +203,9 @@ class NewsPrefilter:
         self._similarity_threshold = min(0.99, max(0.1, similarity_threshold))
         self._exploration_slots = max(0, min(exploration_slots, translate_limit - 1))
         self._translate_limit = max(1, translate_limit)
+        self._translated_cooldown = timedelta(
+            hours=max(0, translated_event_cooldown_hours)
+        )
         self._daily_cpu_budget_seconds = max(0.0, daily_cpu_budget_seconds)
         self._lock = asyncio.Lock()
         self._file_lock = threading.RLock()
@@ -220,6 +226,11 @@ class NewsPrefilter:
         self._pending_candidates: dict[str, tuple[str, str, dict[str, Any]]] = {}
         self._samples_offset = 0
         self._last_compact_day = ""
+        # 재탕 차단용. record_outcome은 candidate_id만 받으므로 어느 사건의
+        # 후보였는지 여기서 기억한다.
+        self._candidate_events: dict[str, str] = {}
+        self._cycle_id = ""
+        self._cycle_claimed: set[str] = set()
         self._matcher = StockEntityMatcher(stock_db.get_candidate_universe())
         logger.info(
             "[PREFILTER] %s 모드 · 사건 %d건 · 종목명 패턴 %d개 · CPU 예산 %.2fh/일",
@@ -256,6 +267,7 @@ class NewsPrefilter:
                     sources=[str(value) for value in item.get("sources") or []],
                     article_ids=[str(value) for value in item.get("article_ids") or []],
                     occurrences=int(item.get("occurrences") or 0),
+                    translated_at=str(item.get("translated_at") or ""),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -388,6 +400,29 @@ class NewsPrefilter:
             return None, best_similarity
         return best_event, best_similarity
 
+    def _recently_translated(self, event_id: str, observed_at: datetime) -> bool:
+        """이 사건으로 이미 번역이 나갔고 아직 재탕 차단 시간 안인가."""
+        if not self._translated_cooldown:
+            return False
+        event = self._events.get(event_id)
+        if event is None or not event.translated_at:
+            return False
+        try:
+            translated = datetime.fromisoformat(event.translated_at)
+        except ValueError:
+            return False
+        if translated.tzinfo is None:
+            translated = translated.replace(tzinfo=observed_at.tzinfo)
+        return observed_at - translated < self._translated_cooldown
+
+    def _mark_event_translated(self, candidate_id: str) -> None:
+        event_id = self._candidate_events.get(candidate_id)
+        event = self._events.get(event_id) if event_id else None
+        if event is None:
+            return
+        event.translated_at = now().isoformat(timespec="seconds")
+        self._persist_events_if_due()
+
     def _headline_signal(self, title: str) -> float:
         lowered = title.lower()
         return 1.0 if any(term in lowered for term in _HEADLINE_TERMS) else 0.0
@@ -423,9 +458,12 @@ class NewsPrefilter:
     ) -> list[RankedCandidate]:
         observed_at = now()
         self._evict_events(observed_at)
+        if cycle_id != self._cycle_id:
+            self._cycle_id = cycle_id
+            self._cycle_claimed = set()
         buckets, exact = self._event_indexes()
         rows: list[RankedCandidate] = []
-        raw_rows: list[tuple[GlobalArticle, str, str, dict[str, float], float]] = []
+        scored_rows: list[tuple[GlobalArticle, str, str, dict[str, float], float]] = []
         count = max(1, len(articles) - 1)
 
         for feed_rank, article in enumerate(articles):
@@ -480,7 +518,31 @@ class NewsPrefilter:
             )
             impact_probability = predict_probability(self._model, article.title, features)
             score = heuristic + 3.0 * (impact_probability - 0.5)
-            raw_rows.append((article, candidate_id, event.event_id, features, score))
+            scored_rows.append((article, candidate_id, event.event_id, features, score))
+            self._candidate_events[candidate_id] = event.event_id
+
+        # ── 번역 대상에서 아예 빼는 후보 ────────────────
+        # 점수 순서를 바꾸는 일(shadow/active의 쟁점)과 달리, 여기서 거르는 것은
+        # "같은 사건을 다시 번역하는 것"뿐이다. 두 정책 모두 걸러진 뒤의 같은
+        # 풀에서 고르므로 섀도 비교의 baseline은 그대로 유지된다.
+        gate_counts = {"translated": 0, "cycle": 0, "source": 0}
+        raw_rows: list[tuple[GlobalArticle, str, str, dict[str, float], float]] = []
+        source_events: set[str] = set()
+        for row in scored_rows:
+            event_id = row[2]
+            if self._recently_translated(event_id, observed_at):
+                gate_counts["translated"] += 1
+                continue
+            if event_id in self._cycle_claimed:
+                gate_counts["cycle"] += 1
+                continue
+            if event_id in source_events:
+                gate_counts["source"] += 1
+                continue
+            source_events.add(event_id)
+            raw_rows.append(row)
+        while len(self._candidate_events) > _PENDING_CANDIDATE_LIMIT:
+            self._candidate_events.pop(next(iter(self._candidate_events)))
 
         ranked_indexes = sorted(
             range(len(raw_rows)),
@@ -559,6 +621,9 @@ class NewsPrefilter:
                 "cycle_id": cycle_id,
                 "source": source,
                 "candidates": len(raw_rows),
+                "gated_translated_event": gate_counts["translated"],
+                "gated_cycle_duplicate": gate_counts["cycle"],
+                "gated_source_duplicate": gate_counts["source"],
                 "new_events": new_events,
                 "logged": len(observation_lines),
                 "mode": self.mode,
@@ -566,9 +631,25 @@ class NewsPrefilter:
         )
         self._append_observations(observation_lines)
 
-        self._persist_events_if_due()
         ordered = sorted(rows, key=lambda row: row.prefilter_rank)
-        return rows if self.mode == "shadow" else ordered
+        selected = rows if self.mode == "shadow" else ordered
+        # 이번 주기에 번역될 사건을 찍어 둔다. 뒤에 도는 소스가 같은 사건을
+        # 다시 번역하지 않는다 — 소스 여섯 곳이 같은 발표를 옮겨 적는 것이
+        # 한 주기 안에서 가장 흔한 중복이다.
+        self._cycle_claimed.update(
+            row.event_id for row in selected[: self._translate_limit]
+        )
+        self._persist_events_if_due()
+        if any(gate_counts.values()):
+            logger.info(
+                "[PREFILTER] %s 재탕 차단 %d건(기번역 %d · 주기중복 %d · 소스중복 %d)",
+                source,
+                sum(gate_counts.values()),
+                gate_counts["translated"],
+                gate_counts["cycle"],
+                gate_counts["source"],
+            )
+        return selected
 
     async def rank_articles(
         self,
@@ -606,7 +687,11 @@ class NewsPrefilter:
             "sentiment": sentiment,
         }
         async with self._lock:
-            await asyncio.to_thread(self._append_observations, [payload])
+            await asyncio.to_thread(self._record_outcome_sync, payload, candidate_id)
+
+    def _record_outcome_sync(self, payload: dict[str, Any], candidate_id: str) -> None:
+        self._append_observations([payload])
+        self._mark_event_translated(candidate_id)
 
     def _compact_observations_if_needed(self) -> bool:
         """보존 기간이 지난 관측을 하루 한 번 걷어낸다. 재작성했으면 True."""

@@ -16,7 +16,17 @@ from llm.backends import (
     LLMBackendError,
     ResilientBackend,
 )
-from llm.translator import TranslationError, TranslationService
+from llm.translator import (
+    TranslationError,
+    TranslationQualityError,
+    TranslationService,
+)
+
+# 번역 품질 게이트의 하한(60자·한글 비율)을 넘는 정상 응답 본문.
+_KOREAN_BODY = (
+    "귀주모태는 3분기 매출이 전년 대비 15% 늘어난 400억 위안이라고 발표했다. "
+    "회사는 주력 제품의 출고가 인상이 실적을 끌어올렸다고 설명했다."
+)
 
 API_TOKEN = "cf-secret-token-should-never-be-logged"
 GENERATE_KWARGS = {
@@ -467,7 +477,7 @@ def test_service_translates_through_the_backend():
     payload = json.dumps(
         {
             "title": "제목",
-            "content": "본문 요약입니다.",
+            "content": _KOREAN_BODY,
             "mentioned_stocks": ["600519"],
             "sentiment": 0.4,
             "impact": "medium",
@@ -493,3 +503,50 @@ def test_service_raises_translation_error_when_backend_fails():
 
     with pytest.raises(TranslationError, match="timeout"):
         _service(backend).translate_article("原文", "原文 본문")
+
+
+def _quality_session(content, title="제목"):
+    payload = json.dumps(
+        {
+            "title": title,
+            "content": content,
+            "mentioned_stocks": [],
+            "sentiment": 0.1,
+            "impact": "low",
+        },
+        ensure_ascii=False,
+    )
+    return _FakeSession(_chat_completion(payload))
+
+
+def test_untranslated_body_is_rejected_as_a_quality_failure():
+    """모델이 원문을 그대로 돌려주는 주기가 있다. 그대로 보내면 안 된다."""
+    backend, _ = _resilient(
+        _quality_session(
+            "Kweichow Moutai said third-quarter revenue rose 15% from a year "
+            "earlier to 40 billion yuan on higher shipment prices."
+        )
+    )
+
+    with pytest.raises(TranslationQualityError):
+        _service(backend).translate_article("原文", "原文 본문")
+
+
+def test_title_echo_is_rejected_as_a_quality_failure():
+    body = "귀주모태 3분기 매출 15% 증가, 출고가 인상이 실적을 끌어올렸다고 회사가 설명했다."
+    backend, _ = _resilient(_quality_session(body, title=body))
+
+    with pytest.raises(TranslationQualityError):
+        _service(backend).translate_article("原文", "原文 본문")
+
+
+def test_one_line_body_is_rejected_as_a_quality_failure():
+    backend, _ = _resilient(_quality_session("귀주모태 실적 발표."))
+
+    with pytest.raises(TranslationQualityError):
+        _service(backend).translate_article("原文", "原文 본문")
+
+
+def test_quality_failure_is_distinguishable_from_a_format_failure():
+    """호출자가 재시도 대상에서 뺄 수 있도록 형식 오류와 타입이 갈린다."""
+    assert issubclass(TranslationQualityError, TranslationError)

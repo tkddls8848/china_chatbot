@@ -61,6 +61,7 @@ logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 DATA_DIR          = BASE_DIR / "data"
 SENT_IDS_FILE     = DATA_DIR / "news" / "sent_ids.json"
 NEWS_LOG_FILE     = DATA_DIR / "news" / "news_log.json"
+NEWS_NIGHT_QUEUE_FILE = DATA_DIR / "news" / "night_queue.json"
 WATCHLIST_FILE    = DATA_DIR / "watchlist" / "watchlist.json"
 WATCHLIST_EVENTS_FILE = DATA_DIR / "watchlist" / "watchlist_events.json"
 STOCK_DB_FILE     = DATA_DIR / "instruments" / "stock_db.json"
@@ -143,34 +144,72 @@ WEB_ADMIN_PASSWORD = os.environ.get("WEB_ADMIN_PASSWORD", "")
 SENT_NEWS_RETENTION_DAYS = 7
 TELEGRAM_MESSAGE_LIMIT = 4096
 # 소스 하나가 한 주기에 **번역**할 새 기사 수. Neurons를 쓰는 건 이 값이다
-# (소스 6곳 기준 주기당 최대 36회 호출).
-NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "6"))
+# (소스 6곳 기준 주기당 최대 24회 호출).
+#
+# 하루 번역량은 "주기 수 × 이 값"과 소스의 실제 발행량 중 작은 쪽이다. 20분
+# 주기에서는 상한이 발행량보다 훨씬 커서 사실상 발행되는 대로 다 번역했다.
+# 60분 주기 × 주간 17주기 × 소스 6곳 × 4건 = 하루 408건으로, 이제 상한이
+# 먼저 걸린다 — 그 안에서 무엇을 고를지가 사전선별과 재탕 차단의 몫이다.
+NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "4"))
 # 번역한 기사 중 소스 하나가 실제로 **송출**할 건수. impact가 높은 순으로
 # 고르고 나머지는 텔레그램 메시지에서만 빠진다 — 번역·감성 결과는 그대로
 # news_log·prediction_log에 남아 /view·/market·signal_scoring이 읽는다.
 # 탈락분을 다시 집어 재번역하지 않도록 확정(confirm)까지 마친다.
 NEWS_DIGEST_SEND_LIMIT = max(
     1,
-    int(os.environ.get("NEWS_DIGEST_SEND_LIMIT", "3")),
+    int(os.environ.get("NEWS_DIGEST_SEND_LIMIT", "2")),
 )
 NEWS_DIGEST_MESSAGE_MAX_CHARS = 3500
 # 다이제스트 한 기사의 제목·본문 표시 상한. 프롬프트도 본문을 200자 내외로
 # 지시하지만 그것은 지시일 뿐이라, 모델이 길게 답하는 주기가 섞이면 메시지가
 # 다시 부풀고 chunk_message_items가 메시지 수만 늘린다. 표시 단계에서 상한을
-# 확정해 20분마다 올라오는 총량을 예측 가능하게 둔다. 운영자가 조정하는 값이
+# 확정해 한 주기에 올라오는 총량을 예측 가능하게 둔다. 운영자가 조정하는 값이
 # 아니라 읽기 경험의 규약이므로 env가 아닌 상수다.
 NEWS_DIGEST_ARTICLE_MAX_CHARS = 220
 NEWS_DIGEST_TITLE_MAX_CHARS = 80
 NEWS_SOURCE_FETCH_TIMEOUT_SECONDS = 45.0
 NEWS_LIVE_MAX_AGE_HOURS = 48
-# 소스 한 곳을 얼마나 깊이 읽을지. 하루 기사 수량을 정하는 상한은 번역
-# 상한(NEWS_GLOBAL_LIMIT)이 아니라 이 값이다 — 여기서 잘린 기사는 다음
-# 주기에도 목록에 남지 않으면 영영 보이지 않는다. gnews는 이 값을 시장
-# 수로, gnews_us·gnews_kr은 질의 수로 다시 나눠 쓴다.
+# 소스 한 곳을 얼마나 깊이 읽을지. 사전선별이 훑는 후보의 폭이고, 여기서
+# 잘린 기사는 다음 주기에도 목록에 남지 않으면 영영 보이지 않는다. 60분
+# 주기에서는 한 주기가 덮어야 할 시간이 3배라 이 깊이가 더 중요해졌다.
+# gnews는 이 값을 시장 수로, gnews_us·gnews_kr은 질의 수로 다시 나눠 쓴다.
 NEWS_SOURCE_ARTICLE_LIMIT = max(
     1,
     int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "250")),
 )
+
+# 번역 결과가 품질 검사에 걸린 기사는 버리고 다음 후보로 넘어간다. 그 기사는
+# 이미 Neurons를 썼으므로, 한 소스가 한 주기에 몇 건까지 헛돌지 여기서 막는다.
+# 넘어가면 그 주기의 남은 슬롯을 포기한다 — 소스나 모델이 통째로 나쁜 날에
+# scan_limit(=NEWS_GLOBAL_LIMIT × 20)까지 태우는 쪽이 훨씬 비싸다.
+NEWS_TRANSLATION_QUALITY_REJECT_LIMIT = 3
+
+# ── 야간 뉴스 다이제스트 ──────────────────────────────
+# KST 00~07시에는 기사별 번역을 하지 않는다. 원문만 큐에 모아 두었다가 07시에
+# 시장별로 한 번씩만 LLM을 불러 묶음 요약을 보낸다. 7시간을 기사별로 번역하면
+# 소스 6곳 × 시간당 5건 = 210 호출인데, 읽는 사람은 자고 있어 아침에 한 번에
+# 읽는다 — 같은 내용을 시장 수(최대 4회) 호출로 줄인다.
+NEWS_NIGHT_DIGEST_ENABLED = _env_bool("NEWS_NIGHT_DIGEST_ENABLED", "true")
+NEWS_NIGHT_START_HOUR = int(os.environ.get("NEWS_NIGHT_START_HOUR", "0"))
+NEWS_NIGHT_END_HOUR = int(os.environ.get("NEWS_NIGHT_END_HOUR", "7"))
+if not 0 <= NEWS_NIGHT_START_HOUR <= 23 or not 0 <= NEWS_NIGHT_END_HOUR <= 23:
+    raise ConfigurationError("NEWS_NIGHT_START_HOUR·END_HOUR는 0~23이어야 합니다")
+if NEWS_NIGHT_START_HOUR == NEWS_NIGHT_END_HOUR:
+    raise ConfigurationError(
+        "NEWS_NIGHT_START_HOUR와 NEWS_NIGHT_END_HOUR가 같으면 야간 구간이 없습니다"
+    )
+NEWS_NIGHT_DIGEST_PROMPT_FILE = PROMPT_DIR / "night_digest_ko.txt"
+NEWS_NIGHT_DIGEST_TIMEOUT = 180
+NEWS_NIGHT_DIGEST_NUM_PREDICT = 2048
+# 큐에 담는 상한. 야간 수집은 Neurons를 쓰지 않으므로 소스당 상한을 번역
+# 상한보다 넉넉히 잡아 아침 요약이 고를 폭을 남긴다.
+NEWS_NIGHT_QUEUE_PER_SOURCE_LIMIT = 12
+NEWS_NIGHT_QUEUE_MAX_ITEMS = 600
+# 시장 하나의 요약에 넣을 헤드라인 수와, 그중 개별 항목으로 뽑아 보여줄 건수.
+# 헤드라인 120건이면 입력이 약 6,000토큰이라 출력 2,048을 더해도 컨텍스트
+# 32,768의 25% 선이다. 올릴 때는 이 계산을 다시 한다.
+NEWS_NIGHT_DIGEST_MAX_HEADLINES = 120
+NEWS_NIGHT_DIGEST_MAX_HIGHLIGHTS = 8
 
 # ── 번역 전 로컬 뉴스 사건 메모리·사전선별 ───────────
 # shadow는 점수·후보·LLM 결과만 축적하고 현재 최신순 번역 순서를 바꾸지 않는다.
@@ -189,6 +228,10 @@ NEWS_PREFILTER_SIMILARITY_THRESHOLD = 0.74
 # active에서 번역 슬롯 하나를 임의 깊이 기사에 배정해 선택 편향을 줄인다.
 # 총 번역 건수는 NEWS_GLOBAL_LIMIT 그대로라 추가 Neurons는 쓰지 않는다.
 NEWS_PREFILTER_EXPLORATION_SLOTS = 1
+# 같은 사건을 이미 번역했으면 이 시간 동안은 다른 기사로 다시 번역하지 않는다.
+# 사건 창(72시간)보다 짧게 둔다 — 같은 사건이 사흘 내내 새 숫자를 달고
+# 이어지는 경우가 있어, 재탕은 막되 후속 보도까지 막지는 않는 길이다.
+NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS = 24
 
 # Terraform 기본 bundle(micro_3_0: 2 vCPU, vCPU당 baseline 10%)의 하루 지속
 # 가능 CPU는 4.8 vCPU-hour다. 전체 프로세스 CPU를 함께 계량하고 그중 25%는
@@ -237,14 +280,20 @@ NEWS_GLOBAL_SOURCE_KEYS = [
 ]
 NEWS_RSS_FEEDS = _parse_rss_feeds()
 NEWS_SOURCE_FAILURE_THRESHOLD = 3
-NEWS_SOURCE_COOLDOWN_MINUTES = 60
+# 주기가 60분이라 60분 쿨다운은 한 주기도 쉬지 못하고 곧바로 다시 불린다.
+# 연속 실패한 소스는 두 주기를 쉬게 둔다.
+NEWS_SOURCE_COOLDOWN_MINUTES = 120
 # 뉴스 메시지에 감성 점수 표기 여부와, 관심종목 부정 뉴스 경고 기준(-1~0).
 NEWS_SENTIMENT_ENABLED = _env_bool("NEWS_SENTIMENT_ENABLED", "true")
 NEWS_NEGATIVE_ALERT_THRESHOLD = -0.6
 # /view 감성 뷰 집계에 사용할 최근 신호 일수.
 VIEW_LOOKBACK_DAYS = 3
 # 뉴스 주기. 짧게 돌려 조금씩 보내는 대신 텀을 늘려 한 번에 많이 묶는다.
-SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "20"))
+# 60분이다 — 20분 주기는 같은 사건을 하루 72번 훑으면서 번역 슬롯을
+# 최신순으로 채워, 읽히지 않는 번역에 Neurons를 태웠다. 주기를 늘리면 한
+# 주기가 보는 후보 폭이 3배가 되어 같은 번역 건수로 더 나은 기사를 고른다.
+# 이 값을 되돌릴 때는 NEWS_SOURCE_COOLDOWN_MINUTES도 함께 본다.
+SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "60"))
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
 RESEARCH_ANALYSIS_TIMEOUT = 600

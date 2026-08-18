@@ -24,6 +24,7 @@ from core.config import (
     NEWS_PREFILTER_OBSERVATION_FILE,
     NEWS_PREFILTER_OBSERVATION_RETENTION_DAYS,
     NEWS_PREFILTER_SIMILARITY_THRESHOLD,
+    NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS,
 )
 from core.workers import wait_for_urgent_idle
 from features.base import FeatureSpec
@@ -46,6 +47,7 @@ def _install_services(app) -> None:
         similarity_threshold=NEWS_PREFILTER_SIMILARITY_THRESHOLD,
         exploration_slots=NEWS_PREFILTER_EXPLORATION_SLOTS,
         translate_limit=NEWS_GLOBAL_LIMIT,
+        translated_event_cooldown_hours=NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS,
         daily_cpu_budget_seconds=NEWS_PREFILTER_DAILY_CPU_BUDGET_SECONDS,
     )
 
