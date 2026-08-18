@@ -4,42 +4,47 @@
 로컬 코드 작업은 `docs/next-steps.md`에 있다. 배포 절차 자체는
 `iac/terraform/README.md`가 유일한 문서다 — 여기에는 절차를 옮겨 적지 않는다.
 
-## 이 작업공간에서는 착수할 수 없다 (2026-08-12 확인)
+## 접속 경로 (2026-08-18 확인)
 
-아래 세 경로가 모두 없어서 서버에 닿을 방법이 없다. 인스턴스가 존재하는지조차
-조회되지 않는다.
+2026-08-15에 첫 배포가 실제로 끝났고(`f853dd9`), 그때 막힌 세 지점은 그 커밋이
+고쳤다. **이 작업공간에서 서버에 닿을 수 있다** — 아래가 모두 갖춰져 있다.
 
 | 경로 | 상태 |
 |---|---|
-| Terraform state | `.tfstate`·`terraform.tfvars` **없음** → `terraform output`으로 IP·접속 명령을 얻을 수 없다 |
-| SSH 개인키 | `~/.ssh`에 `known_hosts`뿐. `variables.tf`가 기대하는 `id_rsa` **없음** |
-| AWS 자격증명 | 살아 있으나(`user/openclaw`) **Lightsail 권한 없음** — `GetInstances`·`GetKeyPairs` 모두 `AccessDeniedException` |
+| Terraform state | `iac/terraform/terraform.tfstate`·`terraform.tfvars` **있음** |
+| 프로바이더 캐시 | `.terraform/` 초기화됨(aws 6.57.1, lock과 일치) |
+| SSH 개인키 | `~/.ssh/id_ed25519` **있음**. `known_hosts`에 8/15 접속 기록 |
+| Lightsail 권한 | `terraform apply`가 통과했다 = IAM 정책이 붙어 있다 |
 
-따라서 아래 항목은 **서버에 접근할 수 있는 자리에서 시작**해야 한다. 로컬에서
-대신 재 볼 수 있는 우회로는 없다(각 항목에 왜 안 되는지 적어 두었다).
+접속 명령은 외워 쓰지 않고 output에서 꺼낸다.
 
-## 확인 결과 (2026-08-11)
+```powershell
+cd iac\terraform
+terraform output -raw ssh_command
+terraform output -raw web_admin_tunnel_command   # 8787은 방화벽에서 닫혀 있다
+```
+
+## 서버 상태 (2026-08-18 기준, 미확인 축)
 
 | 축 | 확인 결과 |
 |---|---|
-| 운영 서버 `.env` | **미확인.** 이 작업공간에는 Terraform state와 SSH 대상 정보가 없어 서버의 유효값을 읽지 못했다 |
-| Neurons 실사용 | **미측정.** 확대 후 수치는 추정치뿐이다 |
-| Polymarket 수집 | 로컬은 수집·표시 모두 꺼짐이고 스냅숏 파일도 없다. 운영 서버 스모크·파일럿 착수 여부는 **미확인** |
+| 서버 코드 커밋 | **미확인.** 배포는 8/15이고 그 뒤 `main`에 커밋 11개가 쌓였다 |
+| 서버 `.env` | **미확인.** 다만 부트스트랩이 복사한 원본은 확정이다(작업 1) |
+| Neurons 실사용 | **미측정.** 60분 주기·야간 다이제스트 적용 후 수치는 추정치뿐이다 |
+| Polymarket 수집 | 로컬은 수집·표시 모두 꺼짐이고 스냅숏 파일도 없다. 서버 착수 여부 **미확인** |
 
 ## 실행 순서
 
-작업 1과 2는 서로 얽혀 있다. **2(서버 설정 확인·필요 시 반영)를 먼저 하고
-1(실측)을 그 위에서 재야**
-확대된 설정의 실제 소비를 보는 것이 된다. 3은 1의 결과가 무해함을 확인한 뒤에
-켠다 — 한도가 이미 빠듯하면 새 수집을 얹을 때가 아니다(다만 Polymarket 자체는
-Neurons를 쓰지 않는다).
-
 ```
-2. 서버 설정 확인·필요 시 반영  →  1. Neurons 실측(며칠)  →  3. Polymarket 수집·백필 동시 시작(일주일)  →  승격
+1. 코드·설정 동기화(기동 차단 요소 먼저)  →  2. Neurons 실측(며칠)  →  3. Polymarket 수집·백필 동시 시작(일주일)  →  승격
 ```
 
-**Polymarket 판정은 더 이상 30일을 기다리지 않고, 수집과 백필을 나란히
-시작한다.** 승격 조건은 두 축이고 서로를 대신하지 못한다.
+1을 건너뛰고 2를 재면 옛 설정(20분 주기·깊이 30)의 소비를 재는 것이 된다.
+3은 1의 결과가 무해함을 확인한 뒤에 켠다 — 한도가 이미 빠듯하면 새 수집을 얹을
+때가 아니다(다만 Polymarket 자체는 Neurons를 쓰지 않는다).
+
+**Polymarket 판정은 30일을 기다리지 않고, 수집과 백필을 나란히 시작한다.**
+승격 조건은 두 축이고 서로를 대신하지 못한다.
 
 | 축 | 무엇을 답하나 | 누가 재나 | 걸리는 시간 |
 |---|---|---|---|
@@ -55,11 +60,90 @@ Neurons를 쓰지 않는다).
 
 ---
 
-## 1. 수집량 확대 후 Neurons 실사용 확인
+## 1. 서버를 현재 코드·설정으로 올린다
 
-코드와 로컬 유효 설정에서는 주기 60분·야간 다이제스트·재탕 차단이 모두 적용된
-것을 확인했다. 운영 서버에 같은 값이 적용된 뒤의 소비량은 아직 **추정치일 뿐
-실측이 아니다.**
+배포 이후 `main`에 커밋 11개가 쌓였고 그중 다섯은 서버 동작을 바꾼다: 60분 주기,
+야간 다이제스트, 사전선별, 원자적 상태 쓰기, 빈 허용 목록 기동 차단.
+`requirements.txt`는 **바뀌지 않았으므로** `pip install`은 필요 없다.
+
+**순서가 중요하다. `.env`를 먼저 고치고 마지막에 한 번만 재기동한다.**
+`git pull`만 먼저 하고 재기동하면 아래 1-1 때문에 봇이 뜨지 않는다.
+
+### 1-1. 먼저 기동을 막는 것을 없앤다 — `ALLOWED_CHAT_IDS`
+
+`485b670`부터 **유효한 chat_id가 하나도 없으면 `ConfigurationError`로 기동하지
+않는다.** 빈 값을 전체 허용으로 읽던 분기를 없앴기 때문이다(상태가 채팅별로
+나뉘어 있지 않아 설정 누락이 곧바로 공개 봇이 된다).
+
+부트스트랩은 클론한 `.env.example`을 그대로 복사하는데, 8/15 시점 그 파일의
+해당 줄은 **`ALLOWED_CHAT_IDS=`(빈 값)**이었다. 사람이 그 뒤에 채우지 않았다면
+서버는 지금 빈 값이고, 새 코드로 재기동하는 순간 죽는다.
+
+```bash
+grep -n '^ALLOWED_CHAT_IDS=' ~/stock_chatbot/.env    # 값이 비어 있으면 채운다
+```
+
+숫자가 아닌 값만 있는 경우도 같게 막힌다(자리표시자를 지우지 않은 경우다).
+`TELEGRAM_CHAT_ID`와 같은 값을 넣으면 된다. 쉼표로 여러 개도 가능하다.
+
+### 1-2. `.env` 드리프트를 현재 값으로 맞춘다
+
+아래는 추정이 아니다. 부트스트랩이 8/15 `.env.example`을 통째로 복사했고
+(`user_data.sh.tftpl`의 `.env` 생성 단계), 그날 그 파일의 값이 왼쪽 열이다.
+그 뒤 사람이 손댔을 수 있으니 **눈으로 확인하고 다른 줄만 고친다.**
+
+| 키 | 8/15 배포분 | 현재 값 | 왜 |
+|---|---:|---:|---|
+| `FEATURES_ENABLED` | `news_prefilter` 없음 | 있음 | 사전선별을 켜야 관측이 시작된다 |
+| `NEWS_SOURCE_ARTICLE_LIMIT` | 30 | 250 | 사전선별이 깊이를 CPU로 산다. Neurons는 안 늘어난다 |
+| `SCHEDULER_INTERVAL_MINUTES` | 20 | 60 | 한 주기가 보는 후보 폭을 키운다 |
+| `NEWS_DIGEST_SEND_LIMIT` | 3 | 2 | 번역 4건 중 2건만 송출 |
+| `NEWS_GLOBAL_LIMIT` | 4 | 4 | 그대로 |
+
+```env
+FEATURES_ENABLED=instruments,quant,watchlist,news_prefilter,news,market_sentiment,research,briefing,signal_scoring,system_admin,web_admin
+NEWS_SOURCE_ARTICLE_LIMIT=250
+SCHEDULER_INTERVAL_MINUTES=60
+NEWS_DIGEST_SEND_LIMIT=2
+```
+
+`NEWS_PREFILTER_MODE`(shadow)와 `NEWS_NIGHT_*`(켜짐, KST 00~07시)는 서버 `.env`에
+없고 코드 기본값이 그대로 먹는다 — **없는 키를 새로 넣지 않는다.**
+`POLYMARKET_*` 블록도 이 단계에서 손대지 않는다. 작업 3에서 스모크를 통과한
+뒤에 켠다.
+
+`NEWS_SOURCE_ARTICLE_LIMIT` 250은 `news_prefilter`가 함께 켜져 있을 때만 쓴다.
+둘 중 하나만 올리면 깊이만 커지고 고르는 기준은 그대로다.
+
+### 1-3. pull과 재기동
+
+```bash
+cd ~/stock_chatbot && git log -1 --oneline   # 어느 커밋에 서 있는지 먼저 본다
+git pull
+sudo systemctl restart stock-chatbot
+journalctl -u stock-chatbot -f
+```
+
+- **재기동 시각은 08:35~10:35를 피한다.** 그 창이 Polymarket 스냅숏의 재시도
+  구간이다(작업 3을 켠 뒤부터 해당). KST 07:00 야간 다이제스트 발송도 피한다 —
+  그 job이 실패하면 큐가 다음 주간 주기로 넘어간다.
+- 기동 로그에 `봇 시작됨. 활성 기능: ...`이 뜨고 목록에 `news_prefilter`가
+  들어 있어야 한다.
+- 첫 며칠은 `journalctl -u stock-chatbot | grep PREFILTER`로 `중단=budget`이
+  매일 나오는지만 본다 — 매일 소진되면 예산이 아니라 관측량을 먼저 줄인다.
+  배경 보정은 하루 3.6 CPU-hour 예산 안에서만 돌고, 긴급 뉴스 구간·load average
+  1.5 이상에서는 스스로 물러난다.
+- 승격 판정은 일주일 뒤 `/system prefilter`로 하고, 기준표는
+  `docs/next-steps.md` 2번에 있다.
+
+같은 토큰으로 두 프로세스가 폴링하면 양쪽이 번갈아 죽는다. 로컬 봇은 8/12
+이후 꺼져 있다 — 다시 켜지 않는다.
+
+---
+
+## 2. 수집량 확대 후 Neurons 실사용 확인
+
+작업 1이 끝난 뒤에야 의미가 있다. 그 전 로그는 20분 주기·깊이 30의 소비다.
 
 | 구분 | 값 |
 |---|---|
@@ -97,64 +181,6 @@ journalctl -u stock-chatbot --since "$(date -u -d '6 days ago' '+%Y-%m-%d 00:00:
   다이제스트만 비는 게 아니다.
 - 여유가 크게 남으면 깊이(본문 길이·후보 수)를 먼저 올린다. **깊이는 싸고 수량은
   비싸다** — 기사 1건이 호출 1회이므로 수량은 선형으로 늘어난다.
-
----
-
-## 2. 운영 서버(Lightsail) 설정 확인·필요 시 반영
-
-`.env`는 `.gitignore` 대상이라 **코드를 푸시해도 서버에 전파되지 않는다.**
-이 작업공간에는 Terraform state와 SSH 대상 정보가 없어 서버 `.env`를 직접 확인하지
-못했다. 분석 깊이·타임아웃 등은 코드 상수로 고정되어 낡은 환경변수 줄이 남아 있어도
-무시된다. 아래 운영 조절값만 서버에 낡은 명시값이 있으면 현재 값으로 바꾼다.
-
-- 절차는 `iac/terraform/README.md`가 유일한 배포 문서다. `.env` 편집(`nano
-  ~/stock_chatbot/.env`)과 기동은 `terraform output cutover_commands`에, 재기동
-  (`sudo systemctl restart stock-chatbot`)은 README 갱신 절에 있다.
-- 같은 토큰으로 두 프로세스가 폴링하면 양쪽이 번갈아 죽는다.
-  **로컬 정지 → 서버 기동** 순서를 지킨다.
-- `POLYMARKET_*` 블록은 이 단계에서 **넣지 않는다.** 작업 3에서
-  스모크를 통과한 뒤에 켠다.
-
-**먼저 서버 `.env`를 눈으로 확인한다.** 아래 운영 조절값은 `config.py`에도 기본값이
-있지만 서버의 명시값이 우선한다. 따라서
-서버 `.env`에 **낡은 명시값이 남아 있을 때만** 손댈 게 있다. 부트스트랩이 당시
-`.env.example`을 통째로 복사했으므로 남아 있을 가능성이 크지만, 아래 각 줄은 서버를
-직접 보고 확정할 것 — 이 목록은 git 이력에서 역산한 추정이다.
-
-```env
-NEWS_GLOBAL_LIMIT=4                # 3 또는 6
-NEWS_DIGEST_SEND_LIMIT=2           # 3
-NEWS_SOURCE_ARTICLE_LIMIT=250      # 10 또는 30
-SCHEDULER_INTERVAL_MINUTES=60      # 5 또는 20
-```
-
-야간 다이제스트는 새 키다. 서버 `.env`에 없으면 코드 기본값(켜짐, KST 00~07시)이
-그대로 먹으므로 **넣지 않아도 된다.** 시간대를 바꿀 때만 명시한다.
-
-```env
-NEWS_NIGHT_DIGEST_ENABLED=true
-NEWS_NIGHT_START_HOUR=0
-NEWS_NIGHT_END_HOUR=7
-```
-
-주석은 교체 대상인 옛 값이다. 해당 줄이 서버에 아예 없으면 코드 기본값이 그대로
-먹으므로 추가할 필요가 없다 — **없는 키를 새로 넣지 않는다.**
-
-`NEWS_SOURCE_ARTICLE_LIMIT` 250은 `news_prefilter`가 함께 켜져 있을 때만 쓴다.
-이 기능이 소스를 깊게 훑되 번역은 `NEWS_GLOBAL_LIMIT` 건으로 묶으므로 **Neurons는
-늘지 않는다.** 서버 `FEATURES_ENABLED`에 `news_prefilter`가 없다면 이 줄은
-30으로 두고, 기능과 함께 올린다.
-
-```env
-FEATURES_ENABLED=instruments,quant,watchlist,news_prefilter,news,market_sentiment,research,briefing,signal_scoring,system_admin,web_admin
-NEWS_PREFILTER_MODE=shadow
-```
-
-`shadow`로 올린다. 승격 판정은 일주일 뒤 `/system prefilter`로 하고 절차는
-`docs/next-steps.md` 1번에 있다. 배경 보정 작업은 하루 3.6 CPU-hour 예산 안에서만
-돌고, 긴급 뉴스 구간·load average 1.5 이상에서는 스스로 물러난다. 첫 며칠은
-`journalctl -u stock-chatbot | grep PREFILTER`로 `중단=budget`이 매일 나오는지만
-본다 — 매일 소진되면 예산이 아니라 관측량을 먼저 줄인다.
 
 ---
 
@@ -222,8 +248,12 @@ HTTP 200으로 열린다. 기술 통합은 가능하고 LLM 비용도 0이다. �
 보장하지 않는다.** Gamma 시장 목록과 CLOB 과거 시세를 둘 다 확인한다(host가
 달라 한쪽만 열릴 수 있다).
 
+부트스트랩은 실행 의존성만 설치하므로 서버에는 pytest가 없다. 먼저 받는다.
+
 ```bash
-RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
+cd ~/stock_chatbot
+./venv/bin/pip install -r requirements-dev.txt
+RUN_POLYMARKET_SMOKE=1 ./venv/bin/python -m pytest -q -m polymarket_smoke
 ```
 
 - 통과하면 3-2로 간다.
@@ -243,7 +273,7 @@ POLYMARKET_ENABLED=true
 파일이어야 `/system polymarket`이 두 축을 함께 그린다.
 
 ```bash
-python app/polymarket_backfill.py
+cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
 ```
 
 - 백필이 미달이면 **거기서 끝낸다.** 라이브를 30일 더 봐도 같은 항목이 통과할
