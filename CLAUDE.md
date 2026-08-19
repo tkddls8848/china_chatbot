@@ -132,7 +132,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   확률변화(pp)라 국가별 -1~+1 감성 점수와 축이 다르다 — 합산하거나 순위·리서치
   입력·브리핑 payload에 넣지 않고 `/market` 하단 별도 패널에만 그린다. 방향은
   `polymarket_rules.py`의 명시적 allowlist로만 정하고 LLM에 묻지 않는다.
-  판정 근거는 `/system polymarket`이 계산한다. 자세한 규약은 `docs/aws-next-steps.md`.
+  판정 근거는 `/system polymarket`이 계산한다. 자세한 규약은 `docs/server-ops.md`.
 - **승격 판정은 30일을 기다리지 않는다.** `app/polymarket_backfill.py`가 CLOB
   과거 시세로 지난 31일 스냅숏을 소급 작성해 같은 게이트를 돌린다. 결과는
   `polymarket_backfill.json`에 따로 쓰고 라이브 스냅숏과 섞지 않는다 — 백필에는
@@ -171,11 +171,14 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - LLM JSON은 필수 필드를 엄격히 검사하고 현재 응답 envelope만 처리한다.
 - 외부 소스 하나의 실패가 전체 뉴스 주기를 중단시키지 않도록 소스 단위로 격리한다.
 - 새 호환 분기, 사용하지 않는 설정 플래그, 중복 helper를 만들지 않는다.
-- 앞으로 할 일은 두 파일에만 모은다. 항목이 끝나면 지운다. 로컬 작업은
-  `docs/next-steps.md`, 운영 서버에 접근해야 하는 작업은 `docs/aws-next-steps.md`다.
-  서버 쪽은 SSH와 재기동이 필요하고 실패의 파급이 달라 분리해 두었다 — 섞으면
-  로컬에서 그냥 고칠 수 있는 일이 서버 일정에 묶인다. 그 외 새 목록 파일은
-  만들지 않는다.
+- **문서는 세 개뿐이고 역할이 갈린다. 그 외 새 목록 파일을 만들지 않는다.**
+  `docs/server-ops.md`는 이미 떠 있는 서버를 상대로 반복하는 **절차서**다
+  (접속·배포·설정·실측·판정·백업·장애). 절차이므로 항목이 끝나도 지우지 않는다.
+  `docs/next-steps.md`는 앞으로 할 일을 담은 **계획서**이고 현재 주제는 리서치·
+  시장 컨센서스의 웹 서비스화다. 항목이 끝나면 지운다 — 완료 기록은 git 이력이
+  맡는다. 인스턴스 생성·최초 전환·삭제는 `iac/terraform/README.md`에만 있다.
+  셋을 섞지 않는다: 절차서에 할 일을 적으면 끝난 일이 남고, 계획서에 절차를
+  적으면 계획을 지울 때 절차까지 사라진다.
 - 모듈은 한 책임을 유지하되 한두 함수만 담는 무의미한 파일 분할은 피한다.
 - **시각은 `core/clock.py`의 `now()`·`today()`만 쓴다.** `datetime.now()`·`date.today()`는
   호스트 타임존을 따라가서 서버를 다른 타임존에 올리면 `/market`의 하루 경계와 보존

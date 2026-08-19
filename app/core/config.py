@@ -419,7 +419,7 @@ POLYMARKET_TIMEOUT = 20
 # 선택 게이트. 유동성이 얕은 계약은 하루 변화가 호가 한 번에 흔들려 컨센서스가
 # 아니라 잡음이 된다. 실측 기준(volume 10,000 · liquidity 1,000)을 쓴다.
 # 아래 네 값은 파일럿 도중 바꾸지 않는다 — 바꾸면 앞뒤 기간의 표본이 달라져
-# 30일을 한 창으로 볼 수 없다(docs/aws-next-steps.md 3-2). 그래서 env가 아니다.
+# 30일을 한 창으로 볼 수 없다(docs/aws-next-steps.md 8-2). 그래서 env가 아니다.
 POLYMARKET_MIN_VOLUME = 10000.0
 POLYMARKET_MIN_LIQUIDITY = 1000.0
 # 승격 게이트의 "median spread 5%p 이하"와 같은 기준을 수집 단계에서도 쓴다.
