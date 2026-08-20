@@ -1,5 +1,8 @@
 import asyncio
+import json
+from datetime import timedelta
 
+from core.clock import now
 from state.prediction_log import PredictionLog, aggregate_stock_views
 
 
@@ -72,3 +75,38 @@ def test_snapshot_skips_corrupt_lines(tmp_path):
     entries = asyncio.run(log.snapshot(365))
     assert len(entries) == 1
     assert entries[0]["title"] == "ok"
+
+
+def test_large_history_applies_retention_window_and_keeps_recent_rows(tmp_path):
+    """큰 파일에서도 기간 밖 행을 반환하지 않고 최근 행을 빠뜨리지 않는다."""
+    path = tmp_path / "large.jsonl"
+    old_ts = (now() - timedelta(days=60)).isoformat(timespec="seconds")
+    recent_ts = (now() - timedelta(hours=1)).isoformat(timespec="seconds")
+    old = {
+        "ts": old_ts,
+        "source": "old",
+        "title": "expired",
+        "sentiment": -0.1,
+        "impact": "low",
+        "codes": ["600519"],
+    }
+    lines = [json.dumps(old) for _ in range(20_000)]
+    for index in range(10):
+        lines.append(
+            json.dumps(
+                {
+                    **old,
+                    "ts": recent_ts,
+                    "source": "recent",
+                    "title": f"recent-{index}",
+                }
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    entries = asyncio.run(PredictionLog(path).snapshot(7))
+
+    assert len(entries) == 10
+    assert [entry["title"] for entry in entries] == [
+        f"recent-{index}" for index in range(10)
+    ]

@@ -17,7 +17,7 @@ from news.night import (
 )
 from news.registry import SourceSpec
 from news.sources import GlobalArticle
-from state import NightNewsQueue
+from state import NightNewsQueue, SentNewsTracker
 
 
 class _RecordingBot:
@@ -27,6 +27,19 @@ class _RecordingBot:
 
     async def send_message(self, chat_id, text, parse_mode=None):
         if self._fail:
+            raise RuntimeError("telegram down")
+        self.messages.append(text)
+
+
+class _FailOnCallBot:
+    def __init__(self, fail_on: int):
+        self.calls = 0
+        self.messages = []
+        self._fail_on = fail_on
+
+    async def send_message(self, chat_id, text, parse_mode=None):
+        self.calls += 1
+        if self.calls == self._fail_on:
             raise RuntimeError("telegram down")
         self.messages.append(text)
 
@@ -181,6 +194,51 @@ def test_queue_drops_the_oldest_when_full(tmp_path):
 
     _, items = asyncio.run(queue.snapshot())
     assert [row["article_id"] for row in items] == ["gnews_us-1", "gnews_us-2"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="queue overflow does not release or confirm the evicted tracker reservation",
+)
+def test_queue_overflow_does_not_leave_evicted_article_pending(tmp_path):
+    """큐에서 밀려난 기사는 tracker의 처리 중 상태에도 남으면 안 된다."""
+    tracker = SentNewsTracker(tmp_path / "sent.json")
+    queue = _queue(tmp_path, max_items=2)
+
+    class _Registry:
+        def record_success(self, key):
+            return None
+
+    def article(index):
+        return GlobalArticle(
+            article_id=f"overflow-{index}",
+            title=f"Headline {index}",
+            content="본문",
+            published_at=datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+        )
+
+    first = SourceSpec(
+        key="first",
+        label="첫 소스",
+        fetch=lambda: [article(0), article(1)],
+        market="US",
+    )
+    second = SourceSpec(
+        key="second",
+        label="두 번째 소스",
+        fetch=lambda: [article(2)],
+        market="US",
+    )
+
+    async def run():
+        await collect_night_source(first, _Registry(), tracker, queue, {})
+        await collect_night_source(second, _Registry(), tracker, queue, {})
+
+    asyncio.run(run())
+
+    _, queued = asyncio.run(queue.snapshot())
+    assert [row["article_id"] for row in queued] == ["overflow-1", "overflow-2"]
+    assert "overflow-0" not in tracker._pending
 
 
 def test_queue_clear_empties_the_file(tmp_path):
@@ -346,6 +404,56 @@ def test_digest_keeps_the_queue_when_telegram_fails(tmp_path):
 
     assert tracker.confirmed == []
     assert len(asyncio.run(queue.snapshot())[1]) == 2
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="partial Telegram success currently confirms and clears every queued article",
+)
+def test_digest_keeps_only_the_second_chunk_when_that_send_fails(tmp_path, monkeypatch):
+    """부분 성공이면 성공한 chunk만 확정하고 실패한 chunk만 재시도해야 한다."""
+    monkeypatch.setattr("news.night.NEWS_DIGEST_MESSAGE_MAX_CHARS", 240)
+    queue = _queue(tmp_path)
+    asyncio.run(queue.enqueue([_item(0, market="CN")]))
+    asyncio.run(queue.enqueue([_item(1, market="US")]))
+    tracker = _RecordingTracker()
+    bot = _FailOnCallBot(fail_on=2)
+    app = _App(
+        bot=bot,
+        night_queue=queue,
+        night_digest_analyzer=_analyzer(tmp_path, _payload()),
+        sent_tracker=tracker,
+        news_log=_RecordingLog(),
+        prediction_log=_RecordingLog(),
+    )
+
+    asyncio.run(send_night_digest(app))
+
+    _, remaining = asyncio.run(queue.snapshot())
+    assert bot.calls == 2
+    assert len(tracker.confirmed) == 1
+    assert len(remaining) == 1
+    assert remaining[0]["article_id"] not in tracker.confirmed
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="night highlights are logged before Telegram delivery succeeds",
+)
+def test_repeated_total_send_failure_does_not_duplicate_prediction_log(tmp_path):
+    """전송되지 않은 신호는 재시도 횟수만큼 append되면 안 된다."""
+    app, queue, tracker, news_log, prediction_log = _send_app(
+        tmp_path,
+        bot=_RecordingBot(fail=True),
+    )
+
+    asyncio.run(send_night_digest(app))
+    asyncio.run(send_night_digest(app))
+
+    assert tracker.confirmed == []
+    assert len(asyncio.run(queue.snapshot())[1]) == 2
+    assert prediction_log.records == []
+    assert news_log.records == []
 
 
 def test_digest_uses_one_llm_call_per_market(tmp_path):

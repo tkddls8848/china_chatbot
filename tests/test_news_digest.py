@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from core.config import (
     NEWS_DIGEST_ARTICLE_MAX_CHARS,
     NEWS_DIGEST_MESSAGE_MAX_CHARS,
@@ -13,6 +15,7 @@ from news.pipeline import (
     select_digest_rows,
     send_global_digest,
 )
+from state import SentNewsTracker
 from news.sources import GlobalArticle
 from news.utils import (
     chunk_message_items,
@@ -147,6 +150,31 @@ def test_digest_keeps_small_sources_in_one_message():
 
     assert len(bot.messages) == 1
     assert "소스 1곳 · 새 기사 2건 · 1/1" in bot.messages[0]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="successful sends are persisted only after the complete news cycle returns",
+)
+def test_successful_send_survives_immediate_process_restart(tmp_path):
+    """전송 직후 종료돼도 새 tracker가 같은 기사를 다시 예약하면 안 된다."""
+    path = tmp_path / "sent.json"
+    tracker = SentNewsTracker(path)
+    row = _row(0, impact="high", sentiment=0.8)
+
+    asyncio.run(
+        send_global_digest(
+            _RecordingBot(),
+            "chat",
+            [row],
+            tracker,
+            None,
+            None,
+        )
+    )
+
+    restarted = SentNewsTracker(path)
+    assert asyncio.run(restarted.reserve(row.article.article_id)) is False
 
 
 def test_selection_sends_only_the_highest_impact_articles():
