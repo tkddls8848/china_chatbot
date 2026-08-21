@@ -12,6 +12,11 @@ from core.config import (
     FEATURES_ENABLED,
     RUNTIME_LOCK_FILE,
     TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CONNECT_TIMEOUT_SECONDS,
+    TELEGRAM_CONCURRENT_UPDATES,
+    TELEGRAM_POOL_TIMEOUT_SECONDS,
+    TELEGRAM_READ_TIMEOUT_SECONDS,
+    TELEGRAM_WRITE_TIMEOUT_SECONDS,
 )
 from features import build_feature_registry
 from handlers.commands import configure_telegram_menu
@@ -90,6 +95,11 @@ def main() -> None:
     app = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
+        .connect_timeout(TELEGRAM_CONNECT_TIMEOUT_SECONDS)
+        .read_timeout(TELEGRAM_READ_TIMEOUT_SECONDS)
+        .write_timeout(TELEGRAM_WRITE_TIMEOUT_SECONDS)
+        .pool_timeout(TELEGRAM_POOL_TIMEOUT_SECONDS)
+        .concurrent_updates(TELEGRAM_CONCURRENT_UPDATES)
         .post_init(_start_application)
         .post_stop(_stop_scheduler)
         .post_shutdown(_stop_scheduler)

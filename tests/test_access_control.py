@@ -89,7 +89,12 @@ def test_restricted_decorator_updates_request_status(monkeypatch):
     async def handler(update, context):
         return None
 
-    asyncio.run(handler(update, None))
+    async def scenario():
+        await handler(update, SimpleNamespace(bot_data={}))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
     assert edits == ["✅ 요청 작업 처리 완료"]
 
 

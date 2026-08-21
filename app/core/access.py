@@ -6,18 +6,65 @@ ALLOWED_CHAT_IDS에 있는 chat_id에서 온 업데이트만 처리하고, 나�
 되살리면 설정 누락이 곧바로 공개 봇이 된다.
 """
 
+import asyncio
 import functools
 import logging
 from typing import Awaitable, Callable
 
 from telegram import Update
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import ContextTypes
 
-from core.config import ALLOWED_CHAT_IDS
+from core.config import (
+    ALLOWED_CHAT_IDS,
+    TELEGRAM_STATUS_MAX_ATTEMPTS,
+    TELEGRAM_STATUS_RETRY_DELAY_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
 Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
+
+
+async def _status_request(operation, failure_message: str):
+    """Best-effort status UI: it must never hold up the actual command."""
+    for attempt in range(TELEGRAM_STATUS_MAX_ATTEMPTS):
+        try:
+            return await operation()
+        except (TimedOut, NetworkError):
+            if attempt + 1 < TELEGRAM_STATUS_MAX_ATTEMPTS:
+                await asyncio.sleep(TELEGRAM_STATUS_RETRY_DELAY_SECONDS)
+                continue
+            logger.warning(failure_message, exc_info=True)
+    return None
+
+
+def _run_status_task(coroutine) -> None:
+    task = asyncio.create_task(coroutine)
+
+    def _log_unexpected_error(done_task) -> None:
+        if done_task.cancelled():
+            return
+        try:
+            done_task.result()
+        except Exception:
+            logger.warning("[STATUS] 상태 메시지 작업 실패", exc_info=True)
+
+    task.add_done_callback(_log_unexpected_error)
+
+
+async def _send_status(message, label: str):
+    return await _status_request(
+        lambda: message.reply_text(f"⏳ {label} 처리 중..."),
+        "[STATUS] 처리 상태 메시지 전송 실패",
+    )
+
+
+async def _finish_status(status_task, text: str, failure_message: str) -> None:
+    status = await status_task
+    if status is None:
+        return
+    await _status_request(lambda: status.edit_text(text), failure_message)
 
 _HANDLER_LABELS = {
     "cmd_start": "메뉴 열기",
@@ -73,7 +120,7 @@ def restricted(handler: Handler, show_status: bool = True) -> Handler:
             )
             return
         message = getattr(update, "effective_message", None)
-        status = None
+        status_task = None
         label = request_label(update, handler.__name__)
         bot_data = getattr(context, "bot_data", {})
         background_tasks_before = len(bot_data.get("research_tasks", set()))
@@ -86,29 +133,34 @@ def restricted(handler: Handler, show_status: bool = True) -> Handler:
             or callback_data.startswith("nav:briefing:")
         )
         if show_status and not suppress_menu_status and message is not None:
-            try:
-                status = await message.reply_text(f"⏳ {label} 처리 중...")
-            except Exception:
-                logger.warning("[STATUS] 처리 상태 메시지 전송 실패", exc_info=True)
+            status_task = asyncio.create_task(_send_status(message, label))
 
         try:
             await handler(update, context)
         except Exception:
-            if status is not None:
-                try:
-                    await status.edit_text(f"❌ {label} 처리 실패. 잠시 후 다시 시도해 주세요.")
-                except Exception:
-                    logger.warning("[STATUS] 실패 상태 메시지 갱신 실패", exc_info=True)
+            if status_task is not None:
+                _run_status_task(
+                    _finish_status(
+                        status_task,
+                        f"❌ {label} 처리 실패. 잠시 후 다시 시도해 주세요.",
+                        "[STATUS] 실패 상태 메시지 갱신 실패",
+                    )
+                )
             raise
         else:
-            if status is not None:
-                try:
-                    background_tasks_after = len(bot_data.get("research_tasks", set()))
-                    if background_tasks_after > background_tasks_before:
-                        await status.edit_text(f"⏳ {label} 백그라운드 실행 중...")
-                    else:
-                        await status.edit_text(f"✅ {label} 처리 완료")
-                except Exception:
-                    logger.warning("[STATUS] 완료 상태 메시지 갱신 실패", exc_info=True)
+            if status_task is not None:
+                background_tasks_after = len(bot_data.get("research_tasks", set()))
+                completion_text = (
+                    f"⏳ {label} 백그라운드 실행 중..."
+                    if background_tasks_after > background_tasks_before
+                    else f"✅ {label} 처리 완료"
+                )
+                _run_status_task(
+                    _finish_status(
+                        status_task,
+                        completion_text,
+                        "[STATUS] 완료 상태 메시지 갱신 실패",
+                    )
+                )
 
     return wrapper
