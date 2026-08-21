@@ -14,17 +14,17 @@ from features.watchlist.feature import FEATURE as WATCHLIST
 from features.web_admin.feature import FEATURE as WEB_ADMIN
 
 ALL_FEATURES = (
-    INSTRUMENTS,
-    QUANT,
-    WATCHLIST,
-    NEWS_PREFILTER,
-    NEWS,
-    MARKET_SENTIMENT,
-    RESEARCH,
-    BRIEFING,
-    SIGNAL_SCORING,
-    SYSTEM_ADMIN,
-    WEB_ADMIN,
+    INSTRUMENTS,       # 종목 마스터 데이터 — 종목 DB의 기반
+    QUANT,             # 시세·자금흐름·섹터 정량 컨텍스트
+    WATCHLIST,         # 관심종목 관리
+    NEWS_PREFILTER,    # 번역 전 로컬 뉴스 사건 메모리·사전선별
+    NEWS,              # 뉴스 수집·번역·전송
+    MARKET_SENTIMENT,  # 국가별 뉴스 감성(폴리마켓 컨센서스·이상탐지 포함)
+    RESEARCH,          # 시장 리서치
+    BRIEFING,          # 모닝·마감 브리핑
+    SIGNAL_SCORING,    # 종목 감성 뷰
+    SYSTEM_ADMIN,      # 시작·도움말·시스템 제어
+    WEB_ADMIN,         # 관리 웹 대시보드
 )
 
 

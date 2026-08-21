@@ -148,8 +148,12 @@ def test_catalog_reports_enabled_and_disabled_states():
     registry = build_feature_registry({"instruments", "system_admin"})
     lines = registry.catalog_lines()
 
-    assert any(line.startswith("instruments ") and ": 활성" in line for line in lines)
-    assert any(line.startswith("news ") and ": 비활성" in line for line in lines)
+    assert any(
+        line.startswith("• <b>instruments</b>") and "✅ 활성" in line for line in lines
+    )
+    assert any(
+        line.startswith("• <b>news</b>") and "⛔ 비활성" in line for line in lines
+    )
 
 
 def test_disabled_features_do_not_initialize_their_services():

@@ -175,25 +175,24 @@ class FeatureRegistry:
         return "\n".join(lines)
 
     def catalog_lines(self) -> list[str]:
-        lines = []
+        """기능 하나당 헤더 한 줄 + 있는 항목만 들여쓴 하위 줄로 이어진다.
+
+        모든 항목을 ` · `로 한 줄에 이어붙이면 데이터 파일이 많은 기능에서
+        줄이 길게 늘어져 훑어보기 어렵다. 헤더로 존재를 한눈에 보고, 궁금한
+        기능만 하위 줄을 읽게 나눈다.
+        """
+        lines: list[str] = []
         for feature in self._all_specs:
             enabled = feature.key in self._enabled_keys
-            state = "활성" if enabled else "비활성"
-            commands = ", ".join(f"/{item.name}" for item in feature.commands)
-            detail = f" · {commands}" if commands else ""
-            dependencies = (
-                f" · 의존: {', '.join(sorted(feature.requires))}"
-                if feature.requires
-                else ""
-            )
-            schedule = " · 스케줄" if feature.install_jobs is not None else ""
-            data = (
-                f" · 데이터: {', '.join(feature.data_files)}"
-                if feature.data_files
-                else ""
-            )
-            lines.append(
-                f"{feature.key} ({feature.label}): "
-                f"{state}{detail}{dependencies}{schedule}{data}"
-            )
+            state = "✅ 활성" if enabled else "⛔ 비활성"
+            lines.append(f"• <b>{feature.key}</b> ({feature.label}) — {state}")
+            if feature.commands:
+                commands = ", ".join(f"/{item.name}" for item in feature.commands)
+                lines.append(f"    명령: {commands}")
+            if feature.requires:
+                lines.append(f"    의존: {', '.join(sorted(feature.requires))}")
+            if feature.install_jobs is not None:
+                lines.append("    스케줄: 있음")
+            if feature.data_files:
+                lines.append(f"    데이터: {', '.join(feature.data_files)}")
         return lines
