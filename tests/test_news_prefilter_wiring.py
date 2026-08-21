@@ -180,7 +180,7 @@ def _prepare(prefilter, translator, count=4):
 
 def test_prefilter_order_decides_which_articles_are_translated(monkeypatch):
     """기능의 존재 이유. 번역은 피드 순서가 아니라 사전선별 순서를 따라야 한다."""
-    monkeypatch.setattr("news.pipeline.NEWS_GLOBAL_LIMIT", 2)
+    monkeypatch.setattr("news.preparation.NEWS_GLOBAL_LIMIT", 2)
     translator = _Translator()
 
     rows, _ = _prepare(_Prefilter(), translator)
@@ -192,7 +192,7 @@ def test_prefilter_order_decides_which_articles_are_translated(monkeypatch):
 
 def test_translation_count_is_unchanged_by_the_prefilter(monkeypatch):
     """추가 Neurons가 0이라는 전제. 순서만 바뀌고 건수는 그대로다."""
-    monkeypatch.setattr("news.pipeline.NEWS_GLOBAL_LIMIT", 2)
+    monkeypatch.setattr("news.preparation.NEWS_GLOBAL_LIMIT", 2)
     with_prefilter = _Translator()
     without = _Translator()
 
@@ -204,7 +204,7 @@ def test_translation_count_is_unchanged_by_the_prefilter(monkeypatch):
 
 def test_a_broken_prefilter_falls_back_to_recency_instead_of_dropping_news(monkeypatch):
     """로컬 보조 기능의 실패가 뉴스를 멈추게 해서는 안 된다."""
-    monkeypatch.setattr("news.pipeline.NEWS_GLOBAL_LIMIT", 2)
+    monkeypatch.setattr("news.preparation.NEWS_GLOBAL_LIMIT", 2)
     translator = _Translator()
 
     rows, _ = _prepare(_Prefilter(fail=True), translator)
@@ -216,7 +216,7 @@ def test_a_broken_prefilter_falls_back_to_recency_instead_of_dropping_news(monke
 
 
 def test_candidate_id_rides_along_so_the_label_can_be_joined(monkeypatch):
-    monkeypatch.setattr("news.pipeline.NEWS_GLOBAL_LIMIT", 2)
+    monkeypatch.setattr("news.preparation.NEWS_GLOBAL_LIMIT", 2)
 
     rows, _ = _prepare(_Prefilter(), _Translator())
 
@@ -230,7 +230,7 @@ def test_archiving_an_unsent_article_still_returns_its_label(monkeypatch):
 
     탈락분을 버리면 하루 라벨의 절반이 사라져 보정기가 굶는다.
     """
-    monkeypatch.setattr("news.pipeline.NEWS_GLOBAL_LIMIT", 2)
+    monkeypatch.setattr("news.preparation.NEWS_GLOBAL_LIMIT", 2)
     from news.pipeline import archive_unsent_articles
 
     rows, _ = _prepare(_Prefilter(), _Translator())

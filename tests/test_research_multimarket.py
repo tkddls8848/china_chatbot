@@ -137,9 +137,9 @@ def test_stock_db_resolve_code_aliases(tmp_path):
 
 
 def test_normalize_code_preserves_universe_keys():
-    from research.handlers import _normalize_code
+    from research.results import normalize_code
 
-    assert _normalize_code("US:NASDAQ:AAPL") == "US:NASDAQ:AAPL"
-    assert _normalize_code("aapl") == "AAPL"
-    assert _normalize_code("300750") == "300750"
-    assert _normalize_code("700") == "00700"
+    assert normalize_code("US:NASDAQ:AAPL") == "US:NASDAQ:AAPL"
+    assert normalize_code("aapl") == "AAPL"
+    assert normalize_code("300750") == "300750"
+    assert normalize_code("700") == "00700"

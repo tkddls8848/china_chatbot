@@ -193,7 +193,7 @@ def test_outcome_is_joinable_to_original_candidate(tmp_path):
     assert records[0]["candidate_id"] == records[2]["candidate_id"]
 
     # 라벨은 candidate와 outcome을 이어야 나온다.
-    samples = service._load_training_samples()
+    samples = service._learner.load_training_samples()
     assert [(sample.label, sample.title) for sample in samples] == [(1, "Apple earnings")]
 
 
@@ -224,27 +224,27 @@ def test_training_samples_are_read_incrementally(tmp_path):
         )
 
     observe(0)
-    assert len(service._load_training_samples()) == 1
-    consumed = service._samples_offset
+    assert len(service._learner.load_training_samples()) == 1
+    consumed = service._learner._samples_offset
     assert consumed == (tmp_path / "observations.jsonl").stat().st_size
 
     observe(1)
     # 두 번째 호출은 새로 덧붙은 줄만 읽고 이전 샘플을 그대로 들고 있다.
-    samples = service._load_training_samples()
+    samples = service._learner.load_training_samples()
     assert len(samples) == 2
-    assert service._samples_offset > consumed
+    assert service._learner._samples_offset > consumed
 
     # 파일이 줄면(압축·교체) 처음부터 다시 만든다.
     (tmp_path / "observations.jsonl").write_text("", encoding="utf-8")
-    assert service._load_training_samples() == []
-    assert service._samples_offset == 0
+    assert service._learner.load_training_samples() == []
+    assert service._learner._samples_offset == 0
 
 
 def test_pending_candidates_stay_bounded(tmp_path):
     """outcome이 끝내 오지 않는 후보가 무한히 쌓이지 않는다."""
     service = _service(tmp_path)
     for index in range(service_pending_limit() + 50):
-        service._consume_observation(
+        service._learner._consume_observation(
             {
                 "type": "candidate",
                 "candidate_id": f"c{index}",
@@ -253,9 +253,9 @@ def test_pending_candidates_stay_bounded(tmp_path):
                 "features": {name: 0.0 for name in FEATURE_NAMES},
             }
         )
-    assert len(service._pending_candidates) == service_pending_limit()
+    assert len(service._learner._pending_candidates) == service_pending_limit()
     # 가장 오래된 것부터 밀려난다.
-    assert "c0" not in service._pending_candidates
+    assert "c0" not in service._learner._pending_candidates
 
 
 def service_pending_limit():
@@ -360,7 +360,7 @@ def test_stale_validation_ap_does_not_block_updates():
 
 def test_cpu_budget_counts_foreground_and_background_together(tmp_path):
     service = _service(tmp_path)
-    service._cpu_state["foreground_cpu_seconds"] = 20.0
+    service._cpu_budget._state["foreground_cpu_seconds"] = 20.0
     service.record_background_cpu(55.0)
 
     status = service.cpu_status()

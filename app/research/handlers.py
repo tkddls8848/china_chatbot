@@ -4,22 +4,20 @@ import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from core.clock import now
-from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from core.config import (
-    RESEARCH_DISCOVERY_RESERVED_SLOTS,
-    RESEARCH_MAX_CANDIDATES,
-    TELEGRAM_MESSAGE_LIMIT,
-)
+from core.config import RESEARCH_DISCOVERY_RESERVED_SLOTS, RESEARCH_MAX_CANDIDATES, TELEGRAM_MESSAGE_LIMIT
 from core.menu_status import set_menu_button_text
-from core.telegram_html import truncate_html
 from core.workers import run_non_urgent, wait_for_urgent_idle
 from news.utils import chunk_message_items
 from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
+from research.results import (
+    collect_actions,
+    format_result_sections,
+)
 from llm.market_view import MarketViewError, MarketViewManager
 from stocks import StockDatabase
 from watchlist.events import record_watchlist_event
@@ -29,8 +27,6 @@ _RESEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="resea
 _SECTION_SEPARATOR = "\n\n"
 # 결과 메시지에 나열할 항목 상한. 프롬프트가 정한 개수보다 넉넉히 잡아,
 # 모델이 상한까지 답했을 때 화면에서 다시 잘리지 않게 한다.
-_MAX_WATCH_LINES = 10
-_MAX_RISK_LINES = 8
 
 
 def _log_research_task_error(task: asyncio.Task) -> None:
@@ -150,167 +146,6 @@ async def _deliver_research_sections(
         )
 
 
-def _normalize_code(code: str) -> str:
-    raw = str(code).strip()
-    # US:NASDAQ:AAPL 같은 universe 키와 미국 티커는 대문자 그대로 유지한다.
-    if ":" in raw or any(ch.isalpha() for ch in raw):
-        return raw.upper()
-    value = "".join(ch for ch in raw if ch.isdigit())
-    if not value:
-        return raw
-    if len(value) <= 5:
-        return value.zfill(5)
-    return value.zfill(6)
-
-
-def _collect_research_actions(
-    result: dict[str, Any],
-    watchlist: dict[str, str],
-    stock_db: StockDatabase,
-) -> dict[str, list[dict[str, Any]]]:
-    add_items: list[dict[str, Any]] = []
-    remove_items: list[dict[str, Any]] = []
-    seen_add: set[str] = set()
-    seen_remove: set[str] = set()
-
-    for item in result.get("actions", []):
-        if not isinstance(item, dict):
-            continue
-        action = item.get("action")
-        if action not in {"add", "remove", "watch"}:
-            continue
-        confidence = float(item.get("confidence") or 0)
-        relevance = float(item["relevance"])
-
-        code = _normalize_code(str(item.get("ticker") or ""))
-        if not code:
-            continue
-        # LLM이 티커만 답한 경우(AAPL, 005930 등) universe 키로 승격한다.
-        code = stock_db.resolve_code(code) or code
-
-        if action == "add":
-            if code in watchlist or code in seen_add:
-                continue
-            name = (
-                str(item.get("name") or "").strip()
-                or stock_db.get_display_name(code)
-                or code
-            )
-            add_items.append(
-                {
-                    "code": code,
-                    "name": name,
-                    "reason": str(item.get("reason") or "").strip(),
-                    "confidence": confidence,
-                    "relevance": relevance,
-                }
-            )
-            seen_add.add(code)
-        elif action == "remove":
-            if code not in watchlist or code in seen_remove:
-                continue
-            reason = str(item.get("reason") or "").strip()
-            remove_items.append(
-                {
-                    "code": code,
-                    "name": watchlist[code],
-                    "reason": reason,
-                    "confidence": confidence,
-                    "relevance": relevance,
-                }
-            )
-            seen_remove.add(code)
-
-    return {"add": add_items, "remove": remove_items}
-
-
-def _format_action_lines(items: list[dict[str, Any]]) -> str:
-    lines = []
-    for item in items:
-        reason = html.escape(str(item.get("reason") or ""))
-        code = html.escape(str(item["code"]))
-        name = html.escape(str(item["name"]))
-        confidence = float(item.get("confidence") or 0)
-        relevance = float(item["relevance"])
-        scores = [f"관련도 {relevance:.0%}", f"판단 {confidence:.0%}"]
-        suffix = f" - {reason}" if reason else ""
-        lines.append(f"- {name} ({code}) [{' · '.join(scores)}]{suffix}")
-    return "\n".join(lines) if lines else "- 없음"
-
-
-def _format_research_result_sections(
-    result: dict[str, Any],
-    pending: dict[str, list[dict[str, Any]]],
-    news_count: int,
-    candidate_count: int = 0,
-    temporary: bool = False,
-) -> list[str]:
-    title = "리서치 분석 결과"
-    if temporary:
-        title += " (임시 리서치)"
-
-    summary = html.escape(result.get("summary") or "요약 없음")
-    add_lines = _format_action_lines(pending["add"])
-    remove_lines = _format_action_lines(pending["remove"])
-
-    watch_lines = []
-    for item in result.get("actions", []):
-        if not isinstance(item, dict):
-            continue
-        action = item.get("action")
-        if action != "watch":
-            continue
-        code = html.escape(_normalize_code(str(item.get("ticker") or "")))
-        name = html.escape(str(item.get("name") or code))
-        reason = html.escape(str(item.get("reason") or ""))
-        relevance = float(item["relevance"])
-        line = f"- {name} ({code}) [관련도 {relevance:.0%}]"
-        if reason:
-            line += f" - {reason}"
-        watch_lines.append(line)
-
-    risks = result.get("risks") or []
-    risk_lines = (
-        "\n".join(f"- {html.escape(str(r))}" for r in risks[:_MAX_RISK_LINES])
-        or "- 없음"
-    )
-
-    critique_lines = []
-    for item in result.get("view_critique") or []:
-        if not isinstance(item, dict):
-            continue
-        point = html.escape(str(item.get("point") or "").strip())
-        if not point:
-            continue
-        severity = item.get("severity")
-        prefix = f"[{float(severity):.0%}] " if severity is not None else ""
-        critique_lines.append(f"- {prefix}{point}")
-        evidence = item.get("evidence")
-        if isinstance(evidence, dict):
-            ev_title = str(evidence.get("title") or "").strip()
-            if ev_title:
-                ev_source = str(evidence.get("source") or "").strip()
-                source_part = f" ({html.escape(ev_source)})" if ev_source else ""
-                critique_lines.append(
-                    f"  ↳ {html.escape(ev_title[:80])}{source_part}"
-                )
-    critique_text = "\n".join(critique_lines) or "- 상충하는 근거 없음"
-
-    sections = [
-        f"<b>{html.escape(title)}</b>\n"
-        f"분석 뉴스: {news_count}건 / 후보 universe: {candidate_count}개",
-        f"<b>요약</b>\n{summary}",
-        f"<b>🗣 내 뷰 반론</b>\n{critique_text}",
-        f"<b>추가 후보</b>\n{add_lines}",
-        f"<b>제외 후보</b>\n{remove_lines}",
-        f"<b>주목 종목</b>\n{chr(10).join(watch_lines[:_MAX_WATCH_LINES]) or '- 없음'}",
-        f"<b>리스크</b>\n{risk_lines}",
-    ]
-    # 섹션 하나가 그 자체로 상한을 넘으면 나눌 수 없다(후보가 많고 reason이
-    # 길 때 생긴다). 그 섹션만 줄이고 나머지 섹션은 온전히 남긴다.
-    return [truncate_html(section, TELEGRAM_MESSAGE_LIMIT) for section in sections]
-
-
 async def cmd_research(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if message is None:
@@ -375,9 +210,9 @@ async def _handle_research_show(update: Update, context: ContextTypes.DEFAULT_TY
     wm = context.bot_data["watchlist_manager"]
     stock_db: StockDatabase = context.bot_data["stock_db"]
     watchlist = await wm.get_all()
-    pending = _collect_research_actions(last_result, watchlist, stock_db)
+    pending = collect_actions(last_result, watchlist, stock_db)
     generated_at = html.escape(str(last_result.get("generated_at") or ""))
-    sections = _format_research_result_sections(
+    sections = format_result_sections(
         last_result,
         pending,
         int(last_result.get("news_count") or 0),
@@ -577,7 +412,7 @@ async def _run_research_job(
         )
         return
 
-    pending = _collect_research_actions(result, watchlist, stock_db)
+    pending = collect_actions(result, watchlist, stock_db)
     if not temporary:
         await run_non_urgent(
             mvm.save_result,
@@ -586,7 +421,7 @@ async def _run_research_job(
             candidate_count=len(candidate_universe),
         )
 
-    sections = _format_research_result_sections(
+    sections = format_result_sections(
         result,
         pending,
         len(news_items),

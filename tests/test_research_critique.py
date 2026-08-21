@@ -2,13 +2,13 @@
 import json
 
 from llm.market_view import MarketViewAnalyzer
-from research.handlers import _format_research_result_sections
+from research.results import format_result_sections
 
 
 def _format_message(result: dict) -> str:
     """섹션을 합쳐 렌더링 결과 전체를 한 문자열로 본다."""
     return "\n\n".join(
-        _format_research_result_sections(result, {"add": [], "remove": []}, 3, 5)
+        format_result_sections(result, {"add": [], "remove": []}, 3, 5)
     )
 
 

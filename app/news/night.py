@@ -28,7 +28,7 @@ from core.config import (
 )
 from core.workers import run_non_urgent
 from llm.night_digest import NightDigestAnalyzer, NightDigestError
-from news.pipeline import collect_source_candidates
+from news.collection import collect_source_candidates
 from news.registry import NewsSourceRegistry, SourceSpec
 from news.utils import (
     chunk_message_items,

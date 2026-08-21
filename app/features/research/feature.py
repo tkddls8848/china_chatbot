@@ -6,11 +6,8 @@ from core.config import (
 )
 from features.base import CallbackSpec, CommandSpec, FeatureSpec, MenuSpec
 from llm import MarketViewManager, build_market_view_analyzer
-from research import (
-    cmd_research,
-    collect_global_market_news_items,
-    handle_research_callback,
-)
+from research.handlers import cmd_research, handle_research_callback
+from research.news import collect_global_market_news_items
 
 
 def _install_services(app) -> None:

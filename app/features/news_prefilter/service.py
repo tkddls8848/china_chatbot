@@ -8,24 +8,27 @@ import html
 import json
 import logging
 import math
-import os
 import re
 import threading
 import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from core.clock import now
 from core.storage import write_json_atomic
+from features.news_prefilter.cpu_budget import DailyCpuBudget
+from features.news_prefilter.learning import (
+    PENDING_CANDIDATE_LIMIT as _PENDING_CANDIDATE_LIMIT,
+    ObservationLearner,
+)
 from features.news_prefilter.matcher import StockEntityMatcher
 from features.news_prefilter.optimizer import (
     OptimizationResult,
-    TrainingSample,
     optimize_for_cpu_budget,
     predict_probability,
 )
@@ -34,13 +37,6 @@ from news.sources import GlobalArticle
 logger = logging.getLogger(__name__)
 _SPACE_RE = re.compile(r"\s+")
 _TAG_RE = re.compile(r"<[^>]+>")
-# 학습 샘플 상한. 라벨은 주기·소스당 번역 건수만큼만 생기므로(하루 2,600건 남짓)
-# 이 상한은 수개월치를 담는다.
-_MAX_TRAINING_SAMPLES = 50000
-# outcome은 같은 주기 안에서 candidate 직후에 기록된다. 한 주기 최대 후보 수보다
-# 넉넉한 이 창만 들고 있으면 되고, 관측 파일 전체를 메모리에 올릴 이유가 없다.
-_PENDING_CANDIDATE_LIMIT = 20000
-
 # 섀도 비교가 답하지 못하는 것. 지운 채로 active에 올리지 않는다.
 SHADOW_CAVEATS = (
     "라벨은 번역된 기사에만 붙는다. shadow에서 번역되는 것은 최신순 상위뿐이라"
@@ -197,7 +193,6 @@ class NewsPrefilter:
         self._event_file = event_file
         self._observation_file = observation_file
         self._model_file = model_file
-        self._cpu_state_file = cpu_state_file
         self._event_window = timedelta(hours=max(1, event_window_hours))
         self._max_events = max(100, max_events)
         self._observation_retention_days = max(1, observation_retention_days)
@@ -208,7 +203,6 @@ class NewsPrefilter:
             hours=max(0, translated_event_cooldown_hours)
         )
         self._daily_cpu_budget_seconds = max(0.0, daily_cpu_budget_seconds)
-        self._cpu_reserve_ratio = min(1.0, max(0.0, cpu_reserve_ratio))
         self._lock = asyncio.Lock()
         self._file_lock = threading.RLock()
         self._optimizer = ThreadPoolExecutor(
@@ -218,16 +212,17 @@ class NewsPrefilter:
         self._events = self._load_events()
         raw_model = self._load_json(self._model_file, default={})
         self._model = raw_model if isinstance(raw_model, dict) else {}
-        self._cpu_state = self._load_cpu_state()
-        self._last_process_cpu = time.process_time()
-        self._background_since_checkpoint = 0.0
+        self._cpu_budget = DailyCpuBudget(
+            cpu_state_file,
+            self._daily_cpu_budget_seconds,
+            cpu_reserve_ratio,
+        )
         self._last_persist_monotonic = 0.0
-        # 관측 파일은 append 전용이라 이미 읽은 offset 뒤만 이어 읽는다. 전체를
-        # 다시 적재하면 보존 기간이 찬 뒤 1GB 인스턴스의 메모리를 통째로 넘긴다.
-        self._training_samples: list[TrainingSample] = []
-        self._pending_candidates: dict[str, tuple[str, str, dict[str, Any]]] = {}
-        self._samples_offset = 0
-        self._last_compact_day = ""
+        self._learner = ObservationLearner(
+            observation_file,
+            self._observation_retention_days,
+            self._file_lock,
+        )
         # 재탕 차단용. record_outcome은 candidate_id만 받으므로 어느 사건의
         # 후보였는지 여기서 기억한다.
         self._candidate_events: dict[str, str] = {}
@@ -276,75 +271,18 @@ class NewsPrefilter:
             events[event.event_id] = event
         return events
 
-    def _load_cpu_state(self) -> dict[str, Any]:
-        state = self._load_json(self._cpu_state_file, default={})
-        today = datetime.now(timezone.utc).date().isoformat()
-        if not isinstance(state, dict) or state.get("utc_day") != today:
-            return {
-                "utc_day": today,
-                "foreground_cpu_seconds": 0.0,
-                "background_cpu_seconds": 0.0,
-            }
-        return {
-            "utc_day": today,
-            "foreground_cpu_seconds": float(state.get("foreground_cpu_seconds") or 0.0),
-            "background_cpu_seconds": float(state.get("background_cpu_seconds") or 0.0),
-        }
-
-    def _reset_cpu_day_if_needed(self) -> None:
-        today = datetime.now(timezone.utc).date().isoformat()
-        if self._cpu_state["utc_day"] == today:
-            return
-        self._cpu_state = {
-            "utc_day": today,
-            "foreground_cpu_seconds": 0.0,
-            "background_cpu_seconds": 0.0,
-        }
-        self._last_process_cpu = time.process_time()
-        self._background_since_checkpoint = 0.0
-
     def account_foreground_cpu(self) -> None:
-        self._reset_cpu_day_if_needed()
-        current = time.process_time()
-        delta = max(0.0, current - self._last_process_cpu)
-        foreground = max(0.0, delta - self._background_since_checkpoint)
-        self._cpu_state["foreground_cpu_seconds"] += foreground
-        self._last_process_cpu = current
-        self._background_since_checkpoint = 0.0
-        self._persist_cpu_state()
+        self._cpu_budget.account_foreground_cpu()
 
     def record_background_cpu(self, cpu_seconds: float) -> None:
-        self._reset_cpu_day_if_needed()
-        used = max(0.0, float(cpu_seconds))
-        self._cpu_state["background_cpu_seconds"] += used
-        self._background_since_checkpoint += used
-        self._persist_cpu_state()
-
-    def _persist_cpu_state(self) -> None:
-        payload = dict(self._cpu_state)
-        payload["budget_seconds"] = self._daily_cpu_budget_seconds
-        payload["reserve_ratio"] = self._cpu_reserve_ratio
-        payload["updated_at"] = now().isoformat(timespec="seconds")
-        write_json_atomic(self._cpu_state_file, payload)
+        self._cpu_budget.record_background_cpu(cpu_seconds)
 
     @property
     def remaining_cpu_seconds(self) -> float:
-        used = self._cpu_state["foreground_cpu_seconds"] + self._cpu_state[
-            "background_cpu_seconds"
-        ]
-        return max(0.0, self._daily_cpu_budget_seconds - used)
+        return self._cpu_budget.remaining_seconds
 
     def cpu_status(self) -> dict[str, float | str]:
-        used = self._cpu_state["foreground_cpu_seconds"] + self._cpu_state[
-            "background_cpu_seconds"
-        ]
-        return {
-            "utc_day": self._cpu_state["utc_day"],
-            "budget_seconds": self._daily_cpu_budget_seconds,
-            "used_seconds": used,
-            "remaining_seconds": max(0.0, self._daily_cpu_budget_seconds - used),
-            "reserve_ratio": self._cpu_reserve_ratio,
-        }
+        return self._cpu_budget.status()
 
     @staticmethod
     def _candidate_id(source: str, article_id: str) -> str:
@@ -695,123 +633,6 @@ class NewsPrefilter:
         self._append_observations([payload])
         self._mark_event_translated(candidate_id)
 
-    def _compact_observations_if_needed(self) -> bool:
-        """보존 기간이 지난 관측을 하루 한 번 걷어낸다. 재작성했으면 True."""
-        today = datetime.now(timezone.utc).date().isoformat()
-        if self._last_compact_day == today or not self._observation_file.exists():
-            return False
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            days=self._observation_retention_days
-        )
-        temporary = self._observation_file.with_name(
-            f"{self._observation_file.name}.{os.getpid()}.compact.tmp"
-        )
-        with self._file_lock:
-            try:
-                with self._observation_file.open("r", encoding="utf-8") as source, temporary.open(
-                    "w", encoding="utf-8", newline="\n"
-                ) as target:
-                    for line in source:
-                        try:
-                            item = json.loads(line)
-                            observed = datetime.fromisoformat(str(item.get("observed_at")))
-                            if observed.tzinfo is None:
-                                observed = observed.replace(tzinfo=timezone.utc)
-                            if observed.astimezone(timezone.utc) < cutoff:
-                                continue
-                        except (ValueError, TypeError, json.JSONDecodeError):
-                            continue
-                        target.write(line if line.endswith("\n") else line + "\n")
-                    target.flush()
-                    os.fsync(target.fileno())
-                os.replace(temporary, self._observation_file)
-            finally:
-                temporary.unlink(missing_ok=True)
-        self._last_compact_day = today
-        return True
-
-    def _reset_sample_state(self) -> None:
-        self._training_samples = []
-        self._pending_candidates = {}
-        self._samples_offset = 0
-
-    def _consume_observation(self, item: dict[str, Any]) -> None:
-        """관측 한 줄을 학습 샘플 상태에 반영한다."""
-        candidate_id = str(item.get("candidate_id") or "")
-        if not candidate_id:
-            return
-        kind = item.get("type")
-        if kind == "candidate":
-            features = item.get("features")
-            if not isinstance(features, dict):
-                return
-            self._pending_candidates[candidate_id] = (
-                str(item.get("observed_at") or "")[:10],
-                str(item.get("title") or ""),
-                features,
-            )
-            while len(self._pending_candidates) > _PENDING_CANDIDATE_LIMIT:
-                self._pending_candidates.pop(next(iter(self._pending_candidates)))
-            return
-        if kind != "outcome":
-            return
-        pending = self._pending_candidates.pop(candidate_id, None)
-        if pending is None:
-            return
-        impact = str(item.get("impact") or "")
-        if impact not in {"high", "medium", "low"}:
-            return
-        day, title, features = pending
-        try:
-            values = {key: float(value) for key, value in features.items()}
-        except (TypeError, ValueError):
-            return
-        self._training_samples.append(
-            TrainingSample(
-                day=day,
-                title=title,
-                features=values,
-                label=int(impact in {"high", "medium"}),
-            )
-        )
-        if len(self._training_samples) > _MAX_TRAINING_SAMPLES:
-            del self._training_samples[:-_MAX_TRAINING_SAMPLES]
-
-    def _load_training_samples(self) -> list[TrainingSample]:
-        """지난 호출 이후 덧붙은 관측만 이어 읽는다.
-
-        관측 파일은 append 전용이라 offset 뒤만 읽으면 되고, outcome은 같은
-        주기 안에서 candidate 뒤에 붙으므로 대기 중인 candidate만 창으로 들고
-        있으면 된다. 파일 전체를 dict 두 개에 담으면 보존 기간이 찬 시점에
-        1GB 인스턴스가 감당할 수 없는 크기가 된다.
-        """
-        if self._compact_observations_if_needed():
-            self._reset_sample_state()
-        if not self._observation_file.exists():
-            self._reset_sample_state()
-            return self._training_samples
-        with self._file_lock:
-            size = self._observation_file.stat().st_size
-            if size < self._samples_offset:
-                # 압축·교체로 파일이 줄었으면 처음부터 다시 만든다.
-                self._reset_sample_state()
-            elif size == self._samples_offset:
-                return self._training_samples
-            with self._observation_file.open("rb") as handle:
-                handle.seek(self._samples_offset)
-                for raw in handle:
-                    if not raw.endswith(b"\n"):
-                        # 아직 쓰는 중인 마지막 줄은 다음 호출로 미룬다.
-                        break
-                    self._samples_offset += len(raw)
-                    try:
-                        item = json.loads(raw)
-                    except (json.JSONDecodeError, UnicodeDecodeError):
-                        continue
-                    if isinstance(item, dict):
-                        self._consume_observation(item)
-        return self._training_samples
-
     def _report_sync(self) -> dict[str, Any]:
         """관측 파일을 한 번 훑어 섀도 비교 지표를 만든다."""
         cycles = 0
@@ -892,7 +713,7 @@ class NewsPrefilter:
 
     def _optimize_sync(self, cpu_seconds: float) -> OptimizationResult:
         return optimize_for_cpu_budget(
-            self._load_training_samples(),
+            self._learner.load_training_samples(),
             dict(self._model),
             cpu_seconds,
         )
