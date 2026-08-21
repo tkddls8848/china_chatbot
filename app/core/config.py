@@ -417,10 +417,6 @@ MARKET_ANOMALY_COLLECTION_ENABLED = _env_bool(
     "MARKET_ANOMALY_COLLECTION_ENABLED",
     "false",
 )
-MARKET_ANOMALY_COLLECTION_ENABLED = _env_bool(
-    "MARKET_ANOMALY_COLLECTION_ENABLED",
-    "false",
-)
 MARKET_ANOMALY_FILE = DATA_DIR / "market_sentiment" / "overnight_tone.json"
 MARKET_ANOMALY_BACKFILL_FILE = (
     DATA_DIR / "market_sentiment" / "anomaly_backfill.json"

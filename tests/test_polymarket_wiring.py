@@ -29,7 +29,7 @@ def _install(monkeypatch, *, enabled):
     app = SimpleNamespace(bot_data={})
     market_feature._install_services(app)
     scheduler = _Scheduler()
-    market_feature._install_jobs(scheduler, app)
+    market_feature._install_polymarket_jobs(scheduler, app)
     return app, scheduler
 
 
