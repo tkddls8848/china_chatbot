@@ -241,13 +241,16 @@ NEWS_PREFILTER_EXPLORATION_SLOTS = 1
 NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS = 24
 
 # Terraform 기본 bundle(micro_3_0: 2 vCPU, vCPU당 baseline 10%)의 하루 지속
-# 가능 CPU는 4.8 vCPU-hour다. 전체 프로세스 CPU를 함께 계량하고 그중 40%는
-# 텔레그램·뉴스 긴급 경로에 남긴다. bundle을 바꾸면 이 두 상수도 함께 바꾼다.
+# 가능 CPU는 4.8 vCPU-hour다. 전체 프로세스 CPU(사전선별의 매 주기 후보
+# 점수화까지 포함한 foreground 전체)를 함께 계량하고 그중 12.5%는 텔레그램·
+# 뉴스 긴급 경로에 남긴다. bundle을 바꾸면 이 두 상수도 함께 바꾼다.
 NEWS_PREFILTER_LIGHTSAIL_VCPUS = 2
 NEWS_PREFILTER_LIGHTSAIL_BASELINE = 0.10
-# 모델 보정은 백그라운드 작업이다. 조용한 날에도 버스트 크레딧을 소모하지
-# 않도록 예비율을 40%로 두고 보정에는 4.8h 중 2.88h만 쓴다.
-NEWS_PREFILTER_CPU_RESERVE_RATIO = 0.40
+# 이 예산은 순간 부하가 아니라 하루 총량의 상한이다. 순간 부하(버스트)는
+# 아래 주기·조각 값이 이미 낮게 눌러 두므로, 예산을 너무 좁히면 매 주기
+# foreground 점수화만으로 하루 예산을 다 써 보정이 한 번도 못 돌고 끝난다
+# (실측: 40% 예비율에서 trial 0 · 남은 예산 0.00h로 중단). 4.2h로 되돌린다.
+NEWS_PREFILTER_CPU_RESERVE_RATIO = 0.125
 NEWS_PREFILTER_DAILY_CPU_BUDGET_SECONDS = int(
     NEWS_PREFILTER_LIGHTSAIL_VCPUS
     * 24
@@ -258,7 +261,8 @@ NEWS_PREFILTER_DAILY_CPU_BUDGET_SECONDS = int(
 )
 # 5분마다 최대 8 CPU-second를 한 코어에서 나눠 쓴다. 2초 조각 사이마다
 # 긴급 뉴스 구간과 load average를 다시 확인해 오래 가로막지 않는다.
-# 하루 최대 보정 사용량은 약 2.56 vCPU-hour로 2.88h 예산 안에 여유를 남긴다.
+# 보정 자체의 하루 최대 사용량은 288회 × 8초 ≈ 0.64 vCPU-hour로 낮게
+# 눌러 둔 채, 위 예산만 늘려 foreground와 나눠 쓸 여유를 넉넉히 둔다.
 NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES = 5
 NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS = 8.0
 NEWS_PREFILTER_MAINTENANCE_CHUNK_SECONDS = 2.0

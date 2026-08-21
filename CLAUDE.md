@@ -153,10 +153,15 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - 환경 변수는 `app/core/config.py`에서만 읽고 `.env.example`에 현재 키를 기록한다.
   운영자가 조정하지 않는 설정은 같은 모듈의 리터럴 상수로 둔다.
 - **배경 CPU 작업은 예산 안에서만 돈다.** Lightsail `micro_3_0`은 2 vCPU에
-  vCPU당 baseline 10%라 하루 지속 가능 CPU가 4.8 vCPU-hour다. 사전선별 보정은
-  그중 60%(2.88h)만 쓰고 나머지는 텔레그램·뉴스 긴급 경로에 남긴다. 조각마다
-  `wait_for_urgent_idle`·load average·남은 예산을 다시 확인해 오래 가로막지
-  않는다. bundle을 바꾸면 `NEWS_PREFILTER_LIGHTSAIL_*` 상수도 함께 바꾼다.
+  vCPU당 baseline 10%라 하루 지속 가능 CPU가 4.8 vCPU-hour다. 이 예산은 사전선별
+  보정만이 아니라 매 주기 후보 점수화까지 포함한 foreground 전체를 함께
+  계량하는 하루 총량 상한이다 — 그중 87.5%(4.2h)를 이 둘이 나눠 쓰고 나머지는
+  텔레그램·뉴스 긴급 경로에 남긴다. 예산을 너무 좁히면 foreground 점수화만으로
+  하루치를 다 써 보정이 한 번도 못 도는 채 끝난다(실측: 예비율 40%에서 trial
+  0 · 남은 예산 0.00h로 중단). 순간 부하(버스트)는 이 예산이 아니라 보정 조각의
+  실행 주기·회당 CPU·조각 단위(`NEWS_PREFILTER_MAINTENANCE_*`)가 낮게 누른다.
+  조각마다 `wait_for_urgent_idle`·load average·남은 예산을 다시 확인해 오래
+  가로막지 않는다. bundle을 바꾸면 `NEWS_PREFILTER_LIGHTSAIL_*` 상수도 함께 바꾼다.
 - 상태 파일은 `data/<feature>/`에 둔다. 설정은 상태 파일에 저장하지 않는다.
 - **상태 파일은 `core/storage.py`의 원자적 쓰기로만 저장한다.** 대상 파일을 직접
   열어 쓰면 그 순간 내용이 비고, 실패하면 잘린 JSON이 남아 다음 기동이 상태를
