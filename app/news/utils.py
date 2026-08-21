@@ -126,6 +126,28 @@ def filter_articles_for_kst_day(
     return [article for _, article in dated]
 
 
+def filter_articles_in_window(
+    articles: list[T],
+    start: datetime,
+    end: datetime,
+) -> list[T]:
+    """Keep articles in the half-open KST interval ``[start, end)``."""
+    window_start = start if start.tzinfo is not None else start.replace(tzinfo=_KST)
+    window_end = end if end.tzinfo is not None else end.replace(tzinfo=_KST)
+    window_start = window_start.astimezone(_KST)
+    window_end = window_end.astimezone(_KST)
+    dated: list[tuple[datetime, T]] = []
+    for article in articles:
+        published = parse_news_datetime(
+            getattr(article, "published_at", None),
+            getattr(article, "published_date", None),
+        )
+        if published is not None and window_start <= published < window_end:
+            dated.append((published, article))
+    dated.sort(key=lambda item: item[0])
+    return [article for _, article in dated]
+
+
 def format_china_time_as_kst(
     published_at: Any,
     published_date: Any | None = None,

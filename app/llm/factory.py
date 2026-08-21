@@ -23,6 +23,7 @@ from core.config import (
     MARKET_DIGEST_NUM_PREDICT,
     MARKET_DIGEST_PROMPT_FILE,
     MARKET_DIGEST_TIMEOUT,
+    MARKET_ANOMALY_PROMPT_FILE,
     NEWS_NIGHT_DIGEST_MAX_HIGHLIGHTS,
     NEWS_NIGHT_DIGEST_NUM_PREDICT,
     NEWS_NIGHT_DIGEST_PROMPT_FILE,
@@ -41,6 +42,7 @@ from llm.briefing_writer import BriefingWriter
 from llm.market_digest import MarketDigestAnalyzer
 from llm.market_view import MarketViewAnalyzer
 from llm.night_digest import NightDigestAnalyzer
+from llm.overnight_tone import OvernightToneAnalyzer
 from llm.translator import TranslationService
 
 logger = logging.getLogger(__name__)
@@ -103,6 +105,19 @@ def build_market_digest_analyzer() -> MarketDigestAnalyzer:
         prompt_file=MARKET_DIGEST_PROMPT_FILE,
         num_predict=MARKET_DIGEST_NUM_PREDICT,
         count_tolerance_ratio=MARKET_DIGEST_COUNT_TOLERANCE_RATIO,
+    )
+
+
+def build_overnight_tone_analyzer() -> OvernightToneAnalyzer:
+    return OvernightToneAnalyzer(
+        backend=build_backend(
+            "overnight_tone",
+            model=CLOUDFLARE_MODEL,
+            timeout=MARKET_DIGEST_TIMEOUT,
+        ),
+        prompt_file=MARKET_ANOMALY_PROMPT_FILE,
+        model_id=CLOUDFLARE_MODEL,
+        num_predict=384,
     )
 
 

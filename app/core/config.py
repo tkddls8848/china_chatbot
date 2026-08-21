@@ -399,6 +399,36 @@ MARKET_DIGEST_TIMEOUT = 60
 # 올리면서 0.1(35건 → 허용 4)로는 정상 응답이 탈락했다.
 MARKET_DIGEST_COUNT_TOLERANCE_RATIO = 0.2
 
+# ── 전일 움직임 ↔ 당일 개장 전 센티먼트 아노말리 ─────────
+# 구현과 승격을 분리한다. 백필 G0·G6·G7을 확인하기 전에는 기존 /market 화면을
+# 유지하고, true일 때만 세션 기반 수집 job과 새 화면을 사용한다.
+MARKET_ANOMALY_ENABLED = _env_bool("MARKET_ANOMALY_ENABLED", "false")
+MARKET_ANOMALY_COLLECTION_ENABLED = _env_bool(
+    "MARKET_ANOMALY_COLLECTION_ENABLED",
+    "false",
+)
+MARKET_ANOMALY_COLLECTION_ENABLED = _env_bool(
+    "MARKET_ANOMALY_COLLECTION_ENABLED",
+    "false",
+)
+MARKET_ANOMALY_FILE = DATA_DIR / "market_sentiment" / "overnight_tone.json"
+MARKET_ANOMALY_BACKFILL_FILE = (
+    DATA_DIR / "market_sentiment" / "anomaly_backfill.json"
+)
+MARKET_ANOMALY_PROMPT_FILE = PROMPT_DIR / "overnight_tone_ko.txt"
+MARKET_ANOMALY_RETENTION_DAYS = 180
+MARKET_ANOMALY_MIN_ARTICLES = 8
+MARKET_ANOMALY_MIN_SOURCES = 4
+MARKET_ANOMALY_MAX_HEADLINES = 40
+MARKET_ANOMALY_BACKFILL_MAX_CALLS_PER_RUN = 80
+MARKET_ANOMALY_JOB_MINUTE = "5,35"
+MARKET_ANOMALY_INDEX_TICKERS = {
+    "KR": "^KS11",
+    "CN": "000001.SS",
+    "HK": "^HSI",
+    "US": "^GSPC",
+}
+
 
 # ── Polymarket 거시 위험선호 컨센서스(섀도 파일럿) ────
 # Gamma API는 인증이 필요 없고 LLM을 쓰지 않으므로 추가 Neurons는 0/일이다.

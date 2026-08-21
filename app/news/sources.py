@@ -143,6 +143,12 @@ def fetch_rss_articles(
         content = _strip_html(str(entry.get("summary") or entry.get("description") or ""))
         published_at = str(entry.get("published") or entry.get("updated") or "")
         link = str(entry.get("link") or "")
+        raw_source = entry.get("source") or {}
+        source_name = (
+            str(raw_source.get("title") or "")
+            if isinstance(raw_source, dict)
+            else str(getattr(raw_source, "title", "") or "")
+        )
         if not (title or content):
             continue
         unique = str(entry.get("id") or link or f"{published_at}:{title[:20]}")
@@ -153,6 +159,7 @@ def fetch_rss_articles(
                 content=content[:1500],
                 published_at=published_at,
                 url=link,
+                extra={"source": source_name},
             )
         )
     return articles

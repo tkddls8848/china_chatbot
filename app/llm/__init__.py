@@ -6,11 +6,13 @@ from llm.factory import (
     build_market_digest_analyzer,
     build_market_view_analyzer,
     build_night_digest_analyzer,
+    build_overnight_tone_analyzer,
     build_translation_service,
 )
 from llm.market_digest import MarketDigestAnalyzer, MarketDigestError
 from llm.market_view import MarketViewAnalyzer, MarketViewManager
 from llm.night_digest import NightDigestAnalyzer, NightDigestError
+from llm.overnight_tone import OvernightToneAnalyzer, OvernightToneError
 from llm.translator import TranslationQualityError, TranslationService
 
 __all__ = [
@@ -21,11 +23,14 @@ __all__ = [
     "MarketViewManager",
     "NightDigestAnalyzer",
     "NightDigestError",
+    "OvernightToneAnalyzer",
+    "OvernightToneError",
     "TranslationQualityError",
     "TranslationService",
     "build_briefing_writer",
     "build_market_digest_analyzer",
     "build_market_view_analyzer",
     "build_night_digest_analyzer",
+    "build_overnight_tone_analyzer",
     "build_translation_service",
 ]

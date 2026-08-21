@@ -7,12 +7,15 @@
 
 import logging
 from datetime import date, timedelta
+from statistics import median
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from core.clock import today
 from core.config import (
+    MARKET_ANOMALY_BACKFILL_FILE,
+    MARKET_ANOMALY_ENABLED,
     MARKET_CHART_BACKFILL_DAYS_PER_REQUEST,
     MARKET_CHART_MARKETS,
     MARKET_CHART_LOOKBACK_DAYS,
@@ -26,9 +29,13 @@ from core.config import (
 )
 from core.menu_status import set_menu_button_text
 from core.workers import run_non_urgent
-from features.market_sentiment.chart import market_label, render_market_chart
+from features.market_sentiment.chart import (
+    market_label,
+    render_anomaly_chart,
+    render_market_chart,
+)
 from news import backfill_market_digests
-from state import MarketDigestStore, market_history_gaps
+from state import MarketDigestStore, OvernightToneStore, market_history_gaps
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +110,94 @@ async def _report_market_failure(
         await status.edit_text(f"시장 감성 차트를 {what_failed}: {exc}")
 
 
+def _alignment_label(alignment: str) -> str:
+    return {
+        "HOPE": "🔺 HOPE",
+        "GLOOM": "🔻 GLOOM",
+        "ALIGNED": "· 일치",
+        "QUIET": "· 미동",
+    }.get(alignment, alignment)
+
+
+def _alignment_streak(points: list) -> int:
+    if not points:
+        return 0
+    label = points[-1].alignment
+    if label not in {"HOPE", "GLOOM"}:
+        return 0
+    streak = 0
+    for point in reversed(points):
+        if point.alignment != label:
+            break
+        streak += 1
+    return streak
+
+
+async def _cmd_market_anomaly(message, context, days: int) -> None:
+    store: OvernightToneStore | None = context.bot_data.get("overnight_tone_store")
+    if store is None:
+        await message.reply_text("시장 아노말리 저장소를 아직 준비하지 못했습니다.")
+        return
+    scored = await store.scored(set(MARKET_CHART_MARKETS))
+    scored = {market: points for market, points in scored.items() if points}
+    if len(scored) < 2:
+        await message.reply_text(
+            "시장 아노말리 창이 아직 부족합니다. /system anomaly에서 수집 상태를 확인해 주세요."
+        )
+        return
+    residual_markets = set()
+    if MARKET_ANOMALY_BACKFILL_FILE.exists():
+        backfill = OvernightToneStore(MARKET_ANOMALY_BACKFILL_FILE, retention_days=400)
+        reports = await backfill.gate_report(set(MARKET_CHART_MARKETS))
+        residual_markets = {
+            market
+            for market, report in reports.items()
+            if report.get("g0") and report.get("g2")
+        }
+    image = await run_non_urgent(
+        render_anomaly_chart,
+        scored,
+        days,
+        residual_markets,
+    )
+    lines = [f"시장 아노말리 — 최근 {days}세션"]
+    sample_counts = []
+    for market, points in sorted(scored.items()):
+        point = points[-1]
+        sample_counts.append(point.article_count)
+        score = (
+            f"a={point.anomaly_score:+.1f}"
+            if market in residual_markets and point.anomaly_score is not None
+            else "a=검증대기"
+        )
+        extreme = " · EXTREME" if point.strength == "EXTREME" else ""
+        streak = _alignment_streak(points)
+        streak_text = f" · {streak}세션 연속" if streak > 1 else ""
+        lines.append(
+            f"{market} 전일 {point.price_return:+.2f}% → 당일 논조 {point.tone:+.2f} "
+            f"(전망 {point.forward:+.2f}) · {score} · {_alignment_label(point.alignment)}"
+            f"{extreme}{streak_text}"
+        )
+    rolling_values = [
+        point.anomaly_score
+        for market, points in scored.items()
+        if market in residual_markets
+        for point in points[-days:]
+        if point.anomaly_score is not None
+    ]
+    if rolling_values:
+        lines.append(f"{days}세션 중앙 이상도 {median(rolling_values):+.2f}")
+    if sample_counts:
+        lines.append(f"창 표본 중앙값 {median(sample_counts):.0f}건")
+    lines.append("일치·불일치 관측치이며 방향 예측이나 매매 신호가 아닙니다.")
+    await message.reply_photo(
+        photo=image,
+        caption="\n".join(lines),
+        read_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,
+        write_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,
+    )
+
+
 async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send country/market news sentiment ranking and trend chart."""
     message = update.effective_message
@@ -118,6 +213,10 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
     if not 1 <= days <= 30:
         await message.reply_text("조회 기간은 1~30일로 지정해 주세요.")
+        return
+
+    if MARKET_ANOMALY_ENABLED:
+        await _cmd_market_anomaly(message, context, days)
         return
 
     store: MarketDigestStore | None = context.bot_data.get("market_digest_store")
