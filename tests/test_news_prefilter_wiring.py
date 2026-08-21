@@ -288,7 +288,7 @@ class _ReportingPrefilter:
                 "budget_seconds": 12960,
                 "used_seconds": 3240,
                 "remaining_seconds": 9720,
-                "reserve_ratio": 0.125,
+                "foreground_seconds": 1800,
             },
         }
         self.payload.update(overrides)
@@ -309,7 +309,8 @@ def test_system_prefilter_shows_disagreement_and_discrimination():
     assert "shadow" in text
     assert "0.630" in text  # AUC
     assert "최신순만 8건" in text
-    assert "0.90h / 3.60h" in text  # CPU 예산
+    assert "0.90h / 3.60h" in text  # CPU 예산(보정)
+    assert "0.50h" in text  # foreground는 참고용으로만 표시
 
 
 def test_system_prefilter_always_carries_the_shadow_caveat():

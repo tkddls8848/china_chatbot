@@ -73,7 +73,6 @@ def _service(
         translate_limit=translate_limit,
         translated_event_cooldown_hours=translated_event_cooldown_hours,
         daily_cpu_budget_seconds=100,
-        cpu_reserve_ratio=0.125,
     )
 
 
@@ -358,17 +357,22 @@ def test_stale_validation_ap_does_not_block_updates():
     assert result.model is not None
 
 
-def test_cpu_budget_counts_foreground_and_background_together(tmp_path):
+def test_cpu_budget_gates_only_on_background_not_foreground(tmp_path):
+    """foreground(매 주기 후보 점수화)는 관측만 되고 예산을 깎지 않는다.
+
+    한 풀을 같이 깎던 예전 구조에서는 foreground만으로 하루치를 다 써 보정이
+    한 번도 못 도는 굶주림이 있었다.
+    """
     service = _service(tmp_path)
-    service._cpu_budget._state["foreground_cpu_seconds"] = 20.0
+    service._cpu_budget._state["foreground_cpu_seconds"] = 500.0
     service.record_background_cpu(55.0)
 
     status = service.cpu_status()
 
-    assert status["used_seconds"] == 75.0
-    assert status["remaining_seconds"] == 25.0
+    assert status["used_seconds"] == 55.0
+    assert status["remaining_seconds"] == 45.0
+    assert status["foreground_seconds"] == 500.0
     persisted = json.loads((tmp_path / "cpu.json").read_text(encoding="utf-8"))
-    assert persisted["reserve_ratio"] == 0.125
     assert "utc_day" in persisted
 
 

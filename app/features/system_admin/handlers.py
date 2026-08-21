@@ -108,12 +108,13 @@ def _format_prefilter_report(report: dict) -> str:
     else:
         lines.append("  ⏸ 아직 학습된 모델이 없습니다(라벨 120건·5일이 모이면 시작).")
 
+    foreground_hours = float(cpu.get("foreground_seconds", 0.0)) / 3600
     lines.extend(
         [
             "",
             "<b>CPU 예산</b>",
-            f"  {used_hours:.2f}h / {budget_hours:.2f}h 사용"
-            f" (UTC {cpu['utc_day']}, 예비 {float(cpu['reserve_ratio']):.0%})",
+            f"  보정 {used_hours:.2f}h / {budget_hours:.2f}h 사용 (UTC {cpu['utc_day']})",
+            f"  참고: foreground(선별) {foreground_hours:.2f}h — 이 예산을 깎지 않음",
             "",
             "<b>섀도가 답하지 못하는 것</b>",
         ]

@@ -9,9 +9,8 @@ from datetime import timedelta
 from core.clock import now
 from core.config import (
     NEWS_GLOBAL_LIMIT,
+    NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS,
     NEWS_PREFILTER_CPU_STATE_FILE,
-    NEWS_PREFILTER_CPU_RESERVE_RATIO,
-    NEWS_PREFILTER_DAILY_CPU_BUDGET_SECONDS,
     NEWS_PREFILTER_EVENT_FILE,
     NEWS_PREFILTER_EVENT_WINDOW_HOURS,
     NEWS_PREFILTER_EXPLORATION_SLOTS,
@@ -49,8 +48,7 @@ def _install_services(app) -> None:
         exploration_slots=NEWS_PREFILTER_EXPLORATION_SLOTS,
         translate_limit=NEWS_GLOBAL_LIMIT,
         translated_event_cooldown_hours=NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS,
-        daily_cpu_budget_seconds=NEWS_PREFILTER_DAILY_CPU_BUDGET_SECONDS,
-        cpu_reserve_ratio=NEWS_PREFILTER_CPU_RESERVE_RATIO,
+        daily_cpu_budget_seconds=NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS,
     )
 
 

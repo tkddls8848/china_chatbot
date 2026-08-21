@@ -1,4 +1,4 @@
-"""사전선별 백그라운드 유지보수용 일일 CPU 예산 상태."""
+"""사전선별 보정(calibration) 전용 일일 CPU 예산 상태."""
 
 from __future__ import annotations
 
@@ -12,15 +12,18 @@ from core.storage import write_json_atomic
 
 
 class DailyCpuBudget:
-    def __init__(
-        self,
-        state_file: Path,
-        daily_budget_seconds: float,
-        reserve_ratio: float,
-    ):
+    """보정(calibration)만 재는 하루 CPU 예산.
+
+    뉴스 사이클마다 도는 후보 점수화(foreground)는 사전선별을 쓰는 한 피할 수
+    없는 필수 비용이라 이 예산에서 빼지 않는다 — foreground_cpu_seconds로
+    계속 관측만 하고 보정을 막지는 않는다. foreground와 background가 한 풀을
+    같이 깎던 예전 구조에서는 foreground만으로 하루치를 다 써 보정이 한 번도
+    못 도는 굶주림이 있었다(실측: trial 0 · 남은 예산 0.00h로 매번 중단).
+    """
+
+    def __init__(self, state_file: Path, daily_budget_seconds: float):
         self._state_file = state_file
         self._daily_budget_seconds = max(0.0, daily_budget_seconds)
-        self._reserve_ratio = min(1.0, max(0.0, reserve_ratio))
         self._state = self._load_state()
         self._last_process_cpu = time.process_time()
         self._background_since_checkpoint = 0.0
@@ -65,11 +68,11 @@ class DailyCpuBudget:
     def _persist(self) -> None:
         payload = dict(self._state)
         payload["budget_seconds"] = self._daily_budget_seconds
-        payload["reserve_ratio"] = self._reserve_ratio
         payload["updated_at"] = now().isoformat(timespec="seconds")
         write_json_atomic(self._state_file, payload)
 
     def account_foreground_cpu(self) -> None:
+        """관측 전용 — 이 값은 예산을 깎지 않는다."""
         self._reset_day_if_needed()
         current = time.process_time()
         delta = max(0.0, current - self._last_process_cpu)
@@ -88,19 +91,15 @@ class DailyCpuBudget:
 
     @property
     def remaining_seconds(self) -> float:
-        return max(0.0, self._daily_budget_seconds - self._used_seconds())
+        background_used = float(self._state["background_cpu_seconds"])
+        return max(0.0, self._daily_budget_seconds - background_used)
 
     def status(self) -> dict[str, float | str]:
-        used = self._used_seconds()
+        background_used = float(self._state["background_cpu_seconds"])
         return {
             "utc_day": self._state["utc_day"],
             "budget_seconds": self._daily_budget_seconds,
-            "used_seconds": used,
-            "remaining_seconds": max(0.0, self._daily_budget_seconds - used),
-            "reserve_ratio": self._reserve_ratio,
+            "used_seconds": background_used,
+            "remaining_seconds": max(0.0, self._daily_budget_seconds - background_used),
+            "foreground_seconds": float(self._state["foreground_cpu_seconds"]),
         }
-
-    def _used_seconds(self) -> float:
-        return float(self._state["foreground_cpu_seconds"]) + float(
-            self._state["background_cpu_seconds"]
-        )

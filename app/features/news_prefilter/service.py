@@ -187,7 +187,6 @@ class NewsPrefilter:
         translate_limit: int,
         translated_event_cooldown_hours: int,
         daily_cpu_budget_seconds: float,
-        cpu_reserve_ratio: float,
     ):
         self.mode = mode
         self._event_file = event_file
@@ -215,7 +214,6 @@ class NewsPrefilter:
         self._cpu_budget = DailyCpuBudget(
             cpu_state_file,
             self._daily_cpu_budget_seconds,
-            cpu_reserve_ratio,
         )
         self._last_persist_monotonic = 0.0
         self._learner = ObservationLearner(
