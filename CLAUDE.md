@@ -154,7 +154,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   운영자가 조정하지 않는 설정은 같은 모듈의 리터럴 상수로 둔다.
 - **배경 CPU 작업은 예산 안에서만 돈다.** Lightsail `micro_3_0`은 2 vCPU에
   vCPU당 baseline 10%라 하루 지속 가능 CPU가 4.8 vCPU-hour다. 사전선별 보정은
-  그중 75%(3.6h)만 쓰고 나머지는 텔레그램·뉴스 긴급 경로에 남긴다. 조각마다
+  그중 60%(2.88h)만 쓰고 나머지는 텔레그램·뉴스 긴급 경로에 남긴다. 조각마다
   `wait_for_urgent_idle`·load average·남은 예산을 다시 확인해 오래 가로막지
   않는다. bundle을 바꾸면 `NEWS_PREFILTER_LIGHTSAIL_*` 상수도 함께 바꾼다.
 - 상태 파일은 `data/<feature>/`에 둔다. 설정은 상태 파일에 저장하지 않는다.
