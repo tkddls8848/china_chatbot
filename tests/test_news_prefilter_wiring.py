@@ -288,7 +288,7 @@ class _ReportingPrefilter:
                 "budget_seconds": 12960,
                 "used_seconds": 3240,
                 "remaining_seconds": 9720,
-                "reserve_ratio": 0.25,
+                "reserve_ratio": 0.125,
             },
         }
         self.payload.update(overrides)

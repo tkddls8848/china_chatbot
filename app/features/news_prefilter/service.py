@@ -191,6 +191,7 @@ class NewsPrefilter:
         translate_limit: int,
         translated_event_cooldown_hours: int,
         daily_cpu_budget_seconds: float,
+        cpu_reserve_ratio: float,
     ):
         self.mode = mode
         self._event_file = event_file
@@ -207,6 +208,7 @@ class NewsPrefilter:
             hours=max(0, translated_event_cooldown_hours)
         )
         self._daily_cpu_budget_seconds = max(0.0, daily_cpu_budget_seconds)
+        self._cpu_reserve_ratio = min(1.0, max(0.0, cpu_reserve_ratio))
         self._lock = asyncio.Lock()
         self._file_lock = threading.RLock()
         self._optimizer = ThreadPoolExecutor(
@@ -321,7 +323,7 @@ class NewsPrefilter:
     def _persist_cpu_state(self) -> None:
         payload = dict(self._cpu_state)
         payload["budget_seconds"] = self._daily_cpu_budget_seconds
-        payload["reserve_ratio"] = 0.25
+        payload["reserve_ratio"] = self._cpu_reserve_ratio
         payload["updated_at"] = now().isoformat(timespec="seconds")
         write_json_atomic(self._cpu_state_file, payload)
 
@@ -341,7 +343,7 @@ class NewsPrefilter:
             "budget_seconds": self._daily_cpu_budget_seconds,
             "used_seconds": used,
             "remaining_seconds": max(0.0, self._daily_cpu_budget_seconds - used),
-            "reserve_ratio": 0.25,
+            "reserve_ratio": self._cpu_reserve_ratio,
         }
 
     @staticmethod

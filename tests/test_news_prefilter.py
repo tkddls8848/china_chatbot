@@ -73,6 +73,7 @@ def _service(
         translate_limit=translate_limit,
         translated_event_cooldown_hours=translated_event_cooldown_hours,
         daily_cpu_budget_seconds=100,
+        cpu_reserve_ratio=0.125,
     )
 
 
@@ -367,7 +368,8 @@ def test_cpu_budget_counts_foreground_and_background_together(tmp_path):
     assert status["used_seconds"] == 75.0
     assert status["remaining_seconds"] == 25.0
     persisted = json.loads((tmp_path / "cpu.json").read_text(encoding="utf-8"))
-    assert persisted["reserve_ratio"] == 0.25
+    assert persisted["reserve_ratio"] == 0.125
+    assert "utc_day" in persisted
 
 
 def test_optimizer_trains_on_original_titles_with_time_split():

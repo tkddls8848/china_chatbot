@@ -197,7 +197,7 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 ```
 
 `중단=budget`이 **매일** 나오면 예산이 아니라 관측량을 먼저 줄인다. 배경 보정은
-하루 3.6 vCPU-hour(전체 4.8h의 75%) 안에서만 돌고, 긴급 뉴스 구간·load average
+하루 4.2 vCPU-hour(전체 4.8h의 87.5%) 안에서만 돌고, 긴급 뉴스 구간·load average
 1.5 이상에서는 스스로 물러난다.
 
 일주일 뒤 `/system prefilter`로 네 축을 본다.

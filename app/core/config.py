@@ -234,11 +234,13 @@ NEWS_PREFILTER_EXPLORATION_SLOTS = 1
 NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS = 24
 
 # Terraform 기본 bundle(micro_3_0: 2 vCPU, vCPU당 baseline 10%)의 하루 지속
-# 가능 CPU는 4.8 vCPU-hour다. 전체 프로세스 CPU를 함께 계량하고 그중 25%는
+# 가능 CPU는 4.8 vCPU-hour다. 전체 프로세스 CPU를 함께 계량하고 그중 12.5%는
 # 텔레그램·뉴스 긴급 경로에 남긴다. bundle을 바꾸면 이 두 상수도 함께 바꾼다.
 NEWS_PREFILTER_LIGHTSAIL_VCPUS = 2
 NEWS_PREFILTER_LIGHTSAIL_BASELINE = 0.10
-NEWS_PREFILTER_CPU_RESERVE_RATIO = 0.25
+# Keep a small margin for urgent bot work while allowing the prefilter to use
+# 4.2 of the 4.8 baseline vCPU-hours available each day.
+NEWS_PREFILTER_CPU_RESERVE_RATIO = 0.125
 NEWS_PREFILTER_DAILY_CPU_BUDGET_SECONDS = int(
     NEWS_PREFILTER_LIGHTSAIL_VCPUS
     * 24
@@ -247,9 +249,10 @@ NEWS_PREFILTER_DAILY_CPU_BUDGET_SECONDS = int(
     * NEWS_PREFILTER_LIGHTSAIL_BASELINE
     * (1.0 - NEWS_PREFILTER_CPU_RESERVE_RATIO)
 )
-# 2분마다 최대 60 CPU-second를 한 코어에서 나눠 쓴다. 5초 조각 사이마다
+# 3분마다 최대 60 CPU-second를 한 코어에서 나눠 쓴다. 5초 조각 사이마다
 # 긴급 뉴스 구간과 load average를 다시 확인해 오래 가로막지 않는다.
-NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES = 2
+# Spread maintenance work out so the allowance is not spent too early.
+NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES = 3
 NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS = 60.0
 NEWS_PREFILTER_MAINTENANCE_CHUNK_SECONDS = 5.0
 NEWS_PREFILTER_MAX_LOAD_AVERAGE = 1.5
