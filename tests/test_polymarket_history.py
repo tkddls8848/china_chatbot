@@ -385,7 +385,8 @@ def test_unthemed_questions_are_rejected():
 # ── 이력 조회 ──────────────────────────────────────────
 
 def test_history_client_asks_for_the_yes_token_over_the_window():
-    session = _Session([_Response({"history": []})])
+    """30일 폭은 CLOB의 미문서화 상한을 넘으므로 여러 조각으로 나눠 부른다."""
+    session = _Session([_Response({"history": []}) for _ in range(5)])
     client = PolymarketHistoryClient(
         base_url="https://clob.example",
         timeout=7,
@@ -397,20 +398,80 @@ def test_history_client_asks_for_the_yes_token_over_the_window():
 
     client.fetch_price_history("111", start=start, end=end)
 
-    call = session.calls[0]
-    assert call["url"] == "https://clob.example/prices-history"
-    assert call["params"]["market"] == "111"
-    assert call["params"]["startTs"] == int(start.timestamp())
-    assert call["params"]["endTs"] == int(end.timestamp())
-    assert call["params"]["fidelity"] == 60
+    calls = session.calls
+    # 30일을 7일 조각으로 나누면 7+7+7+7+2 = 5번.
+    assert len(calls) == 5
+    for call in calls:
+        assert call["url"] == "https://clob.example/prices-history"
+        assert call["params"]["market"] == "111"
+        assert call["params"]["fidelity"] == 60
+    assert calls[0]["params"]["startTs"] == int(start.timestamp())
+    assert calls[-1]["params"]["endTs"] == int(end.timestamp())
+    # 조각 사이가 끊기거나 겹치지 않는다 — 앞 조각의 끝이 다음 조각의 시작이다.
+    for previous, current in zip(calls, calls[1:]):
+        assert previous["params"]["endTs"] == current["params"]["startTs"]
+
+
+def test_history_chunks_are_merged_and_sorted():
+    early_stamp = int(snapshot_moment(TODAY - timedelta(days=29)).timestamp())
+    late_stamp = int(snapshot_moment(TODAY).timestamp())
+    session = _Session(
+        [
+            _Response({"history": [{"t": late_stamp, "p": 0.9}]}),
+            _Response({"history": [{"t": early_stamp, "p": 0.1}]}),
+            _Response({"history": []}),
+            _Response({"history": []}),
+            _Response({"history": []}),
+        ]
+    )
+    client = PolymarketHistoryClient(
+        base_url="https://clob.example",
+        timeout=7,
+        session=session,
+        sleep=lambda _seconds: None,
+    )
+    start = snapshot_moment(TODAY - timedelta(days=30))
+    end = snapshot_moment(TODAY)
+
+    points = client.fetch_price_history("111", start=start, end=end)
+
+    # 조각별 응답 순서와 무관하게 시각 오름차순으로 합쳐진다.
+    assert [price for _stamp, price in points] == [0.1, 0.9]
+
+
+def test_a_failing_chunk_fails_the_whole_history_fetch():
+    """일부만 받은 이력을 그대로 쓰면 빠진 구간이 없는 날로 둔갑한다."""
+    session = _Session(
+        [
+            _Response({"history": []}),
+            _Response(None, status_code=422, text="bad token"),
+        ]
+    )
+    client = PolymarketHistoryClient(
+        base_url="https://clob.example",
+        timeout=7,
+        session=session,
+        sleep=lambda _seconds: None,
+    )
+    start = snapshot_moment(TODAY - timedelta(days=30))
+    end = snapshot_moment(TODAY)
+
+    with pytest.raises(PolymarketError):
+        client.fetch_price_history("111", start=start, end=end)
 
 
 def test_one_failing_contract_does_not_abort_the_rest():
     stamp = int(snapshot_moment(TODAY - timedelta(days=1)).timestamp())
     session = _Session(
         [
+            # 0x1: 첫 조각부터 실패해 나머지 4조각은 부르지 않는다.
             _Response(None, status_code=422, text="bad token"),
+            # 0x2: 30일 = 5조각 모두 성공.
             _Response({"history": [{"t": stamp, "p": 0.5}]}),
+            _Response({"history": []}),
+            _Response({"history": []}),
+            _Response({"history": []}),
+            _Response({"history": []}),
         ]
     )
     client = PolymarketHistoryClient(

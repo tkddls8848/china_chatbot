@@ -69,6 +69,11 @@ _FIDELITY_MINUTES = 60
 # 목표 시각보다 이만큼 더 오래된 값은 그날 가격으로 인정하지 않는다. 거래가
 # 끊긴 구간을 앞 값으로 끌어오면 없는 날이 있는 날로 둔갑한다.
 _MAX_SAMPLE_LAG = timedelta(hours=6)
+# CLOB이 `fidelity=60`(분)에 31일 폭을 한 번에 주면 `400 interval is too
+# long`으로 거절한다(실측 2026-08-22, 문서화되지 않은 서버 쪽 상한). 정확한
+# 경계를 찾는 대신 폴리마켓 자기 API의 `interval` enum에 `1w`가 1급 값으로
+# 있는 걸 근거로 일주일 폭은 항상 통과한다고 보고 그 폭으로 나눠 이어 붙인다.
+_MAX_HISTORY_CHUNK_DAYS = 7
 
 
 class PolymarketHistoryClient(_JsonEndpoint):
@@ -96,15 +101,30 @@ class PolymarketHistoryClient(_JsonEndpoint):
         start: datetime,
         end: datetime,
     ) -> list[tuple[datetime, float]]:
-        payload = self._request(
-            {
-                "market": token_id,
-                "startTs": int(start.timestamp()),
-                "endTs": int(end.timestamp()),
-                "fidelity": _FIDELITY_MINUTES,
-            }
-        )
-        return parse_price_history(payload)
+        """`start`~`end`를 `_MAX_HISTORY_CHUNK_DAYS` 폭으로 나눠 이어 붙인다.
+
+        CLOB이 한 번에 받는 폭에 상한을 두므로(위 상수 설명) 여러 번 나눠
+        부른다. 한 조각이 실패하면(`PolymarketError`) 그대로 위로 던진다 —
+        일부만 받은 이력을 "이 계약의 이력"으로 쓰면 빠진 구간이 없는 날로
+        둔갑한다.
+        """
+        points: list[tuple[datetime, float]] = []
+        step = timedelta(days=_MAX_HISTORY_CHUNK_DAYS)
+        chunk_start = start
+        while chunk_start < end:
+            chunk_end = min(chunk_start + step, end)
+            payload = self._request(
+                {
+                    "market": token_id,
+                    "startTs": int(chunk_start.timestamp()),
+                    "endTs": int(chunk_end.timestamp()),
+                    "fidelity": _FIDELITY_MINUTES,
+                }
+            )
+            points.extend(parse_price_history(payload))
+            chunk_start = chunk_end
+        points.sort(key=lambda point: point[0])
+        return points
 
 
 def parse_price_history(payload: Any) -> list[tuple[datetime, float]]:
