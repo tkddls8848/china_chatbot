@@ -14,6 +14,7 @@ from core.config import (
     POLYMARKET_BASE_URL,
     POLYMARKET_CONSENSUS_FILE,
     POLYMARKET_ENABLED,
+    POLYMARKET_PROXY_URL,
     POLYMARKET_RETENTION_DAYS,
     POLYMARKET_TIMEOUT,
 )
@@ -21,6 +22,7 @@ from features.base import CommandSpec, FeatureSpec, MenuSpec
 from features.market_sentiment.handlers import cmd_market
 from features.market_sentiment.overnight import capture_completed_overnight_windows
 from features.market_sentiment.polymarket import PolymarketClient
+from features.market_sentiment.polymarket_proxy import build_polymarket_session
 from features.market_sentiment.snapshot import (
     SNAPSHOT_HOUR_SPEC,
     SNAPSHOT_MINUTE,
@@ -63,6 +65,7 @@ def _install_polymarket_services(app) -> None:
     app.bot_data["polymarket_client"] = PolymarketClient(
         base_url=POLYMARKET_BASE_URL,
         timeout=POLYMARKET_TIMEOUT,
+        session=build_polymarket_session(POLYMARKET_PROXY_URL),
     )
 
 

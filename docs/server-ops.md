@@ -282,8 +282,12 @@ cd ~/stock_chatbot
 RUN_POLYMARKET_SMOKE=1 ./venv/bin/python -m pytest -q -m polymarket_smoke
 ```
 
-막히면 **거기서 끝낸다.** 프록시로 우회하지 않는다 — 우회로를 유지할 가치가 있는
-신호가 아니다. 8-4의 철수를 밟는다.
+막히면 **거기서 끝낸다.** 프록시로 우회하지 않는다 — 착수도 안 한 신호를 위해
+우회로를 만들어 둘 가치가 없다. 8-5의 철수를 밟는다.
+
+이 판단은 **착수 전 단계에만** 적용된다. 이미 며칠·몇 주 정상 수집하던 라이브
+job이 도중에 막히면(가동률 게이트가 이미 값을 쌓아 온 신호라는 뜻) 별개
+상황이다 — 8-4를 본다.
 
 ### 8-2. 수집과 백필은 같은 날 시작한다
 
@@ -335,7 +339,7 @@ cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
 `polymarket_history.py` 첫머리에도 적어 두었다. **지운 채로 승격하지 않는다.**
 
 - 백필 미달 → **거기서 끝낸다.** 라이브를 30일 더 봐도 같은 항목이 통과할 근거는
-  없다. `POLYMARKET_ENABLED`를 되돌리고 8-4로 간다.
+  없다. `POLYMARKET_ENABLED`를 되돌리고 8-5로 간다.
 - 백필 통과 → 일주일 뒤 최근 7일 스냅숏이 6일 이상인지만 확인하고
   `POLYMARKET_PANEL_ENABLED=true`로 올린다. 그 뒤 `/market`을 한 번 호출해 하단
   패널이 붙는지, 위 순위·캡션이 그대로인지 눈으로 확인한다.
@@ -345,7 +349,67 @@ cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
 `config.py`의 상수다 — 바꾸려면 코드를 고쳐야 하고 git에 남는다. env로 남은 키는
 `POLYMARKET_ENABLED`·`POLYMARKET_PANEL_ENABLED` 둘뿐이다.
 
-### 8-4. 철수 (하나라도 미달이면)
+### 8-4. 라이브 수집이 지역 차단(451)에 막히면 — 프록시
+
+정상 수집 중이던 job이 어느 날부터 `HTTP 451`(법적 사유로 이용 불가)로
+연속 실패하는 경우다. `journalctl -u stock-chatbot | grep POLYMARKET`에서
+`result=bad_request status=451`이 매 재시도(08:35·09:35·10:35)마다 찍히고
+코드·설정 변경 없이 시작됐다면, Gamma가 이 서버 출구 IP의 지역을 막기
+시작했다는 뜻이다(8-1의 "착수도 안 한 신호" 판단과는 다른 상황).
+
+`PolymarketClient`·`PolymarketHistoryClient`는 원래 `session=`을 받으므로,
+막혔을 때만 프록시를 문 세션을 넘긴다. 평소엔 아무 세션도 넘기지 않아
+직접 호출 그대로다 — 이 경로 전체가 `POLYMARKET_PROXY_URL` 한 줄로
+켜지고 지워진다.
+
+| 자리 | 파일 |
+|---|---|
+| 프록시 세션 팩토리(요청 시에만 관여) | `app/features/market_sentiment/polymarket_proxy.py` |
+
+```env
+# 비어 있으면(기본) 직접 호출한다. 지역 차단(451)이 뜰 때만 채운다.
+POLYMARKET_PROXY_URL=http://user:pass@proxy-host:port
+```
+
+`.env`에 넣고 재기동한 뒤 다음 재시도 창(정시 35분)까지 기다려
+`journalctl`에서 `result=`가 더 이상 뜨지 않는지 확인한다. socks5 프록시를
+쓰려면 서버에 `pip install pysocks`가 먼저 있어야 한다(requests의 SOCKS
+지원 의존성이고 이 프로젝트가 기본으로 깔지 않는다).
+
+떼어낼 때는 `.env`에서 `POLYMARKET_PROXY_URL`을 지우고 재기동하면 된다.
+완전히 걷어내려면(신호로서 가치가 없다고 판단한 경우) 이 값을 지운 뒤
+`polymarket_proxy.py` 파일과 `feature.py`·`polymarket_backfill.py`의
+`build_polymarket_session` 호출 두 곳도 함께 지운다.
+
+이걸로도 안 풀리면(프록시 출구도 막히거나, 프록시를 구할 수 없으면) 8-5를
+밟는다.
+
+#### 지금 세워 둔 프록시 (2026-08-22)
+
+한국(AWS 서울·KT 회선 둘 다) 전부 `gamma-api.polymarket.com`·`clob.polymarket.com`이
+451이고 도쿄(`ap-northeast-1`)는 둘 다 200임을 임시 인스턴스로 실측한 뒤, 같은
+리전에 상시용 프록시를 세웠다.
+
+| 항목 | 값 |
+|---|---|
+| 인스턴스 | `polymarket-proxy-tokyo` (`ap-northeast-1a`, `nano_3_0`, `ubuntu_22_04`) |
+| 프록시 | tinyproxy, 포트 80(기본 개방 포트라 `OpenInstancePublicPorts` 불필요) |
+| 접근 제어 | `Allow` ACL을 이 서버의 고정 IP(`3.34.234.102`)로 제한 + Basic Auth 이중 |
+| 자격 증명 | 서버 `.env`의 `POLYMARKET_PROXY_URL`에만 있다. 여기(git)에는 적지 않는다 |
+
+**이 인스턴스는 terraform이 관리하지 않는다** — AWS CLI로 직접 만들었다. 붙였다
+뗄 수 있는 부속물로 두는 게 목적이라, 본 배포(`iac/terraform/`)에 편입하지
+않았다. 유지보수(재기동·설정 변경)는 Lightsail 콘솔의 브라우저 SSH로 한다
+— `stock-chatbot-deployer` IAM 자격으로는 `ap-northeast-1`의
+`GetInstanceAccessDetails`·`OpenInstancePublicPorts`가 막혀 있어(리전을
+`ap-northeast-2`로 제한한 `iam-policy.json` 조건과는 별개로, 다른 리전에서도
+CLI로 키를 뽑아내거나 방화벽을 여는 건 항상 막힌다) 로컬 CLI로는 SSH 키를
+받을 수 없다.
+
+프록시 출구(도쿄)가 막히는 날이 오면 인스턴스를 지우고 다른 리전에 새로
+세운다 — 상태를 갖지 않는 부속물이라 다시 만드는 비용이 낮다.
+
+### 8-5. 철수 (하나라도 미달이면)
 
 기준 미달을 "조금만 더 보자"로 넘기지 않는다.
 
@@ -356,6 +420,7 @@ cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
    - `app/features/market_sentiment/polymarket.py`
    - `app/features/market_sentiment/polymarket_rules.py`
    - `app/features/market_sentiment/polymarket_history.py`
+   - `app/features/market_sentiment/polymarket_proxy.py`(8-4에서 붙였다면)
    - `app/features/market_sentiment/snapshot.py`
    - `app/polymarket_backfill.py`
    - `app/state/polymarket_consensus.py`

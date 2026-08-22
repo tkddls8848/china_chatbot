@@ -451,6 +451,10 @@ POLYMARKET_BASE_URL = "https://gamma-api.polymarket.com"
 POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
 POLYMARKET_ENABLED = _env_bool("POLYMARKET_ENABLED", "false")
 POLYMARKET_PANEL_ENABLED = _env_bool("POLYMARKET_PANEL_ENABLED", "false")
+# Gamma가 이 서버 출구 IP의 지역을 막을 때만 채운다(docs/server-ops.md 8-4).
+# 비어 있으면(기본) 직접 호출한다 — polymarket_proxy.py가 이 값 하나로
+# 세션에 프록시를 물릴지 말지를 정한다.
+POLYMARKET_PROXY_URL = os.environ.get("POLYMARKET_PROXY_URL", "").strip()
 POLYMARKET_TIMEOUT = 20
 # 선택 게이트. 유동성이 얕은 계약은 하루 변화가 호가 한 번에 흔들려 컨센서스가
 # 아니라 잡음이 된다. 실측 기준(volume 10,000 · liquidity 1,000)을 쓴다.

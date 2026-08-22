@@ -27,6 +27,7 @@ from core.config import (
     POLYMARKET_MAX_SPREAD,
     POLYMARKET_MIN_LIQUIDITY,
     POLYMARKET_MIN_VOLUME,
+    POLYMARKET_PROXY_URL,
     POLYMARKET_RETENTION_DAYS,
     POLYMARKET_TIMEOUT,
 )
@@ -36,6 +37,7 @@ from features.market_sentiment.polymarket_history import (
     PolymarketHistoryClient,
     run_backfill,
 )
+from features.market_sentiment.polymarket_proxy import build_polymarket_session
 from state import PolymarketConsensusStore
 
 _LABELS = {
@@ -97,10 +99,14 @@ def _print_report(report: dict) -> None:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    client = PolymarketClient(base_url=POLYMARKET_BASE_URL, timeout=POLYMARKET_TIMEOUT)
+    session = build_polymarket_session(POLYMARKET_PROXY_URL)
+    client = PolymarketClient(
+        base_url=POLYMARKET_BASE_URL, timeout=POLYMARKET_TIMEOUT, session=session
+    )
     history_client = PolymarketHistoryClient(
         base_url=POLYMARKET_CLOB_URL,
         timeout=POLYMARKET_TIMEOUT,
+        session=session,
     )
 
     try:

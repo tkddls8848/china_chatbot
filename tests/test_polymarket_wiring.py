@@ -51,6 +51,30 @@ def test_collection_on_installs_the_external_source_of_market_sentiment(monkeypa
     assert "market_digest_store" in app.bot_data
 
 
+def test_proxy_url_is_plumbed_into_the_client_session(monkeypatch):
+    """docs/server-ops.md 8-4: 지역 차단이 뜨면 이 값 하나로 프록시를 문다."""
+    monkeypatch.setattr(
+        market_feature, "POLYMARKET_PROXY_URL", "http://proxy-host:8080"
+    )
+
+    app, _ = _install(monkeypatch, enabled=True)
+
+    session = app.bot_data["polymarket_client"]._session
+    assert session.proxies == {
+        "http": "http://proxy-host:8080",
+        "https": "http://proxy-host:8080",
+    }
+
+
+def test_empty_proxy_url_leaves_the_client_calling_directly(monkeypatch):
+    monkeypatch.setattr(market_feature, "POLYMARKET_PROXY_URL", "")
+
+    app, _ = _install(monkeypatch, enabled=True)
+
+    # requests.Session() 기본값 — 프록시가 물려 있지 않다.
+    assert app.bot_data["polymarket_client"]._session.proxies == {}
+
+
 def test_snapshot_job_is_pinned_to_0835_kst(monkeypatch):
     """하루 변화를 재려면 두 스냅숏이 같은 시각이어야 한다.
 
