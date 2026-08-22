@@ -161,10 +161,11 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   foreground만으로 하루치를 다 써 보정이 한 번도 못 도는 굶주림이 있었다
   (실측: trial 0 · 남은 예산 0.00h로 매번 중단). 순간 부하(버스트)는 이
   예산이 아니라 보정 조각의 실행 주기·회당 CPU·조각 단위
-  (`NEWS_PREFILTER_MAINTENANCE_*`)가 낮게 누른다 — 5분마다 최대 8초 페이스면
-  보정 자체의 하루 이론상 최대치가 288회 × 8초 ≈ 0.64h라, 예산은 사실상 거의
-  걸리지 않고 설정 변경·버그로 트라이얼 비용이 튀었을 때의 백스톱 역할만
-  한다. 조각마다 `wait_for_urgent_idle`·load average·남은 예산을 다시
+  (`NEWS_PREFILTER_MAINTENANCE_*`)가 낮게 누른다 — 1분마다 최대 10초 페이스면
+  보정 자체의 하루 이론상 최대치가 1,440회 × 10초 = 4.0h라, 예산(3.0h)이
+  실제 상한으로 걸린다(이전 5분·8초 페이스는 이론상 최대가 0.64h로 당시
+  예산 1.5h에 애초에 못 미쳐 예산이 사실상 아무 의미가 없었다). 조각마다
+  `wait_for_urgent_idle`·load average·남은 예산을 다시
   확인해 오래 가로막지 않는다. Lightsail `micro_3_0`(2 vCPU, vCPU당
   baseline 10% = 하루 4.8 vCPU-hour)의 `NEWS_PREFILTER_LIGHTSAIL_*` 상수는
   참고치일 뿐 위 계산에 관여하지 않는다.

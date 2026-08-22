@@ -248,17 +248,19 @@ NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS = 24
 NEWS_PREFILTER_LIGHTSAIL_VCPUS = 2
 NEWS_PREFILTER_LIGHTSAIL_BASELINE = 0.10
 # 보정(calibration) 자체만 재는 하루 총량이다. 순간 부하(버스트)는 이 값이
-# 아니라 아래 주기·조각 값이 낮게 누른다 — 5분마다 최대 8초 페이스에서
-# 이론상 하루 최대치는 288회 × 8초 ≈ 0.64h이니 이 값은 사실상 거의 걸리지
-# 않고, 실제 역할은 설정 변경·버그로 트라이얼 비용이 튀었을 때의 백스톱이다.
+# 아니라 아래 주기·조각 값이 낮게 누른다 — 이전 페이스(5분마다 8초)는 이론상
+# 하루 최대치가 288회 × 8초 ≈ 0.64h로 이 예산(당시 1.5h)에 애초에 못 미쳐
+# 예산이 사실상 아무 의미가 없었다(실측: 버스트 크레딧이 그만큼 남는데도
+# 보정이 그 여유를 쓰지 못함). 1분마다 10초 페이스로 이론상 하루 최대치를
+# 1,440회 × 10초 = 4.0h로 올려 이 예산(3.0h)이 실제 상한이 되게 한다.
 # foreground와 한 풀을 공유해 재던 예전 구조에서는 foreground만으로 하루치를
 # 다 써 보정이 한 번도 못 도는 굶주림이 있었다(실측: trial 0 · 남은 예산
 # 0.00h로 매번 중단) — 그래서 foreground는 이제 이 예산을 깎지 않는다.
-NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS = 5400.0
-# 5분마다 최대 8 CPU-second를 한 코어에서 나눠 쓴다. 2초 조각 사이마다
+NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS = 10800.0
+# 1분마다 최대 10 CPU-second를 한 코어에서 나눠 쓴다. 2초 조각 사이마다
 # 긴급 뉴스 구간과 load average를 다시 확인해 오래 가로막지 않는다.
-NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES = 5
-NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS = 8.0
+NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES = 1
+NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS = 10.0
 NEWS_PREFILTER_MAINTENANCE_CHUNK_SECONDS = 2.0
 NEWS_PREFILTER_MAX_LOAD_AVERAGE = 1.5
 
