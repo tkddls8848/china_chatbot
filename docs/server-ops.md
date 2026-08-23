@@ -508,3 +508,11 @@ load average가 상시 1.5 이상이면 사전선별이 스스로 물러나 보�
 않는다. 그 상태가 계속되면 관측량이나 bundle을 다시 본다 —
 `NEWS_PREFILTER_LIGHTSAIL_*` 상수는 `micro_3_0`(2 vCPU, baseline 10%)에 맞춰져
 있고 bundle을 바꾸면 함께 바꾼다.
+
+보정 슬라이스는 `today()` 날짜 홀짝으로 이틀에 하루만 지출 페이스(15초)를
+쓰고 나머지 하루는 충전 페이스(4초)로 낮춘다(CLAUDE.md 변경 원칙,
+2026-08-23) — 크레딧 잔량을 API로 못 읽어(`GetInstanceMetricData`가 IAM
+밖) 코드가 스스로 못 재기 때문이다. `journalctl | grep PREFILTER`의 각
+줄 끝에 `충전일` 표시가 있는지로 오늘이 어느 날인지 바로 확인된다. 콘솔의
+burst capacity 그래프가 계속 내려가면 `NEWS_PREFILTER_MAINTENANCE_*` 비율을
+다시 본다.
