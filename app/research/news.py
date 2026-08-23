@@ -48,7 +48,6 @@ def _make_news_item(
     # 만들어 주지만, 원문을 그대로 쓸 때는 본문 앞부분을 제목으로 삼는다.
     title = title or content[:60]
     return {
-        "id": f"{source}:{published_at}:{title[:30]}",
         "source": source,
         "market": market,
         "title": title[:240],

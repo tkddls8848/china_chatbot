@@ -42,7 +42,8 @@ def test_market_view_parser_normalizes_relevance():
                 "risks": [],
             },
             ensure_ascii=False,
-        )
+        ),
+        news_items=[],
     )
 
     assert result["actions"][0]["relevance"] == 0.0
@@ -95,6 +96,7 @@ def test_market_view_parser_scopes_and_caps_new_actions():
                 "risks": [],
             }
         ),
+        news_items=[],
         watchlist={"US:NASDAQ:MSFT": "Microsoft", "00700": "Tencent"},
         candidate_universe=[
             {"code": "US:NASDAQ:AAPL"},
@@ -151,7 +153,8 @@ def test_market_view_parser_rejects_non_finite_action_scores(field, value):
                     "actions": [action],
                     "risks": [],
                 }
-            )
+            ),
+            news_items=[],
         )
 
 

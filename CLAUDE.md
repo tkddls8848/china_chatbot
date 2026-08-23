@@ -175,6 +175,17 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - 번역·분석·브리핑은 Cloudflare Workers AI만 사용한다. 비밀값은 `.env`에만 두고
   로그나 예외에 포함하지 않는다.
 - LLM JSON은 필수 필드를 엄격히 검사하고 현재 응답 envelope만 처리한다.
+- **`finish_reason=length`는 성공이 아니다.** 상한에 걸려 끊긴 응답을 그대로
+  돌려주면 호출자는 파싱 오류(`Unterminated string`)만 보고 원인을 못 찾는다.
+  `backends.py`가 `truncated`로 실패시키고 `max_tokens`와 실제 output_tokens를
+  로그에 남긴다. **재시도하지 않는다** — 같은 입력은 같은 길이에서 다시 끊기고
+  Neurons만 두 배로 태운다. 회로 차단의 연속 실패로도 세지 않는다
+  (`caller_fault`) — 한 호출자의 출력 예약 문제로 뉴스 번역까지 멈추면 안 된다.
+- **LLM에게 원문 URL을 받아 적게 하지 않는다.** URL은 파이썬 쪽에서 따라가다
+  표시 직전에 붙인다(`news/utils.py`의 `<a href>`). 리서치 evidence도 모델은
+  `news_items`의 id만 가리키고 서버가 되찾는다(`_news_payload`). Google News
+  링크는 중앙값 286자의 base64라, 모델이 생성하게 두면 출력 예산의 3분의 1을
+  먹고 정작 분석이 끝을 맺지 못한다.
 - 외부 소스 하나의 실패가 전체 뉴스 주기를 중단시키지 않도록 소스 단위로 격리한다.
 - 새 호환 분기, 사용하지 않는 설정 플래그, 중복 helper를 만들지 않는다.
 - **문서는 절차서 하나, 배포서 하나, 그리고 계획서뿐이다. 그 외 새 목록 파일을

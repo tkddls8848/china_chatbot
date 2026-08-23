@@ -49,6 +49,7 @@ class LLMBackendError(RuntimeError):
         retryable: bool = False,
         quota_exhausted: bool = False,
         fatal: bool = False,
+        caller_fault: bool = False,
         retry_after: float | None = None,
         detail: str = "",
     ):
@@ -59,6 +60,10 @@ class LLMBackendError(RuntimeError):
         self.quota_exhausted = quota_exhausted
         # 재시작 전까지 회로를 열어야 하는 오류(인증·요청 형식 등).
         self.fatal = fatal
+        # 공급자가 아니라 요청이 원인인 오류(출력 예약 부족 등). 회로 차단의
+        # 연속 실패로 세지 않는다 - 한 호출자의 예산 문제로 다른 기능까지
+        # 멈추면 안 된다.
+        self.caller_fault = caller_fault
         self.retry_after = retry_after
         self.detail = detail
 
@@ -230,12 +235,31 @@ class CloudflareWorkersAIBackend:
                 ),
             )
 
+        usage = self._usage(data)
+        if self._finish_reason(data) == "length":
+            # 상한에 걸려 끊긴 응답은 성공이 아니다. 그대로 돌려주면 호출자는
+            # 파싱 오류(`Unterminated string`)만 보고 원인을 못 찾는다
+            # (2026-08-15·2026-08-24 리서치 장애가 둘 다 이랬다). 재시도하지
+            # 않는다 - 같은 입력은 같은 길이에서 다시 끊기고 Neurons만 두 배로
+            # 태운다. 고칠 곳은 출력을 채우는 내용이거나 max_tokens 예약이다.
+            raise self._fail(
+                started,
+                "truncated",
+                status_code=status,
+                retryable=False,
+                caller_fault=True,
+                detail=(
+                    f"output stopped at max_tokens={max_tokens} "
+                    f"({usage.log_fragment()})"
+                ),
+            )
+
         logger.info(
             "[LLM] provider=%s model=%s result=success latency_ms=%d %s",
             self.name,
             self.model,
             _elapsed_ms(started),
-            self._usage(data).log_fragment(),
+            usage.log_fragment(),
         )
         return content
 
@@ -254,6 +278,17 @@ class CloudflareWorkersAIBackend:
         if not isinstance(content, str) or not content.strip():
             return None
         return content
+
+    @staticmethod
+    def _finish_reason(data: Any) -> str | None:
+        """choices[0].finish_reason. 주지 않는 응답은 None이다.
+
+        값이 없다고 절단으로 단정하지 않는다 - 정상 완료를 실패로 바꾼다.
+        """
+        choices = data.get("choices") if isinstance(data, dict) else None
+        first = choices[0] if isinstance(choices, list) and choices else None
+        reason = first.get("finish_reason") if isinstance(first, dict) else None
+        return reason if isinstance(reason, str) else None
 
     @staticmethod
     def _empty_content_hint(data: Any) -> str:
@@ -364,6 +399,7 @@ class CloudflareWorkersAIBackend:
         retryable: bool = False,
         quota_exhausted: bool = False,
         fatal: bool = False,
+        caller_fault: bool = False,
         retry_after: float | None = None,
         detail: str = "",
     ) -> LLMBackendError:
@@ -384,6 +420,7 @@ class CloudflareWorkersAIBackend:
             retryable=retryable,
             quota_exhausted=quota_exhausted,
             fatal=fatal,
+            caller_fault=caller_fault,
             retry_after=retry_after,
             detail=safe_detail,
         )
@@ -511,6 +548,11 @@ class ResilientBackend:
         self._open_reason = ""
 
     def _record_failure(self, error: LLMBackendError) -> None:
+        if error.caller_fault:
+            # 공급자는 정상 응답했다. 요청이 예약한 출력 한도가 모자란 것이라
+            # 연속 실패로 세면 리서치 하나 때문에 뉴스 번역까지 멈춘다.
+            return
+
         if error.quota_exhausted:
             self._open_until = _next_utc_midnight(self._clock())
             self._open_reason = "quota_exhausted"

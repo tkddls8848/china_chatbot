@@ -550,3 +550,95 @@ def test_one_line_body_is_rejected_as_a_quality_failure():
 def test_quality_failure_is_distinguishable_from_a_format_failure():
     """호출자가 재시도 대상에서 뺄 수 있도록 형식 오류와 타입이 갈린다."""
     assert issubclass(TranslationQualityError, TranslationError)
+
+
+# ── 출력 상한 절단 감지 ────────────────────────────────
+
+
+def _truncated_completion(content, usage=None):
+    """max_tokens에 걸려 끊긴 응답. content는 있지만 완결되지 않았다."""
+    payload = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "length",
+            }
+        ]
+    }
+    if usage is not None:
+        payload["usage"] = usage
+    return _FakeResponse(payload=payload)
+
+
+def test_truncated_response_raises_instead_of_returning_partial_json():
+    """finish_reason=length는 성공이 아니다.
+
+    그대로 돌려주면 호출자가 `Unterminated string`만 보고 원인을 못 찾는다
+    (2026-08-15·2026-08-24 리서치 장애). 상한에 걸렸다고 여기서 말한다.
+    """
+    session = _FakeSession(
+        _truncated_completion(
+            '{"summary": "요약", "actions": [{"reason": "중간에서 끊',
+            usage={"prompt_tokens": 20612, "completion_tokens": 512, "neurons": 344.97},
+        )
+    )
+
+    with pytest.raises(LLMBackendError) as excinfo:
+        _cloudflare(session).generate(**GENERATE_KWARGS)
+
+    error = excinfo.value
+    assert error.reason == "truncated"
+    # 재시도해도 같은 길이에서 다시 끊긴다 - Neurons만 두 배로 태운다.
+    assert error.retryable is False
+    # 무엇을 줄이거나 올려야 하는지 한 줄로 보인다.
+    assert "max_tokens=512" in error.detail
+    assert "output_tokens=512" in error.detail
+
+
+def test_truncated_response_does_not_open_circuit():
+    """출력 예약이 모자란 것은 호출자 사정이라 provider 건강도로 세지 않는다.
+
+    여기서 회로를 열면 리서치 하나 때문에 뉴스 번역까지 멈춘다.
+    """
+    session = _FakeSession(
+        _truncated_completion("잘린 본문"),
+        _truncated_completion("잘린 본문"),
+        _chat_completion('{"ok": true}'),
+    )
+    backend = ResilientBackend(
+        backend=_cloudflare(session),
+        max_attempts=1,
+        failure_threshold=2,
+        cooldown_seconds=600,
+    )
+
+    for _ in range(2):
+        with pytest.raises(LLMBackendError):
+            backend.generate(**GENERATE_KWARGS)
+
+    assert backend.circuit_status() == "closed"
+    assert backend.generate(**GENERATE_KWARGS) == '{"ok": true}'
+
+
+def test_finish_reason_stop_returns_content():
+    session = _FakeSession(
+        _FakeResponse(
+            payload={
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": '{"ok": true}'},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+    )
+
+    assert _cloudflare(session).generate(**GENERATE_KWARGS) == '{"ok": true}'
+
+
+def test_missing_finish_reason_is_not_treated_as_truncation():
+    """finish_reason을 주지 않는 응답을 절단으로 단정하지 않는다."""
+    session = _FakeSession(_chat_completion('{"ok": true}'))
+
+    assert _cloudflare(session).generate(**GENERATE_KWARGS) == '{"ok": true}'

@@ -5,8 +5,9 @@
 찾는 데 쓴다.
 
 입력:
-- news_items는 번역하지 않은 원문이며 title과 content를 모두 담는다. 제목만
-  훑지 말고 content의 수치·기업명·정책 문구까지 근거로 쓴다.
+- news_items는 번역하지 않은 원문이며 id, title, content를 담는다. 제목만
+  훑지 말고 content의 수치·기업명·정책 문구까지 근거로 쓴다. id는 근거를
+  가리킬 때 쓰는 번호다.
 - candidate_universe는 관심종목, 뉴스 종목명 매칭, 중화권 섹터, 미국 스크리너,
   한국 등락률 후보다.
 - remove_relevance_threshold는 기존 종목 삭제 기준이다.
@@ -62,7 +63,10 @@
 - risks와 view_critique는 각각 최대 5개다. 일반론이 아니라 입력에 실제로
   나타난 근거를 짚는다. risks에는 기준 시나리오와 다른 경로가 현실화되는 조건을
   우선 담아 사용자가 놓친 가능성을 볼 수 있게 한다.
-- evidence는 action과 반론마다 가장 강한 뉴스 2개까지 넣는다.
+- evidence는 action과 반론마다 가장 강한 뉴스 2개까지 넣되, news_items의 id
+  숫자만 쓴다. 제목·출처·시각·URL을 옮겨 적지 않는다 - 표시에 필요한 값은
+  id로 되찾으므로, 받아 적으면 출력 길이만 늘어 분석이 끝을 맺지 못한다.
+  입력에 있는 id만 쓰고 없는 번호를 지어내지 않는다.
 - 이전 판단과 달라지면 reason에 이유를 쓴다.
 - view_critique는 market_view의 전제를 약화하는 근거와 그 근거가 지지하는 대안
   해석을 point에 함께 쓰며, 없으면 []다.
@@ -80,12 +84,12 @@
     "confidence": 0.75,
     "relevance": 0.8,
     "reason": "판단 이유",
-    "evidence": [{"title": "근거", "source": "gnews_us", "published_at": "2026-05-02 10:15", "url": "https://..."}]
+    "evidence": [{"id": 3}, {"id": 11}]
   }],
   "risks": ["주의할 리스크"],
   "view_critique": [{
     "point": "관심 주제의 전제를 약화하는 반론",
     "severity": 0.6,
-    "evidence": {"title": "근거", "source": "gnews_us", "published_at": "2026-05-02 10:15", "url": "https://..."}
+    "evidence": {"id": 7}
   }]
 }

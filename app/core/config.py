@@ -296,11 +296,15 @@ RESEARCH_NEWS_CONTENT_MAX_CHARS = 600
 # 여기 적힌 시장끼리 라운드로빈으로 뽑고, 목록 밖 시장은 마지막에 채운다.
 RESEARCH_NEWS_MARKETS = ("CN", "US", "KR")
 # 분석 결과는 JSON 한 덩어리로 오므로 상한에 걸리면 문자열 중간에서 잘려
-# 파싱이 실패한다. 후보 수(RESEARCH_MAX_CANDIDATES)를 늘리면 함께 올린다.
-# 2026-08-15 운영에서 4096이 실제로 모자랐다(output_tokens=4096에 정확히 걸려
-# `Unterminated string`). action 10건 × evidence 2건에 URL까지 들어가면 JSON이
-# 8KB를 넘는다. 컨텍스트는 32,768이라 입력 12,264 + 출력 8,192 = 20,456으로
-# 아직 62% 선이다.
+# 파싱이 실패한다. 2026-08-15에 4096, 2026-08-24에 8192가 각각 output_tokens에
+# 정확히 걸려 `Unterminated string`으로 죽었다.
+# **상한을 올리는 것이 답이 아니다.** 두 번째 실패 때 입력이 이미 20,612토큰이라
+# 16,384으로 올리면 컨텍스트 32,768을 넘긴다. 원인은 용량 부족이 아니라 출력
+# 스키마가 evidence마다 원문 URL(Google News 리다이렉트, 중앙값 286자 base64)을
+# 받아 적게 한 것이었다 - 25개가 출력의 3분의 1을 먹으면서 정작 아무 화면에도
+# 그려지지 않았다. evidence를 news_items의 id 참조로 바꿔(`_news_payload`) 최대
+# 크기 응답이 5,641 → 2,063토큰이 됐고, 8192는 이제 4배 여유다.
+# 이 값을 다시 만지기 전에 무엇이 출력을 채우고 있는지부터 센다.
 RESEARCH_ANALYSIS_NUM_PREDICT = 8192
 RESEARCH_MAX_CANDIDATES = 24
 # 뉴스 본문 종목명 매칭에서 버릴 '흔한 영문 토큰'의 기준(이 수보다 많은 종목이

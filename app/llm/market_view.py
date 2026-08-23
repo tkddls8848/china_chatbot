@@ -15,6 +15,8 @@ _ALLOWED_ACTIONS = frozenset({"add", "remove", "watch"})
 _NEW_ACTIONS = frozenset({"add", "watch"})
 # 마켓 뷰 반론 항목 상한. 프롬프트의 "최대 5개"와 같은 수를 유지한다.
 _MAX_VIEW_CRITIQUE_ITEMS = 5
+# action 하나에 붙일 근거 기사 수. 프롬프트의 "2개까지"와 같은 수를 유지한다.
+_MAX_ACTION_EVIDENCE_ITEMS = 2
 
 
 class MarketViewError(RuntimeError):
@@ -169,7 +171,7 @@ class MarketViewAnalyzer:
         payload = {
             "market_view": market_view,
             "current_watchlist": watchlist,
-            "news_items": news_items,
+            "news_items": self._news_payload(news_items),
             "candidate_universe": candidates,
             "remove_relevance_threshold": self._remove_relevance_threshold,
             "max_new_actions": self._max_new_actions,
@@ -184,7 +186,36 @@ class MarketViewAnalyzer:
             raw,
             watchlist=watchlist,
             candidate_universe=candidates,
+            news_items=news_items,
         )
+
+    # 모델에게 보내지 않는 기사 필드. id는 순번으로 새로 매기고, url은 아예
+    # 빼서 모델이 되받아 적을 수 없게 한다.
+    _PAYLOAD_EXCLUDED_NEWS_FIELDS = frozenset({"id", "url"})
+
+    @classmethod
+    def _news_payload(cls, news_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """모델이 근거로 가리킬 수 있게 기사에 순번 id를 붙이고 URL은 뺀다.
+
+        원문 URL은 Google News 리다이렉트 링크라 중앙값 286자의 base64다.
+        출력 스키마가 이걸 evidence마다 적게 하면 action 10건 × 2개 + 반론
+        5건 = 25개가 출력 예산의 3분의 1을 먹고, 남은 자리로는 분석이 끝을
+        맺지 못해 JSON이 문자열 중간에서 잘린다(2026-08-24 운영 장애).
+        모델은 id로 기사를 가리키기만 하고 표시에 쓸 URL은 서버가 같은
+        목록에서 되찾는다 - 뉴스 번역이 원문 URL을 모델에 보내지 않고
+        렌더링 시점에 붙이는 것과 같은 구조다.
+        """
+        return [
+            {
+                "id": index,
+                **{
+                    key: value
+                    for key, value in item.items()
+                    if key not in cls._PAYLOAD_EXCLUDED_NEWS_FIELDS
+                },
+            }
+            for index, item in enumerate(news_items)
+        ]
 
     def _request_analysis(
         self,
@@ -248,6 +279,7 @@ class MarketViewAnalyzer:
         self,
         raw: str,
         *,
+        news_items: list[dict[str, Any]],
         watchlist: dict[str, str] | None = None,
         candidate_universe: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
@@ -281,6 +313,7 @@ class MarketViewAnalyzer:
         )
         normalized_actions = self._normalize_actions(
             actions,
+            news_items=news_items,
             watchlist_codes=list(watchlist) if watchlist is not None else None,
             candidate_codes=candidate_codes,
             max_new_actions=self._max_new_actions,
@@ -292,7 +325,9 @@ class MarketViewAnalyzer:
             "summary": summary.strip(),
             "actions": normalized_actions,
             "risks": [str(r).strip() for r in risks if str(r).strip()],
-            "view_critique": self._normalize_view_critique(data.get("view_critique")),
+            "view_critique": self._normalize_view_critique(
+                data.get("view_critique"), news_items
+            ),
         }
 
     @staticmethod
@@ -314,10 +349,57 @@ class MarketViewAnalyzer:
         }
 
     @classmethod
+    def _resolve_evidence_ref(
+        cls,
+        raw: Any,
+        news_items: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """`{"id": n}` 참조를 입력 기사로 되살린다. 못 찾으면 None이다.
+
+        id는 `_news_payload`가 매긴 순번이므로 같은 목록의 위치로 바로
+        찾는다. 소형 모델이 문자열("1")로 답하는 경우까지만 수용하고,
+        입력에 없는 번호나 모델이 지어낸 제목·URL은 조용히 버린다 -
+        보조 출력이라 실행을 죽이지 않는다(fail-soft).
+        """
+        if not isinstance(raw, dict):
+            return None
+        try:
+            index = int(str(raw.get("id")).strip())
+        except (TypeError, ValueError):
+            return None
+        if not 0 <= index < len(news_items):
+            return None
+        item = news_items[index]
+        return {
+            "title": str(item.get("title") or "").strip(),
+            "source": str(item.get("source") or "").strip(),
+            "published_at": str(item.get("published_at") or "").strip(),
+            "url": str(item.get("url") or "").strip(),
+        }
+
+    @classmethod
+    def _resolve_evidence_list(
+        cls,
+        raw: Any,
+        news_items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not isinstance(raw, list):
+            raise MarketViewError("analysis action evidence must be a list")
+        resolved: list[dict[str, Any]] = []
+        for entry in raw:
+            if len(resolved) >= _MAX_ACTION_EVIDENCE_ITEMS:
+                break
+            item = cls._resolve_evidence_ref(entry, news_items)
+            if item is not None:
+                resolved.append(item)
+        return resolved
+
+    @classmethod
     def _normalize_actions(
         cls,
         actions: list[Any],
         *,
+        news_items: list[dict[str, Any]],
         watchlist_codes: list[str] | None = None,
         candidate_codes: list[str] | None = None,
         max_new_actions: int = 4,
@@ -385,9 +467,7 @@ class MarketViewAnalyzer:
 
             confidence = cls._normalize_score(item.get("confidence", 0), "confidence")
 
-            evidence = item.get("evidence", [])
-            if not isinstance(evidence, list):
-                raise MarketViewError("analysis action evidence must be a list")
+            evidence = cls._resolve_evidence_list(item.get("evidence", []), news_items)
 
             relevance = cls._normalize_score(item.get("relevance"), "relevance")
 
@@ -399,15 +479,19 @@ class MarketViewAnalyzer:
                     "confidence": confidence,
                     "relevance": relevance,
                     "reason": str(item.get("reason") or "").strip(),
-                    "evidence": [e for e in evidence if isinstance(e, dict)],
+                    "evidence": evidence,
                 }
             )
             if action in _NEW_ACTIONS:
                 new_action_count += 1
             seen_tickers.add(canonical_token)
         return normalized
-    @staticmethod
-    def _normalize_view_critique(raw: Any) -> list[dict[str, Any]]:
+    @classmethod
+    def _normalize_view_critique(
+        cls,
+        raw: Any,
+        news_items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """마켓 뷰 반론 항목을 정규화한다.
 
         보조 출력이므로 형식 오류는 예외 대신 항목 제외로 처리한다(fail-soft).
@@ -434,9 +518,7 @@ class MarketViewAnalyzer:
                 severity = min(1.0, max(0.0, float(severity)))
             except (TypeError, ValueError):
                 severity = None
-            evidence = item.get("evidence")
-            if not isinstance(evidence, dict):
-                evidence = None
+            evidence = cls._resolve_evidence_ref(item.get("evidence"), news_items)
             normalized.append(
                 {"point": point, "severity": severity, "evidence": evidence}
             )

@@ -23,8 +23,21 @@ def _analyzer(tmp_path) -> MarketViewAnalyzer:
     )
 
 
+# evidence는 news_items의 id 참조이므로 파서에 같은 목록을 준다.
+_NEWS_ITEMS = [
+    {
+        "source": "CLS",
+        "title": "규제 발표",
+        "published_at": "2026-05-02 10:15",
+        "url": "https://www.cls.cn/detail/1",
+    }
+]
+
+
 def _parse(tmp_path, payload: dict) -> dict:
-    return _analyzer(tmp_path)._parse_analysis(json.dumps(payload, ensure_ascii=False))
+    return _analyzer(tmp_path)._parse_analysis(
+        json.dumps(payload, ensure_ascii=False), news_items=_NEWS_ITEMS
+    )
 
 
 def test_parse_normalizes_view_critique(tmp_path):
@@ -38,7 +51,7 @@ def test_parse_normalizes_view_critique(tmp_path):
                 {
                     "point": "반도체 수출 규제가 뷰와 상충한다",
                     "severity": 0.7,
-                    "evidence": {"title": "규제 발표", "source": "CLS"},
+                    "evidence": {"id": 0},
                 },
                 # severity가 숫자가 아니면 None으로 관용 처리
                 {"point": "지표 둔화", "severity": "high"},
@@ -52,6 +65,7 @@ def test_parse_normalizes_view_critique(tmp_path):
     assert critique[0]["point"] == "반도체 수출 규제가 뷰와 상충한다"
     assert critique[0]["severity"] == 0.7
     assert critique[0]["evidence"]["title"] == "규제 발표"
+    assert critique[0]["evidence"]["url"] == "https://www.cls.cn/detail/1"
     assert critique[1]["severity"] is None
     assert critique[2] == {"point": "위안화 약세 지속", "severity": None, "evidence": None}
 
