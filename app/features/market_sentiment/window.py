@@ -8,7 +8,7 @@ from functools import lru_cache
 
 import exchange_calendars as xcals
 
-from core.clock import KST
+from core.clock import JST
 
 CALENDAR_BY_MARKET = {
     "KR": "XKRX",
@@ -49,8 +49,8 @@ def session_window(market: str, price_session: date) -> MarketSessionWindow | No
     if not calendar.is_session(label):
         return None
     next_label = calendar.next_session(label)
-    close = calendar.session_close(label).to_pydatetime().astimezone(KST)
-    next_open = calendar.session_open(next_label).to_pydatetime().astimezone(KST)
+    close = calendar.session_close(label).to_pydatetime().astimezone(JST)
+    next_open = calendar.session_open(next_label).to_pydatetime().astimezone(JST)
     return MarketSessionWindow(
         market=key,
         price_session=price_session,
@@ -67,8 +67,8 @@ def completed_windows(
     lookback_sessions: int = 10,
 ) -> list[MarketSessionWindow]:
     """Return recent windows whose next session has already opened."""
-    current = moment if moment.tzinfo is not None else moment.replace(tzinfo=KST)
-    current = current.astimezone(KST)
+    current = moment if moment.tzinfo is not None else moment.replace(tzinfo=JST)
+    current = current.astimezone(JST)
     calendar = market_calendar(market)
     sessions = calendar.sessions_in_range(
         (current.date() - timedelta(days=max(20, lookback_sessions * 3))).isoformat(),
@@ -88,8 +88,8 @@ def recent_session_windows(
     count: int,
 ) -> list[MarketSessionWindow]:
     """Return up to ``count`` completed windows for offline backfill."""
-    current = moment if moment.tzinfo is not None else moment.replace(tzinfo=KST)
-    current = current.astimezone(KST)
+    current = moment if moment.tzinfo is not None else moment.replace(tzinfo=JST)
+    current = current.astimezone(JST)
     calendar = market_calendar(market)
     sessions = calendar.sessions_in_range(
         (current.date() - timedelta(days=max(400, count * 3))).isoformat(),

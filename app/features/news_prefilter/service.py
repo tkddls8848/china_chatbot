@@ -269,8 +269,8 @@ class NewsPrefilter:
             events[event.event_id] = event
         return events
 
-    def account_foreground_cpu(self) -> None:
-        self._cpu_budget.account_foreground_cpu()
+    def account_foreground_cpu(self) -> float:
+        return self._cpu_budget.account_foreground_cpu()
 
     def record_background_cpu(self, cpu_seconds: float) -> None:
         self._cpu_budget.record_background_cpu(cpu_seconds)

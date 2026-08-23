@@ -1,10 +1,25 @@
+# ===========================================================================
+# 서울(ap-northeast-2) 시절 원본. 롤백 창이 열려 있는 동안만 두는 임시 사본이다.
+#
+# 2026-08-23에 운영 서버를 도쿄(ap-northeast-1)로 옮기면서 상위 디렉터리의
+# 같은 파일들을 도쿄 기준으로 고쳤다. 서울 인스턴스는 workspace "default"에
+# 정지된 채 롤백용으로 남아 있고, 그 workspace의 terraform.tfvars(gitignore됨)가
+# 여기 값들을 그대로 쓴다.
+#
+# 이 폴더는 terraform이 읽지 않는다(하위 디렉터리의 .tf는 로드되지 않고,
+# variables.tf.bak은 확장자부터 .tf가 아니다).
+#
+# **서울 인스턴스를 destroy 하는 날 이 폴더를 통째로 지운다.**
+# 그 뒤로는 git 이력이 유일한 보관처다(docs/server-ops.md의 이전 정리 목록).
+# ===========================================================================
+
 # `terraform.tfvars`로 복사해서 사용한다.
 # 시크릿(텔레그램 토큰·Cloudflare 자격증명)은 여기에 넣지 않는다 —
 # 서버 .env에 SSH로 직접 작성한다. tfstate에 평문으로 남기지 않기 위해서다.
 
 # --- 위치와 사양 ---------------------------------------------------------
-aws_region        = "ap-northeast-1"
-availability_zone = "ap-northeast-1a"
+aws_region        = "ap-northeast-2"
+availability_zone = "ap-northeast-2a"
 bundle_id         = "micro_3_0" # $7/월, 1GB. nano_3_0(512MB)은 pandas를 못 버틴다
 blueprint_id      = "ubuntu_24_04"
 
@@ -21,11 +36,10 @@ repo_ref = "main"
 # 키 이름이 다를 때만 고친다. 절대경로를 쓸 경우 Windows는 슬래시로 적는다.
 ssh_public_key_path = "~/.ssh/id_ed25519.pub"
 
-# 도쿄 운영 IAM은 OpenInstancePublicPorts를 허용하지 않으므로 false로 둔다.
-# 방화벽은 Lightsail 콘솔에서 직접 관리한다.
+# 방화벽을 Lightsail 콘솔에서 직접 관리하려면 false.
 # false로 두면 인스턴스가 기본 규칙(22/80/443 개방)으로 뜨므로,
 # 생성 직후 콘솔에서 80/443을 닫아야 한다.
-manage_firewall = false
+manage_firewall = true
 
 # manage_firewall = true 일 때만 적용. 고정 회선이면 자기 IP로 좁힌다.
 # 확인: curl -s https://checkip.amazonaws.com
@@ -33,9 +47,9 @@ allowed_ssh_cidrs = ["0.0.0.0/0"]
 
 # --- 부트스트랩 ----------------------------------------------------------
 swap_size             = "2G"
-timezone              = "Asia/Tokyo"
+timezone              = "Asia/Seoul"
 backup_retention_days = 14
 
 # --- 스냅샷 --------------------------------------------------------------
 enable_auto_snapshot = true
-auto_snapshot_time   = "19:00" # UTC 정시만 허용. 19:00 UTC = 04:00 JST
+auto_snapshot_time   = "19:00" # UTC 정시만 허용. 19:00 UTC = 04:00 KST

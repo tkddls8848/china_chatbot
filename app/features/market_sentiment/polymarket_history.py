@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
-from core.clock import KST, ensure_kst, now, today
+from core.clock import JST, ensure_jst, now, today
 from features.market_sentiment.polymarket import (
     PolymarketClient,
     PolymarketContract,
@@ -152,16 +152,16 @@ def parse_price_history(payload: Any) -> list[tuple[datetime, float]]:
         if not 0.0 <= float(price) <= 1.0:
             continue
         points.append(
-            (datetime.fromtimestamp(float(stamp), tz=KST), float(price))
+            (datetime.fromtimestamp(float(stamp), tz=JST), float(price))
         )
     points.sort(key=lambda point: point[0])
     return points
 
 
 def snapshot_moment(day: date) -> datetime:
-    """그날의 스냅숏 시각(08:35 KST). 라이브 job과 같은 축에 놓기 위한 기준이다."""
+    """그날의 스냅숏 시각(08:35 JST). 라이브 job과 같은 축에 놓기 위한 기준이다."""
     return datetime(
-        day.year, day.month, day.day, SNAPSHOT_HOUR, SNAPSHOT_MINUTE, tzinfo=KST
+        day.year, day.month, day.day, SNAPSHOT_HOUR, SNAPSHOT_MINUTE, tzinfo=JST
     )
 
 
@@ -172,12 +172,12 @@ def sample_price(
     """`moment` 이전의 마지막 값. 너무 오래됐거나 없으면 None."""
     latest: tuple[datetime, float] | None = None
     for stamp, price in history:
-        if ensure_kst(stamp) > moment:
+        if ensure_jst(stamp) > moment:
             break
         latest = (stamp, price)
     if latest is None:
         return None
-    if moment - ensure_kst(latest[0]) > _MAX_SAMPLE_LAG:
+    if moment - ensure_jst(latest[0]) > _MAX_SAMPLE_LAG:
         return None
     return latest[1]
 

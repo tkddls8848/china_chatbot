@@ -4,6 +4,7 @@ import json
 import threading
 from types import SimpleNamespace
 
+import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import bot
@@ -51,12 +52,19 @@ def test_watchlist_add_and_remove_use_injected_code_resolver(tmp_path):
 
 def test_scheduler_uses_application_lifecycle(monkeypatch):
     menu_configured = False
+    web_admin_stop_calls = 0
 
     async def configure_menu(_app):
         nonlocal menu_configured
         menu_configured = True
 
     monkeypatch.setattr(bot, "configure_telegram_menu", configure_menu)
+
+    async def stop_web_admin(_app):
+        nonlocal web_admin_stop_calls
+        web_admin_stop_calls += 1
+
+    monkeypatch.setattr(bot, "stop_web_admin", stop_web_admin)
 
     async def exercise():
         scheduler = AsyncIOScheduler()
@@ -77,8 +85,29 @@ def test_scheduler_uses_application_lifecycle(monkeypatch):
 
         # The shutdown hook is registered for both stop and shutdown phases.
         await bot._stop_scheduler(app)
+        assert web_admin_stop_calls == 1
 
     asyncio.run(exercise())
+
+
+def test_main_releases_instance_lock_when_startup_fails(monkeypatch):
+    lock = SimpleNamespace(closed=False)
+
+    def close():
+        lock.closed = True
+
+    lock.close = close
+    monkeypatch.setattr(bot, "_acquire_single_instance_lock", lambda _path: lock)
+
+    def fail_to_build_registry(_enabled):
+        raise RuntimeError("startup failed")
+
+    monkeypatch.setattr(bot, "build_feature_registry", fail_to_build_registry)
+
+    with pytest.raises(RuntimeError, match="startup failed"):
+        bot.main()
+
+    assert lock.closed
 
 
 def test_non_urgent_workers_are_selected_round_robin(monkeypatch):

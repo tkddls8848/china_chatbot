@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from core.clock import ensure_kst, now
+from core.clock import ensure_jst, now
 from core.storage import write_json_atomic
 from core.workers import run_non_urgent
 
@@ -68,7 +68,7 @@ class WatchlistEventLog:
             result = []
             for event in self._events:
                 try:
-                    if ensure_kst(datetime.fromisoformat(str(event.get("ts")))) >= cutoff:
+                    if ensure_jst(datetime.fromisoformat(str(event.get("ts")))) >= cutoff:
                         result.append(dict(event))
                 except (TypeError, ValueError):
                     continue

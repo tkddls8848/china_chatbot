@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from core.clock import KST
+from core.clock import JST
 from features.market_sentiment.anomaly import market_gate_report, score_entries
 from features.market_sentiment.chart import render_anomaly_chart
 from features.market_sentiment.overnight import select_headlines
@@ -48,8 +48,8 @@ def test_non_session_does_not_create_window():
 
 
 def test_window_filter_is_half_open_and_sorted():
-    start = datetime(2026, 8, 20, 15, 30, tzinfo=KST)
-    end = datetime(2026, 8, 21, 9, 0, tzinfo=KST)
+    start = datetime(2026, 8, 20, 15, 30, tzinfo=JST)
+    end = datetime(2026, 8, 21, 9, 0, tzinfo=JST)
     articles = [
         GlobalArticle("end", "end", "", end.isoformat()),
         GlobalArticle("inside", "inside", "", "2026-08-20T20:00:00+09:00"),

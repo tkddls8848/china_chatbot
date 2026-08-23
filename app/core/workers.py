@@ -10,7 +10,7 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from functools import partial
+from functools import partial, wraps
 from itertools import count
 from threading import Lock
 from typing import Any, Callable
@@ -42,6 +42,42 @@ async def run_non_urgent(func: Callable[..., Any], *args: Any, **kwargs: Any) ->
     call = partial(func, *args, **kwargs)
     executor = _next_non_urgent_executor()
     return await asyncio.get_running_loop().run_in_executor(executor, call)
+
+
+# 고가치 분석은 평시 9% 예산을 넘겨 버스트 크레딧을 쓸 수 있다. 이 상태는
+# 프리필터 유지보수 같은 양보 가능한 CPU 작업을 멈추는 신호이기도 하다.
+_burst_depth = 0
+
+
+def is_burst_active() -> bool:
+    return _burst_depth > 0
+
+
+@asynccontextmanager
+async def burst_phase(label: str):
+    """리서치·다이제스트·컨센서스가 버스트 자원을 우선 쓰는 구간."""
+    global _burst_depth
+    _burst_depth += 1
+    logger.info("[WORKERS] 버스트 우선 구간 시작 - %s", label)
+    try:
+        yield
+    finally:
+        _burst_depth = max(0, _burst_depth - 1)
+        logger.info("[WORKERS] 버스트 우선 구간 종료 - %s", label)
+
+
+def burst_job(label: str):
+    """async 작업 전체를 ``burst_phase``로 감싸는 데코레이터."""
+
+    def decorate(func):
+        @wraps(func)
+        async def wrapped(*args, **kwargs):
+            async with burst_phase(label):
+                return await func(*args, **kwargs)
+
+        return wrapped
+
+    return decorate
 
 
 # ── 긴급 구간 게이트 ──────────────────────────────────

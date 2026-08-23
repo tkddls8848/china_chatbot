@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from core.clock import ensure_kst, now
+from core.clock import ensure_jst, now
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class PredictionLog:
                 continue
             try:
                 entry = json.loads(line)
-                if ensure_kst(datetime.fromisoformat(str(entry.get("ts")))) >= cutoff:
+                if ensure_jst(datetime.fromisoformat(str(entry.get("ts")))) >= cutoff:
                     entries.append(entry)
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue

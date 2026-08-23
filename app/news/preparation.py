@@ -15,9 +15,9 @@ from news.collection import collect_source_candidates
 from news.models import PreparedGlobalArticle, SourceCandidate
 from news.registry import NewsSourceRegistry, SourceSpec
 from news.utils import (
-    compact_kst_time,
+    compact_jst_time,
     compact_sentiment_line,
-    format_china_time_as_kst,
+    format_china_time_as_jst,
     format_digest_article,
     is_timeout_error,
     normalize_stock_code,
@@ -91,14 +91,14 @@ async def prepare_global_source(
                 if _negative_alert_prefix(translated.sentiment, bool(hits))
                 else ""
             )
-            formatted_time = format_china_time_as_kst(
+            formatted_time = format_china_time_as_jst(
                 article.published_at,
                 article.published_date or None,
             )
             text = format_digest_article(
                 translated.title,
                 translated.content,
-                compact_kst_time(formatted_time),
+                compact_jst_time(formatted_time),
                 sentiment_line,
                 alert,
                 safe_url,
@@ -165,5 +165,4 @@ async def prepare_global_source(
         metrics["quality_rejected"],
     )
     return prepared_rows[::-1]
-
 

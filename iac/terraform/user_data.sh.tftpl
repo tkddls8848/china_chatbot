@@ -32,7 +32,7 @@ echo "[bootstrap] 시작 $(date -Is)"
 # --------------------------------------------------------------------------
 # 1) 타임존
 #
-# 스케줄러가 KST 기준 시각(장중·마감 브리핑)으로 잡을 실행한다.
+# 스케줄러가 JST 기준 시각(장중·마감 브리핑)으로 잡을 실행한다.
 # UTC로 두면 전부 9시간 어긋난다.
 # --------------------------------------------------------------------------
 timedatectl set-timezone "$TIMEZONE"
@@ -161,7 +161,7 @@ echo "[bootstrap] systemd 유닛 $SERVICE_NAME.service 설치 (기동은 하지 
 cat > /etc/cron.d/stock-chatbot-backup <<CRON
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-# 매일 03:00 KST — Lightsail 자동 스냅샷(04:00 KST)보다 먼저 돌아 스냅샷에 포함된다.
+# 매일 03:00 JST — Lightsail 자동 스냅샷(04:00 JST)보다 먼저 돌아 스냅샷에 포함된다.
 0 3 * * * $APP_USER tar czf /home/$APP_USER/backup-\$(date +\%F).tgz -C $APP_DIR data && find /home/$APP_USER -maxdepth 1 -name 'backup-*.tgz' -mtime +$BACKUP_RETENTION_DAYS -delete
 CRON
 chmod 644 /etc/cron.d/stock-chatbot-backup

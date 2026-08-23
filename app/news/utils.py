@@ -13,7 +13,7 @@ from typing import Any, Callable, TypeVar
 
 import pandas as pd
 
-from core.clock import KST as _KST
+from core.clock import JST as _JST
 from core.config import (
     NEWS_DIGEST_ARTICLE_MAX_CHARS,
     NEWS_DIGEST_TITLE_MAX_CHARS,
@@ -23,7 +23,7 @@ from llm.translator import TranslationResult, TranslationService
 
 T = TypeVar("T")
 # 기사 시각의 소스 타임존. 중국 뉴스·시세 제공처는 현지 시각(CST)을 준다.
-# 여기서 KST로 변환하며, 앱의 "지금"은 core/clock.py가 따로 담당한다.
+# 여기서 JST로 변환하며, 앱의 "지금"은 core/clock.py가 따로 담당한다.
 _CHINA_TZ = timezone(timedelta(hours=8))
 
 
@@ -31,7 +31,7 @@ def parse_news_datetime(
     published_at: Any,
     published_date: Any | None = None,
 ) -> datetime | None:
-    """Parse a source publication timestamp and normalize it to KST.
+    """Parse a source publication timestamp and normalize it to JST.
 
     RFC/RSS timestamps keep their declared timezone. Timestamps without a
     timezone are treated as China Standard Time because the stock and Chinese
@@ -56,14 +56,14 @@ def parse_news_datetime(
 
     if parsed_datetime.tzinfo is None:
         parsed_datetime = parsed_datetime.replace(tzinfo=_CHINA_TZ)
-    return parsed_datetime.astimezone(_KST)
+    return parsed_datetime.astimezone(_JST)
 
 
 def publication_time_naive(
     published_at: Any,
     published_date: Any | None = None,
 ) -> datetime | None:
-    """Return a KST publication timestamp in the log's naive ISO format."""
+    """Return a JST publication timestamp in the log's naive ISO format."""
     parsed = parse_news_datetime(published_at, published_date)
     return parsed.replace(tzinfo=None) if parsed is not None else None
 
@@ -74,15 +74,15 @@ def recent_publication_time(
     max_age_hours: int = 48,
     now: datetime | None = None,
 ) -> datetime | None:
-    """Return the KST publication time only when it is inside the live window."""
+    """Return the JST publication time only when it is inside the live window."""
     published = parse_news_datetime(published_at, published_date)
     if published is None:
         return None
-    current = now or datetime.now(_KST)
+    current = now or datetime.now(_JST)
     if current.tzinfo is None:
-        current = current.replace(tzinfo=_KST)
+        current = current.replace(tzinfo=_JST)
     else:
-        current = current.astimezone(_KST)
+        current = current.astimezone(_JST)
     cutoff = current - timedelta(hours=max(1, max_age_hours))
     if cutoff <= published <= current + timedelta(hours=1):
         return published
@@ -109,11 +109,11 @@ def filter_recent_articles(
     return [article for _, article in dated]
 
 
-def filter_articles_for_kst_day(
+def filter_articles_for_jst_day(
     articles: list[T],
     target_day: date,
 ) -> list[T]:
-    """Keep only articles whose actual publication date is the requested KST day."""
+    """Keep only articles whose actual publication date is the requested JST day."""
     dated: list[tuple[datetime, T]] = []
     for article in articles:
         published = parse_news_datetime(
@@ -131,11 +131,11 @@ def filter_articles_in_window(
     start: datetime,
     end: datetime,
 ) -> list[T]:
-    """Keep articles in the half-open KST interval ``[start, end)``."""
-    window_start = start if start.tzinfo is not None else start.replace(tzinfo=_KST)
-    window_end = end if end.tzinfo is not None else end.replace(tzinfo=_KST)
-    window_start = window_start.astimezone(_KST)
-    window_end = window_end.astimezone(_KST)
+    """Keep articles in the half-open JST interval ``[start, end)``."""
+    window_start = start if start.tzinfo is not None else start.replace(tzinfo=_JST)
+    window_end = end if end.tzinfo is not None else end.replace(tzinfo=_JST)
+    window_start = window_start.astimezone(_JST)
+    window_end = window_end.astimezone(_JST)
     dated: list[tuple[datetime, T]] = []
     for article in articles:
         published = parse_news_datetime(
@@ -148,7 +148,7 @@ def filter_articles_in_window(
     return [article for _, article in dated]
 
 
-def format_china_time_as_kst(
+def format_china_time_as_jst(
     published_at: Any,
     published_date: Any | None = None,
 ) -> str:
@@ -156,32 +156,34 @@ def format_china_time_as_kst(
     raw_date = str(published_date or "").strip()
     raw = f"{raw_date} {raw_time}".strip() if raw_date else raw_time
     if not raw:
-        return "KST"
+        return "JST"
 
     try:
         if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", raw):
             # 날짜 없이 시각만 온 경우다. 붙일 날짜가 없으니 tzinfo를 달아도
-            # 의미가 없고, CST→KST는 고정 +1시간(양쪽 다 서머타임이 없다)이라
+            # 의미가 없고, CST→JST는 고정 +1시간(양쪽 다 서머타임이 없다)이라
             # 시간 산술이 정확하다. 그래서 naive strptime을 의도적으로 쓴다.
             fmt = "%H:%M:%S" if raw.count(":") == 2 else "%H:%M"
             converted = datetime.strptime(raw, fmt) + timedelta(hours=1)  # noqa: DTZ007
-            return f"{converted.strftime(fmt)} KST"
+            return f"{converted.strftime(fmt)} JST"
 
         converted = parse_news_datetime(published_at, published_date)
         if converted is None:
-            return f"{raw} KST"
+            return f"{raw} JST"
         fmt = (
             "%Y-%m-%d %H:%M:%S" if re.search(r":\d{2}:\d{2}", raw) else "%Y-%m-%d %H:%M"
         )
-        return f"{converted.strftime(fmt)} KST"
+        return f"{converted.strftime(fmt)} JST"
     except Exception:
-        return f"{raw} KST"
+        return f"{raw} JST"
 
 
-def compact_kst_time(formatted_time: str) -> str:
-    """날짜가 포함된 KST 문자열에서 기사 표시용 시간만 남긴다."""
-    match = re.search(r"(\d{1,2}:\d{2}(?::\d{2})?\s+KST)$", formatted_time)
-    return match.group(1) if match else formatted_time
+def compact_jst_time(formatted_time: str) -> str:
+    """날짜가 포함된 JST 문자열에서 기사 표시용 시간만 남긴다."""
+    # 전환 전에 큐·로그에 저장된 KST 표기도 UTC+9라 값 변환 없이 JST로
+    # 다시 표기할 수 있다. 기존 야간 큐를 비우지 않고 배포할 수 있게 받는다.
+    match = re.search(r"(\d{1,2}:\d{2}(?::\d{2})?\s+(?:JST|KST))$", formatted_time)
+    return match.group(1).replace("KST", "JST") if match else formatted_time
 
 
 def compact_sentiment_line(sentiment: float | None, impact: str = "") -> str:

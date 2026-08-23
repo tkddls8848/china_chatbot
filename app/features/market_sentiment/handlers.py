@@ -28,7 +28,7 @@ from core.config import (
     POLYMARKET_PANEL_ENABLED,
 )
 from core.menu_status import set_menu_button_text
-from core.workers import run_non_urgent
+from core.workers import burst_job, run_non_urgent
 from features.market_sentiment.chart import (
     market_label,
     render_anomaly_chart,
@@ -198,6 +198,7 @@ async def _cmd_market_anomaly(message, context, days: int) -> None:
     )
 
 
+@burst_job("시장 컨센서스 분석")
 async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send country/market news sentiment ranking and trend chart."""
     message = update.effective_message

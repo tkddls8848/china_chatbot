@@ -113,6 +113,7 @@ def test_menu_jobs_suppress_chat_status(monkeypatch):
     for callback_data in (
         "nav:research:run",
         "nav:market:7",
+        "nav:briefing",
         "nav:briefing:morning",
     ):
         update = SimpleNamespace(
@@ -336,3 +337,51 @@ def test_watchlist_add_button_opens_market_selector_directly():
     assert message.text.startswith("<b>종목추가</b>")
     assert "add_market:CN:SH" in callbacks
     assert context.user_data == {}
+
+
+def test_inline_briefing_button_runs_time_aware_briefing_directly(monkeypatch):
+    from briefing import service
+
+    seen = []
+
+    async def briefing(_update, context):
+        seen.append(context.args)
+
+    monkeypatch.setattr(service, "cmd_briefing", briefing)
+    message = SimpleNamespace()
+    update = SimpleNamespace(
+        effective_message=message,
+        callback_query=SimpleNamespace(message=message),
+    )
+    context = SimpleNamespace(
+        user_data={},
+        bot_data={"feature_registry": _registry()},
+        application=object(),
+    )
+
+    handled = asyncio.run(handle_menu_callback(update, context, "nav:briefing"))
+
+    assert handled is True
+    assert seen == [[]]
+
+
+def test_persistent_briefing_button_runs_time_aware_briefing_directly(monkeypatch):
+    from briefing import service
+
+    seen = []
+
+    async def briefing(_update, context):
+        seen.append(context.args)
+
+    monkeypatch.setattr(service, "cmd_briefing", briefing)
+    message = SimpleNamespace(text="📰 브리핑")
+    update = SimpleNamespace(effective_message=message, callback_query=None)
+    context = SimpleNamespace(
+        user_data={},
+        bot_data={"feature_registry": _registry()},
+        application=object(),
+    )
+
+    asyncio.run(handle_menu_text(update, context))
+
+    assert seen == [[]]

@@ -130,6 +130,7 @@ def restricted(handler: Handler, show_status: bool = True) -> Handler:
             handler.__name__ == "cmd_research"
             or callback_data == "nav:research:run"
             or callback_data.startswith("nav:market:")
+            or callback_data == "nav:briefing"
             or callback_data.startswith("nav:briefing:")
         )
         if show_status and not suppress_menu_status and message is not None:

@@ -6,7 +6,7 @@ import logging
 import os
 from datetime import timedelta
 
-from core.clock import now, today
+from core.clock import now
 from core.config import (
     NEWS_GLOBAL_LIMIT,
     NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS,
@@ -16,8 +16,7 @@ from core.config import (
     NEWS_PREFILTER_EXPLORATION_SLOTS,
     NEWS_PREFILTER_MAINTENANCE_CHUNK_SECONDS,
     NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES,
-    NEWS_PREFILTER_MAINTENANCE_RECHARGE_SLICE_SECONDS,
-    NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS,
+    NEWS_PREFILTER_LIGHTSAIL_VCPUS,
     NEWS_PREFILTER_MAX_EVENTS,
     NEWS_PREFILTER_MAX_LOAD_AVERAGE,
     NEWS_PREFILTER_MODE,
@@ -25,9 +24,10 @@ from core.config import (
     NEWS_PREFILTER_OBSERVATION_FILE,
     NEWS_PREFILTER_OBSERVATION_RETENTION_DAYS,
     NEWS_PREFILTER_SIMILARITY_THRESHOLD,
+    NEWS_PREFILTER_TARGET_CPU_UTILIZATION,
     NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS,
 )
-from core.workers import wait_for_urgent_idle
+from core.workers import is_burst_active, wait_for_urgent_idle
 from features.base import FeatureSpec
 from features.news_prefilter.service import NewsPrefilter
 
@@ -62,24 +62,15 @@ def _load_average_too_high() -> bool:
         return False
 
 
-def _is_recharge_day() -> bool:
-    """이틀에 하루는 페이스를 낮춰 버스트 크레딧이 순 증가하게 강제한다.
-
-    지출 페이스(15초)만 매일 쓰면 총사용률이 baseline 위에 계속 머물러
-    크레딧이 결국 마른다(실측 2026-08-23: 12%). 크레딧 잔량은 API로 못 읽어
-    (`GetInstanceMetricData`가 IAM에서 막혀 있다) 코드가 남은 크레딧을 보고
-    조절할 수 없으므로, 대신 날짜 홀짝으로 충전일을 강제한다. 비율은
-    `docs/server-ops.md`에 적어 둔 시작점일 뿐이라 실측을 보고 바꾼다.
-    """
-    return today().toordinal() % 2 == 0
-
-
-def _maintenance_slice_seconds() -> float:
-    return (
-        NEWS_PREFILTER_MAINTENANCE_RECHARGE_SLICE_SECONDS
-        if _is_recharge_day()
-        else NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS
+def _maintenance_slice_seconds(foreground_cpu_seconds: float) -> float:
+    """직전 주기의 필수 CPU를 뺀 뒤 9% 목표 안에서 쓸 수 있는 보정 CPU초."""
+    cycle_seconds = NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES * 60
+    target = (
+        cycle_seconds
+        * NEWS_PREFILTER_LIGHTSAIL_VCPUS
+        * NEWS_PREFILTER_TARGET_CPU_UTILIZATION
     )
+    return max(0.0, target - max(0.0, foreground_cpu_seconds))
 
 
 async def run_prefilter_maintenance(app) -> None:
@@ -87,13 +78,19 @@ async def run_prefilter_maintenance(app) -> None:
     service: NewsPrefilter | None = app.bot_data.get("news_prefilter")
     if service is None:
         return
-    service.account_foreground_cpu()
-    slice_limit = _maintenance_slice_seconds()
+    foreground_cpu = service.account_foreground_cpu()
+    if is_burst_active():
+        logger.info("[PREFILTER] 버스트 우선 작업 진행 중 · 보정 양보")
+        return
+    slice_limit = _maintenance_slice_seconds(foreground_cpu)
     slice_used = 0.0
     trials = 0
     labels = 0
     reason = ""
     while slice_used < slice_limit:
+        if is_burst_active():
+            reason = "burst"
+            break
         if not await wait_for_urgent_idle("뉴스 사전선별 보정", timeout=0):
             reason = "urgent"
             break
@@ -124,12 +121,12 @@ async def run_prefilter_maintenance(app) -> None:
     if slice_used or reason not in {"insufficient_labels", "load"}:
         status = service.cpu_status()
         logger.info(
-            "[PREFILTER] 보정 CPU %.1fs · trial %d · label %d · 남은 예산 %.2fh%s%s",
+            "[PREFILTER] 보정 CPU %.1fs · foreground %.1fs · trial %d · label %d · 남은 예산 %.2fh%s",
             slice_used,
+            foreground_cpu,
             trials,
             labels,
             float(status["remaining_seconds"]) / 3600,
-            " · 충전일" if _is_recharge_day() else "",
             f" · 중단={reason}" if reason else "",
         )
 

@@ -35,7 +35,7 @@ from typing import Any, Callable, Iterable
 
 import requests
 
-from core.clock import ensure_kst, now
+from core.clock import ensure_jst, now
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +154,8 @@ def _parse_end_date(value: Any) -> datetime | None:
         parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
-    # 만기 시각은 KST 기준 하루 경계와 비교하므로 앱 표준 타임존으로 맞춘다.
-    return ensure_kst(parsed)
+    # 만기 시각은 JST 기준 하루 경계와 비교하므로 앱 표준 타임존으로 맞춘다.
+    return ensure_jst(parsed)
 
 
 def _yes_leg(record: dict[str, Any]) -> tuple[int, float] | None:
@@ -250,7 +250,7 @@ def _extract_records(payload: Any) -> list[Any]:
 def _horizon_cutoff(max_horizon_days: int) -> str:
     """서버에 넘길 만기 상한. Gamma는 UTC ISO 문자열로 받는다.
 
-    `now()`는 KST aware라 그대로 포매팅하면 9시간을 UTC로 오기하게 된다.
+    `now()`는 JST aware라 그대로 포매팅하면 9시간을 UTC로 오기하게 된다.
     반드시 UTC로 변환한 뒤 찍는다.
     """
     cutoff = now() + timedelta(days=max(1, max_horizon_days))

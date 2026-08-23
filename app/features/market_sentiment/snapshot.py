@@ -1,4 +1,4 @@
-"""08:35 KST Polymarket 스냅숏 job.
+"""08:35 JST Polymarket 스냅숏 job.
 
 새 기능이 아니라 `market_sentiment`가 읽는 외부 소스 하나다. 그래서 실패가
 바깥으로 새면 안 된다 — 이 job은 **어떤 예외도 밖으로 내보내지 않는다.**
@@ -30,11 +30,12 @@ from core.config import (
     POLYMARKET_MIN_LIQUIDITY,
     POLYMARKET_MIN_VOLUME,
 )
+from core.workers import burst_job
 from features.market_sentiment.polymarket_rules import select_contracts
 
 logger = logging.getLogger(__name__)
 
-# APScheduler cron은 스케줄러 타임존을 따르므로 job 등록 시 KST를 명시한다.
+# APScheduler cron은 스케줄러 타임존을 따르므로 job 등록 시 JST를 명시한다.
 SNAPSHOT_HOUR = 8
 SNAPSHOT_MINUTE = 35
 # 08:35을 놓친 날을 위한 재시도 한계. 이보다 늦은 값은 하루 축에 얹지 않는다.
@@ -43,6 +44,7 @@ SNAPSHOT_RETRY_UNTIL_HOUR = 10
 SNAPSHOT_HOUR_SPEC = f"{SNAPSHOT_HOUR}-{SNAPSHOT_RETRY_UNTIL_HOUR}"
 
 
+@burst_job("Polymarket 컨센서스 수집")
 async def capture_polymarket_snapshot(app) -> None:
     """게이트를 통과한 계약의 Yes 확률을 하루치로 적는다."""
     client = app.bot_data.get("polymarket_client")

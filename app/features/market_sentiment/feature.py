@@ -2,7 +2,7 @@
 
 import asyncio
 
-from core.clock import KST
+from core.clock import JST
 from core.config import (
     MARKET_ANOMALY_COLLECTION_ENABLED,
     MARKET_ANOMALY_ENABLED,
@@ -84,8 +84,8 @@ def _install_polymarket_jobs(scheduler, app) -> None:
         hour=SNAPSHOT_HOUR_SPEC,
         minute=SNAPSHOT_MINUTE,
         # 스케줄러 기본 타임존은 호스트를 따라간다. 하루 변화를 재려면 두
-        # 스냅숏이 같은 시각이어야 하므로 여기서 KST로 고정한다.
-        timezone=KST,
+        # 스냅숏이 같은 시각이어야 하므로 여기서 JST로 고정한다.
+        timezone=JST,
         args=[app],
         id="polymarket_snapshot",
         max_instances=1,
@@ -102,7 +102,7 @@ def _install_market_anomaly_jobs(scheduler, app) -> None:
         capture_completed_overnight_windows,
         trigger="cron",
         minute=MARKET_ANOMALY_JOB_MINUTE,
-        timezone=KST,
+        timezone=JST,
         args=[app],
         id="market_anomaly_capture",
         max_instances=1,
@@ -123,7 +123,7 @@ FEATURE = FeatureSpec(
         CommandSpec("market", "국가별 뉴스 감성", cmd_market, usage="[일수]"),
     ),
     menus=(
-        MenuSpec("📊 국가별 감성", "nav:market", 0, "📊 감성", 0),
+        MenuSpec("📊 국가별 감성", "nav:market", 0, "📊 감성", 1),
     ),
     install_services=_install_services,
     install_jobs=_install_jobs,

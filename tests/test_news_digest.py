@@ -19,11 +19,11 @@ from state import SentNewsTracker
 from news.sources import GlobalArticle
 from news.utils import (
     chunk_message_items,
-    compact_kst_time,
+    compact_jst_time,
     compact_sentiment_line,
-    filter_articles_for_kst_day,
+    filter_articles_for_jst_day,
     filter_recent_articles,
-    format_china_time_as_kst,
+    format_china_time_as_jst,
     format_digest_article,
     truncate_at_sentence,
     truncate_text,
@@ -294,7 +294,7 @@ def test_long_model_response_is_capped_before_display():
     text = format_digest_article(
         "제" * 130,
         "본" * 450,
-        "09:15:00 KST",
+        "09:15:00 JST",
         "- 감성 : 긍정 +0.50 · 영향 높음",
         url="https://example.com/news?" + "a" * 470,
     )
@@ -316,17 +316,17 @@ def test_long_model_response_is_capped_before_display():
         assert len(message) <= NEWS_DIGEST_MESSAGE_MAX_CHARS, len(message)
 
 
-def test_china_article_timestamp_includes_date_and_time_in_kst():
+def test_china_article_timestamp_includes_date_and_time_in_jst():
     assert (
-        format_china_time_as_kst("23:30:00", "2026-07-18")
-        == "2026-07-19 00:30:00 KST"
+        format_china_time_as_jst("23:30:00", "2026-07-18")
+        == "2026-07-19 00:30:00 JST"
     )
 
 
 def test_rss_article_timestamp_respects_source_timezone():
     assert (
-        format_china_time_as_kst("Fri, 17 Jul 2026 14:30:00 GMT")
-        == "2026-07-17 23:30:00 KST"
+        format_china_time_as_jst("Fri, 17 Jul 2026 14:30:00 GMT")
+        == "2026-07-17 23:30:00 JST"
     )
 
 
@@ -344,47 +344,51 @@ def test_recent_article_filter_drops_stale_unknown_and_future_items():
     ) == [recent]
 
 
-def test_calendar_day_filter_uses_kst_date_and_sorts_newest_first():
+def test_calendar_day_filter_uses_jst_date_and_sorts_newest_first():
     early = GlobalArticle("early", "early", "", "Fri, 03 Jul 2026 15:30:00 GMT")
     late = GlobalArticle("late", "late", "", "Sat, 04 Jul 2026 10:00:00 GMT")
     previous = GlobalArticle("previous", "previous", "", "Fri, 03 Jul 2026 14:59:00 GMT")
 
-    assert filter_articles_for_kst_day(
+    assert filter_articles_for_jst_day(
         [early, previous, late],
         datetime(2026, 7, 4).date(),
     ) == [late, early]
 
 
-def test_article_display_keeps_only_kst_time():
-    assert compact_kst_time("2026-07-19 09:15:00 KST") == "09:15:00 KST"
-    assert compact_kst_time("2026-07-19 09:15 KST") == "09:15 KST"
+def test_article_display_keeps_only_jst_time():
+    assert compact_jst_time("2026-07-19 09:15:00 JST") == "09:15:00 JST"
+    assert compact_jst_time("2026-07-19 09:15 JST") == "09:15 JST"
+
+
+def test_article_display_migrates_legacy_kst_label_without_shifting_time():
+    assert compact_jst_time("2026-07-19 09:15:00 KST") == "09:15:00 JST"
 
 
 def test_digest_article_uses_text_file_layout():
     assert format_digest_article(
         "기사 제목",
         "기사 본문",
-        "09:15:00 KST",
+        "09:15:00 JST",
         "- 감성 : 긍정 +0.50 · 영향 높음",
     ) == (
-        "• 기사 제목 (09:15:00 KST)\n"
+        "• 기사 제목 (09:15:00 JST)\n"
         "- 기사 본문\n"
         "- 감성 : 긍정 +0.50 · 영향 높음"
     )
 
 
 def test_digest_article_caps_body_at_the_display_limit():
-    body = format_digest_article("제목", "본" * 400, "09:15:00 KST").split("\n")[1]
+    body = format_digest_article("제목", "본" * 400, "09:15:00 JST").split("\n")[1]
 
     assert len(body) == len("- ") + NEWS_DIGEST_ARTICLE_MAX_CHARS
     assert body.endswith("...")
 
 
 def test_digest_article_caps_title_at_the_display_limit():
-    title_line = format_digest_article("제" * 150, "본문", "09:15:00 KST").split("\n")[0]
+    title_line = format_digest_article("제" * 150, "본문", "09:15:00 JST").split("\n")[0]
 
     assert title_line == (
-        "• " + "제" * (NEWS_DIGEST_TITLE_MAX_CHARS - 3) + "... (09:15:00 KST)"
+        "• " + "제" * (NEWS_DIGEST_TITLE_MAX_CHARS - 3) + "... (09:15:00 JST)"
     )
 
 
@@ -394,7 +398,7 @@ def test_digest_article_truncates_before_escaping():
     순서를 뒤집으면 `&amp;`가 `&am`으로 끊겨 텔레그램이 메시지 전체를
     파싱 오류로 거부한다.
     """
-    body = format_digest_article("제목", "&" * 400, "09:15:00 KST").split("\n")[1]
+    body = format_digest_article("제목", "&" * 400, "09:15:00 JST").split("\n")[1]
 
     assert body.count("&amp;") == NEWS_DIGEST_ARTICLE_MAX_CHARS - 3
     assert body.endswith("...")
@@ -405,7 +409,7 @@ def test_digest_article_keeps_original_link_on_title():
     assert format_digest_article(
         "기사 제목",
         "기사 본문",
-        "2026-07-19 09:15 KST",
+        "2026-07-19 09:15 JST",
         url="https://example.com/news?a=1&b=2",
     ).startswith(
         '• <a href="https://example.com/news?a=1&amp;b=2">기사 제목</a> '
@@ -438,10 +442,10 @@ def test_body_within_the_limit_is_untouched():
 
 def test_digest_article_without_a_body_keeps_only_the_title_line():
     """야간 다이제스트는 제목만 옮긴다. 빈 본문 줄을 남기면 '- '만 보인다."""
-    text = format_digest_article("제목", "", "09:15 KST", compact_sentiment_line(0.4, "high"))
+    text = format_digest_article("제목", "", "09:15 JST", compact_sentiment_line(0.4, "high"))
 
     assert text.splitlines() == [
-        "• 제목 (09:15 KST)",
+        "• 제목 (09:15 JST)",
         "- 감성 : 긍정 +0.40 · 영향 높음",
     ]
 

@@ -1,11 +1,13 @@
 """브리핑·리서치 핸들러의 성공 및 외부 실패 경계 통합 테스트."""
 
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 
 from briefing import service as briefing_service
+from core.clock import JST
 from research import handlers as research_handlers
 
 
@@ -72,6 +74,93 @@ def test_briefing_news_api_failure_falls_back_to_empty_news(monkeypatch, caplog)
 
     assert result == []
     assert "news provider down" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "expected"),
+    [
+        (8, 59, "morning"),
+        (9, 0, "intraday"),
+        (16, 59, "intraday"),
+        (17, 0, "evening"),
+    ],
+)
+def test_briefing_kind_follows_jst_session_boundaries(hour, minute, expected):
+    moment = datetime(2026, 8, 24, hour, minute, tzinfo=JST)
+
+    assert briefing_service.select_briefing_kind(moment) == expected
+
+
+def test_intraday_briefing_combines_live_market_evidence(monkeypatch):
+    captured = {}
+
+    async def quant(_app, include_fund_flow):
+        assert include_fund_flow is True
+        return {"fund_flow": "northbound"}, "장중 정량 요약"
+
+    async def news(_app):
+        return [{"title": "반도체 강세", "source": "wire", "sentiment": 0.4}]
+
+    async def sentiment(_app, watchlist):
+        assert watchlist == {"005930": "삼성전자"}
+        return {"005930": {"count": 2, "avg_sentiment": 0.3}}, "감성 요약"
+
+    async def comment(_app, payload):
+        captured.update(payload)
+        return "남은 장에서 수급 지속 여부 확인"
+
+    monkeypatch.setattr(briefing_service, "_build_quant_section", quant)
+    monkeypatch.setattr(briefing_service, "_collect_briefing_news", news)
+    monkeypatch.setattr(briefing_service, "_build_sentiment_section", sentiment)
+    monkeypatch.setattr(briefing_service, "_write_llm_comment", comment)
+    bot = _Bot()
+    app = SimpleNamespace(
+        bot=bot,
+        bot_data={
+            "watchlist_manager": SimpleNamespace(
+                get_all=lambda: _watchlist_result()
+            ),
+            "market_view_manager": SimpleNamespace(get_sight=lambda: "반도체"),
+        },
+    )
+
+    asyncio.run(briefing_service.send_intraday_briefing(app, force=True))
+
+    text = bot.messages[0]["text"]
+    assert captured["kind"] == "intraday"
+    assert "장중 브리핑" in text
+    assert "장중 정량 요약" in text
+    assert "반도체 강세" in text
+    assert "감성 요약" in text
+
+
+async def _watchlist_result():
+    return {"005930": "삼성전자"}
+
+
+def test_briefing_without_argument_runs_automatically_selected_kind(monkeypatch):
+    calls = []
+
+    async def morning(_app, force=False):
+        calls.append(("morning", force))
+
+    async def intraday(_app, force=False):
+        calls.append(("intraday", force))
+
+    async def evening(_app, force=False):
+        calls.append(("evening", force))
+
+    monkeypatch.setattr(briefing_service, "select_briefing_kind", lambda: "intraday")
+    monkeypatch.setattr(briefing_service, "send_morning_briefing", morning)
+    monkeypatch.setattr(briefing_service, "send_intraday_briefing", intraday)
+    monkeypatch.setattr(briefing_service, "send_evening_briefing", evening)
+    message = _Message()
+    update = SimpleNamespace(effective_message=message, callback_query=None)
+    context = SimpleNamespace(args=[], application=object())
+
+    asyncio.run(briefing_service.cmd_briefing(update, context))
+
+    assert calls == [("intraday", True)]
 
 
 class _MarketViewManager:

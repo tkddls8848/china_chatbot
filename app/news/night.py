@@ -1,6 +1,6 @@
 """야간 수집과 아침 야간 다이제스트.
 
-KST 야간(기본 00~07시)에는 기사별 번역을 하지 않는다. 주기는 그대로 돌면서
+JST 야간(기본 00~07시)에는 기사별 번역을 하지 않는다. 주기는 그대로 돌면서
 원문만 큐에 담고, 야간이 끝나는 시각에 시장별로 한 번씩 LLM을 불러 그 시간의
 흐름을 한 번에 요약해 보낸다.
 
@@ -16,7 +16,7 @@ from datetime import datetime
 from telegram import Bot
 from telegram.ext import Application
 
-from core.clock import KST, now
+from core.clock import JST, now
 from core.config import (
     NEWS_DIGEST_MESSAGE_MAX_CHARS,
     NEWS_NIGHT_DIGEST_MAX_HEADLINES,
@@ -26,15 +26,15 @@ from core.config import (
     NEWS_SOURCE_MARKETS,
     TELEGRAM_CHAT_ID,
 )
-from core.workers import run_non_urgent
+from core.workers import burst_job, run_non_urgent
 from llm.night_digest import NightDigestAnalyzer, NightDigestError
 from news.collection import collect_source_candidates
 from news.registry import NewsSourceRegistry, SourceSpec
 from news.utils import (
     chunk_message_items,
-    compact_kst_time,
+    compact_jst_time,
     compact_sentiment_line,
-    format_china_time_as_kst,
+    format_china_time_as_jst,
     format_digest_article,
     parse_news_datetime,
     publication_time_naive,
@@ -59,14 +59,14 @@ _MARKET_ORDER = ("CN", "HK", "US", "KR")
 _DIGEST_HEADER_RESERVE = 200
 # 요약이 실패한 시장에 원문 제목만 남길 때의 건수.
 _FALLBACK_HEADLINE_LIMIT = 10
-_EPOCH = datetime(1970, 1, 1, tzinfo=KST)
+_EPOCH = datetime(1970, 1, 1, tzinfo=JST)
 # 07시 cron job과 주간 첫 주기의 회수 경로가 겹칠 수 있다. 둘 다 큐를 통째로
 # 읽고 보내므로, 막지 않으면 같은 다이제스트가 두 번 나간다.
 _DIGEST_LOCK = asyncio.Lock()
 
 
 def is_night_window(moment: datetime | None = None) -> bool:
-    """지금이 번역을 멈추는 야간 구간인가(KST).
+    """지금이 번역을 멈추는 야간 구간인가(JST).
 
     시작 > 종료면 자정을 넘는 구간이다(예: 22시~07시).
     """
@@ -201,13 +201,13 @@ def _window_label(opened_at: str, closed_at: datetime) -> str:
     except (TypeError, ValueError):
         opened = None
     start = opened.strftime("%H:%M") if opened else f"{NEWS_NIGHT_START_HOUR:02d}:00"
-    return f"{start}~{closed_at.strftime('%H:%M')} KST"
+    return f"{start}~{closed_at.strftime('%H:%M')} JST"
 
 
 def _headline_payload(items: list[dict]) -> list[dict]:
     payload = []
     for index, item in enumerate(items):
-        formatted = format_china_time_as_kst(
+        formatted = format_china_time_as_jst(
             item.get("published_at"),
             item.get("published_date") or None,
         )
@@ -216,21 +216,21 @@ def _headline_payload(items: list[dict]) -> list[dict]:
                 "index": index,
                 "title": str(item.get("title") or ""),
                 "source": str(item.get("label") or item.get("source") or ""),
-                "published_at": compact_kst_time(formatted),
+                "published_at": compact_jst_time(formatted),
             }
         )
     return payload
 
 
 def _highlight_text(item: dict, highlight: dict) -> str:
-    formatted = format_china_time_as_kst(
+    formatted = format_china_time_as_jst(
         item.get("published_at"),
         item.get("published_date") or None,
     )
     return format_digest_article(
         highlight["title"],
         "",
-        compact_kst_time(formatted),
+        compact_jst_time(formatted),
         compact_sentiment_line(highlight["sentiment"], highlight["impact"]),
         "",
         str(item.get("url") or ""),
@@ -250,7 +250,7 @@ def format_market_section(
         # 제목만이라도 남긴다.
         lines.append("<i>요약 생성 실패 — 원문 제목만 표시합니다.</i>")
         for item in items[:_FALLBACK_HEADLINE_LIMIT]:
-            formatted = format_china_time_as_kst(
+            formatted = format_china_time_as_jst(
                 item.get("published_at"),
                 item.get("published_date") or None,
             )
@@ -258,7 +258,7 @@ def format_market_section(
                 format_digest_article(
                     str(item.get("title") or ""),
                     "",
-                    compact_kst_time(formatted),
+                    compact_jst_time(formatted),
                     "",
                     "",
                     str(item.get("url") or ""),
@@ -362,6 +362,7 @@ async def send_night_digest(app: Application) -> None:
         await _send_night_digest(app)
 
 
+@burst_job("야간 뉴스 다이제스트")
 async def _send_night_digest(app: Application) -> None:
     queue: NightNewsQueue | None = app.bot_data.get("night_queue")
     analyzer: NightDigestAnalyzer | None = app.bot_data.get("night_digest_analyzer")

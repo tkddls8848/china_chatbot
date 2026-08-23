@@ -38,7 +38,7 @@ FEATURE = FeatureSpec(
         ),
     ),
     menus=(
-        MenuSpec("🔎 리서치", "nav:research", 1, "🔎 리서치", 1),
+        MenuSpec("🔎 리서치", "nav:research", 1, "🔎 리서치", 2),
     ),
     callbacks=(
         CallbackSpec(("research_",), handle_research_callback),

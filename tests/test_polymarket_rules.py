@@ -12,8 +12,8 @@ from features.market_sentiment.polymarket_rules import (
     select_contracts,
 )
 
-KST = timezone(timedelta(hours=9))
-NOW = datetime(2026, 8, 11, 8, 35, tzinfo=KST)
+JST = timezone(timedelta(hours=9))
+NOW = datetime(2026, 8, 11, 8, 35, tzinfo=JST)
 
 
 def _contract(**overrides) -> PolymarketContract:

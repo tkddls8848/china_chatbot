@@ -30,7 +30,7 @@ FEATURE = FeatureSpec(
         CommandSpec("list", "관심종목 목록", cmd_list),
     ),
     menus=(
-        MenuSpec("⭐ 관심종목", "nav:watch", 0, "⭐ 관심종목", 0),
+        MenuSpec("⭐ 관심종목", "nav:watch", 0, "⭐ 관심종목", 1),
     ),
     callbacks=(
         CallbackSpec(("add_", "remove:", "close"), handle_watchlist_callback),

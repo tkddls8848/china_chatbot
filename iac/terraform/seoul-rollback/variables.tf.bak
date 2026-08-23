@@ -1,17 +1,32 @@
+# ===========================================================================
+# 서울(ap-northeast-2) 시절 원본. 롤백 창이 열려 있는 동안만 두는 임시 사본이다.
+#
+# 2026-08-23에 운영 서버를 도쿄(ap-northeast-1)로 옮기면서 상위 디렉터리의
+# 같은 파일들을 도쿄 기준으로 고쳤다. 서울 인스턴스는 workspace "default"에
+# 정지된 채 롤백용으로 남아 있고, 그 workspace의 terraform.tfvars(gitignore됨)가
+# 여기 값들을 그대로 쓴다.
+#
+# 이 폴더는 terraform이 읽지 않는다(하위 디렉터리의 .tf는 로드되지 않고,
+# variables.tf.bak은 확장자부터 .tf가 아니다).
+#
+# **서울 인스턴스를 destroy 하는 날 이 폴더를 통째로 지운다.**
+# 그 뒤로는 git 이력이 유일한 보관처다(docs/server-ops.md의 이전 정리 목록).
+# ===========================================================================
+
 # ---------------------------------------------------------------------------
 # 위치와 사양
 # ---------------------------------------------------------------------------
 
 variable "aws_region" {
-  description = "Lightsail 리전. Polymarket의 한국 IP 지역 차단(451)을 피해 도쿄로 이전했다."
+  description = "Lightsail 리전. KST 스케줄과 한국·중국 소스 지연을 고려해 서울."
   type        = string
-  default     = "ap-northeast-1"
+  default     = "ap-northeast-2"
 }
 
 variable "availability_zone" {
   description = "인스턴스 AZ. aws_region 하위여야 한다."
   type        = string
-  default     = "ap-northeast-1a"
+  default     = "ap-northeast-2a"
 }
 
 variable "bundle_id" {
@@ -105,10 +120,9 @@ variable "manage_firewall" {
     false — Terraform이 방화벽을 건드리지 않고 콘솔에서 관리한다. 대신 인스턴스는
             Lightsail 기본 규칙(22/80/443 전체 개방)으로 뜨므로, 생성 직후
             **콘솔에서 80/443을 직접 닫아야 한다.** 이 앱은 어떤 웹 포트도 쓰지 않는다.
-            도쿄 운영 IAM은 OpenInstancePublicPorts를 허용하지 않으므로 기본값은 false다.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "allowed_ssh_cidrs" {
@@ -140,9 +154,9 @@ variable "swap_size" {
 }
 
 variable "timezone" {
-  description = "인스턴스 타임존. 앱의 '지금'은 core/clock.py가 JST로 고정하므로 하루 경계는 이 값과 무관하지만, 로그·journalctl 시각과 cron 백업 시각은 이 값을 따른다."
+  description = "인스턴스 타임존. 앱의 '지금'은 core/clock.py가 KST로 고정하므로 하루 경계는 이 값과 무관하지만, 로그·journalctl 시각과 cron 백업 시각은 이 값을 따른다."
   type        = string
-  default     = "Asia/Tokyo"
+  default     = "Asia/Seoul"
 }
 
 variable "backup_retention_days" {
@@ -164,7 +178,7 @@ variable "enable_auto_snapshot" {
 variable "auto_snapshot_time" {
   description = <<-EOT
     자동 스냅샷 시각. **UTC 기준이며 정시(HH:00)만 허용된다.**
-    기본 19:00 UTC = 04:00 JST — 03:00 JST의 tar 백업이 끝난 뒤에 찍힌다.
+    기본 19:00 UTC = 04:00 KST — 03:00 KST의 tar 백업이 끝난 뒤에 찍힌다.
   EOT
   type        = string
   default     = "19:00"

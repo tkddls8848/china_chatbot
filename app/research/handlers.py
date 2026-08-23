@@ -10,7 +10,7 @@ from telegram.ext import ContextTypes
 
 from core.config import RESEARCH_DISCOVERY_RESERVED_SLOTS, RESEARCH_MAX_CANDIDATES, TELEGRAM_MESSAGE_LIMIT
 from core.menu_status import set_menu_button_text
-from core.workers import run_non_urgent, wait_for_urgent_idle
+from core.workers import burst_job, run_non_urgent, wait_for_urgent_idle
 from news.utils import chunk_message_items
 from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
@@ -306,6 +306,7 @@ async def _handle_research_run(
     task.add_done_callback(_log_research_task_error)
 
 
+@burst_job("리서치")
 async def _run_research_job(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,

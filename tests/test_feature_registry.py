@@ -185,6 +185,19 @@ def test_generated_help_includes_command_usage_and_code_examples():
 
     assert "/market [일수]" in text
     assert "/research show|set|run|clear" in text
-    assert "/briefing morning|evening" in text
+    assert "/briefing [morning|intraday|evening]" in text
     assert "/score" not in text
     assert "KR:KOSPI:005930" in text
+
+
+def test_persistent_menu_matches_current_primary_workflows():
+    registry = build_feature_registry(EXPECTED_FEATURES)
+
+    rows = [[button.text for button in row] for row in persistent_menu(registry).keyboard]
+
+    assert rows == [
+        ["🏠 홈"],
+        ["⭐ 관심종목", "📊 감성"],
+        ["🔎 리서치", "📰 브리핑"],
+        ["⚙️ 관리"],
+    ]

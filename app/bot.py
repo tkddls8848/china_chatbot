@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram import Update
 from telegram.ext import Application, ContextTypes
 
 from core.config import (
@@ -14,6 +15,7 @@ from core.config import (
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CONNECT_TIMEOUT_SECONDS,
     TELEGRAM_CONCURRENT_UPDATES,
+    TELEGRAM_POLL_TIMEOUT_SECONDS,
     TELEGRAM_POOL_TIMEOUT_SECONDS,
     TELEGRAM_READ_TIMEOUT_SECONDS,
     TELEGRAM_WRITE_TIMEOUT_SECONDS,
@@ -23,7 +25,20 @@ from handlers.commands import configure_telegram_menu
 from webadmin.server import start_web_admin, stop_web_admin
 
 logger = logging.getLogger(__name__)
-_SINGLE_INSTANCE_LOCK = None
+
+# 등록된 CommandHandler·MessageHandler가 읽는 모든 effective_message 유형과
+# CallbackQueryHandler가 읽는 콜백만 받는다. 결제·투표·멤버십 같은 미사용
+# 업데이트는 Telegram 서버에서 걸러 update queue와 JSON 파싱 비용을 만들지 않는다.
+_ALLOWED_UPDATES = (
+    Update.MESSAGE,
+    Update.EDITED_MESSAGE,
+    Update.CHANNEL_POST,
+    Update.EDITED_CHANNEL_POST,
+    Update.BUSINESS_MESSAGE,
+    Update.EDITED_BUSINESS_MESSAGE,
+    Update.CALLBACK_QUERY,
+)
+_RUNTIME_STOPPED_KEY = "_runtime_stopped"
 
 
 def _acquire_single_instance_lock(lock_file: Path):
@@ -59,6 +74,7 @@ async def _handle_update_error(_update: object, context: ContextTypes.DEFAULT_TY
 
 
 async def _start_application(app: Application) -> None:
+    app.bot_data.pop(_RUNTIME_STOPPED_KEY, None)
     await configure_telegram_menu(app)
     scheduler = app.bot_data["scheduler"]
     scheduler.start()
@@ -70,67 +86,77 @@ async def _start_application(app: Application) -> None:
 
 
 async def _stop_scheduler(app: Application) -> None:
-    await stop_web_admin(app)
-    scheduler = app.bot_data.get("scheduler")
-    if scheduler is None or not scheduler.running:
+    if app.bot_data.get(_RUNTIME_STOPPED_KEY):
         return
 
-    scheduler.pause()
-    scheduler.shutdown(wait=False)
-    # AsyncIOScheduler.shutdown() schedules cleanup and task cancellation on the
-    # event loop. Drain those callbacks before Python starts tearing imports down.
-    for _ in range(3):
-        await asyncio.sleep(0)
-    logger.info("작업 스케줄러를 종료했습니다.")
+    scheduler = app.bot_data.get("scheduler")
+    scheduler_was_running = scheduler is not None and scheduler.running
+    if scheduler_was_running:
+        # 웹 서버 종료가 최대 5초 걸릴 수 있으므로 새 예약 작업부터 막는다.
+        scheduler.pause()
+        scheduler.shutdown(wait=False)
+
+    await stop_web_admin(app)
+
+    if scheduler_was_running:
+        # AsyncIOScheduler.shutdown() schedules cleanup and task cancellation on the
+        # event loop. Drain those callbacks before Python starts tearing imports down.
+        for _ in range(3):
+            await asyncio.sleep(0)
+        logger.info("작업 스케줄러를 종료했습니다.")
+    app.bot_data[_RUNTIME_STOPPED_KEY] = True
 
 
 def main() -> None:
-    global _SINGLE_INSTANCE_LOCK
-    _SINGLE_INSTANCE_LOCK = _acquire_single_instance_lock(RUNTIME_LOCK_FILE)
-    if _SINGLE_INSTANCE_LOCK is None:
+    single_instance_lock = _acquire_single_instance_lock(RUNTIME_LOCK_FILE)
+    if single_instance_lock is None:
         logger.error("이미 실행 중인 봇 인스턴스가 있어 시작하지 않습니다.")
         return
 
-    feature_registry = build_feature_registry(FEATURES_ENABLED)
-    app = (
-        Application.builder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .connect_timeout(TELEGRAM_CONNECT_TIMEOUT_SECONDS)
-        .read_timeout(TELEGRAM_READ_TIMEOUT_SECONDS)
-        .write_timeout(TELEGRAM_WRITE_TIMEOUT_SECONDS)
-        .pool_timeout(TELEGRAM_POOL_TIMEOUT_SECONDS)
-        .concurrent_updates(TELEGRAM_CONCURRENT_UPDATES)
-        .post_init(_start_application)
-        .post_stop(_stop_scheduler)
-        .post_shutdown(_stop_scheduler)
-        .build()
-    )
+    try:
+        feature_registry = build_feature_registry(FEATURES_ENABLED)
+        app = (
+            Application.builder()
+            .token(TELEGRAM_BOT_TOKEN)
+            .connect_timeout(TELEGRAM_CONNECT_TIMEOUT_SECONDS)
+            .read_timeout(TELEGRAM_READ_TIMEOUT_SECONDS)
+            .write_timeout(TELEGRAM_WRITE_TIMEOUT_SECONDS)
+            .pool_timeout(TELEGRAM_POOL_TIMEOUT_SECONDS)
+            .concurrent_updates(TELEGRAM_CONCURRENT_UPDATES)
+            .post_init(_start_application)
+            .post_stop(_stop_scheduler)
+            .post_shutdown(_stop_scheduler)
+            .build()
+        )
 
-    app.bot_data["feature_registry"] = feature_registry
-    feature_registry.install_services(app)
-    app.add_error_handler(_handle_update_error)
+        app.bot_data["feature_registry"] = feature_registry
+        feature_registry.install_services(app)
+        app.add_error_handler(_handle_update_error)
 
-    feature_registry.install_telegram_handlers(app)
+        feature_registry.install_telegram_handlers(app)
 
-    scheduler = AsyncIOScheduler()
-    app.bot_data["scheduler"] = scheduler
-    feature_registry.install_jobs(scheduler, app)
+        scheduler = AsyncIOScheduler()
+        app.bot_data["scheduler"] = scheduler
+        feature_registry.install_jobs(scheduler, app)
 
-    logger.info(
-        "봇 시작됨. 활성 기능: %s",
-        ", ".join(sorted(feature_registry.enabled_keys)),
-    )
-    logger.info(
-        "명령어: %s",
-        " ".join(f"/{command.command}" for command in feature_registry.telegram_commands()),
-    )
-    app.run_polling()
+        logger.info(
+            "봇 시작됨. 활성 기능: %s",
+            ", ".join(sorted(feature_registry.enabled_keys)),
+        )
+        logger.info(
+            "명령어: %s",
+            " ".join(
+                f"/{command.command}"
+                for command in feature_registry.telegram_commands()
+            ),
+        )
+        app.run_polling(
+            timeout=TELEGRAM_POLL_TIMEOUT_SECONDS,
+            allowed_updates=_ALLOWED_UPDATES,
+        )
+    finally:
+        single_instance_lock.close()
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        if _SINGLE_INSTANCE_LOCK is not None:
-            _SINGLE_INSTANCE_LOCK.close()
-            _SINGLE_INSTANCE_LOCK = None
+    main()

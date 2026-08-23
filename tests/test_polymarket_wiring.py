@@ -1,14 +1,14 @@
 """기능 조립과 관리 명령 검증(4·6·7단계).
 
 수집(`POLYMARKET_ENABLED`)과 표시(`POLYMARKET_PANEL_ENABLED`)가 따로 움직이는지,
-스냅숏 job이 08:35 KST로 고정되는지, `/system polymarket`이 승격 게이트를 그대로
+스냅숏 job이 08:35 JST로 고정되는지, `/system polymarket`이 승격 게이트를 그대로
 보여 주는지 본다.
 """
 
 import asyncio
 from types import SimpleNamespace
 
-from core.clock import KST
+from core.clock import JST
 from features.market_sentiment import feature as market_feature
 from features.system_admin import handlers as admin
 
@@ -75,7 +75,7 @@ def test_empty_proxy_url_leaves_the_client_calling_directly(monkeypatch):
     assert app.bot_data["polymarket_client"]._session.proxies == {}
 
 
-def test_snapshot_job_is_pinned_to_0835_kst(monkeypatch):
+def test_snapshot_job_is_pinned_to_0835_jst(monkeypatch):
     """하루 변화를 재려면 두 스냅숏이 같은 시각이어야 한다.
 
     다만 08:35 한 번만 노리면 그 순간의 재시작 하나로 하루가 빈다. 10:35까지
@@ -88,7 +88,7 @@ def test_snapshot_job_is_pinned_to_0835_kst(monkeypatch):
     assert job["id"] == "polymarket_snapshot"
     assert job["trigger"] == "cron"
     assert (job["hour"], job["minute"]) == ("8-10", 35)
-    assert job["timezone"] is KST
+    assert job["timezone"] is JST
     # 기동 즉시 한 번 찍으면 08:35이 아닌 값이 그날 스냅숏이 된다.
     assert "next_run_time" not in job
 
@@ -123,7 +123,7 @@ def test_retry_window_skips_the_fetch_once_the_day_is_captured(monkeypatch):
 def test_cron_without_an_explicit_timezone_would_follow_the_host():
     """서버를 다른 타임존에 올리면 스냅숏 시각이 통째로 밀린다.
 
-    `timezone=KST`를 빼면 APScheduler가 호스트 타임존을 쓴다. 그러면 하루 변화가
+    `timezone=JST`를 빼면 APScheduler가 호스트 타임존을 쓴다. 그러면 하루 변화가
     날마다 다른 시각의 가격 차이가 되어 같은 축에 놓을 수 없다.
     """
     from datetime import datetime, timezone
@@ -131,11 +131,11 @@ def test_cron_without_an_explicit_timezone_would_follow_the_host():
     from apscheduler.triggers.cron import CronTrigger
 
     after = datetime(2026, 8, 11, 0, 0, tzinfo=timezone.utc)
-    pinned = CronTrigger(hour=8, minute=35, timezone=KST)
+    pinned = CronTrigger(hour=8, minute=35, timezone=JST)
 
     fire = pinned.get_next_fire_time(None, after).astimezone(timezone.utc)
 
-    # 08:35 KST = 전날 23:35 UTC.
+    # 08:35 JST = 전날 23:35 UTC.
     assert (fire.hour, fire.minute) == (23, 35)
 
 

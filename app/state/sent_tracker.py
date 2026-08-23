@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from core.clock import ensure_kst, now
+from core.clock import ensure_jst, now
 from core.storage import write_json_atomic
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class SentNewsTracker:
         expired = []
         for article_id, timestamp in self._id_ts.items():
             try:
-                is_expired = ensure_kst(datetime.fromisoformat(timestamp)) < cutoff
+                is_expired = ensure_jst(datetime.fromisoformat(timestamp)) < cutoff
             except (TypeError, ValueError):
                 is_expired = True
             if is_expired:

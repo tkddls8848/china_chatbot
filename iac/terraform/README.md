@@ -8,7 +8,7 @@ Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정�
 |                                                       | 담당                                       |
 | ----------------------------------------------------- | ---------------------------------------- |
 | Lightsail 인스턴스·고정 IP·SSH 키페어·방화벽(22만)                 | **Terraform**                            |
-| 스왑 2G, 타임존 KST, apt 패키지, git clone, venv, pip install | **user_data 부트스트랩**                      |
+| 스왑 2G, 타임존 JST, apt 패키지, git clone, venv, pip install | **user_data 부트스트랩**                      |
 | systemd 유닛 설치, 백업 cron, 자동 스냅샷                        | **user_data 부트스트랩**                      |
 | `.env` 작성(토큰·자격증명)                                    | 사람 (SSH)                                 |
 | `data/` 이관, 로컬 봇 정지, 서비스 기동                           | 사람 (`terraform output cutover_commands`) |
@@ -29,11 +29,12 @@ Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정�
    cd iac\terraform   # file:// 경로는 이 디렉터리 기준이다. 저장소 루트에서는 파일을 못 찾는다
    aws iam create-policy --policy-name StockChatbotLightsail --policy-document file://iam-policy.json
    aws iam attach-user-policy --user-name <내 IAM 사용자> --policy-arn <위 출력의 Arn>
-   aws lightsail get-bundles --region ap-northeast-2 --query 'bundles[?bundleId==`micro_3_0`]'   # 확인
+   aws lightsail get-bundles --region ap-northeast-1 --query 'bundles[?bundleId==`micro_3_0`]'   # 확인
   ```
 
-   `iam-policy.json`은 이 디렉터리에 있고 `ap-northeast-2`로 리전을 제한한다.
-   다른 리전을 쓰면 `aws:RequestedRegion` 값도 함께 바꾼다.
+   `iam-policy.json`은 이 디렉터리에 있고, 서울→도쿄 이전 기간인 현재는
+   `ap-northeast-1`·`ap-northeast-2` 두 리전을 허용한다. 서울을 정리한 뒤에는
+   `aws:RequestedRegion`을 `ap-northeast-1` 하나로 다시 좁힌다.
 
    **이미 붙어 있는 정책을 고칠 때는 `create-policy`가 아니라 새 버전을 만든다**
    (관리형 정책은 버전이 있고 5개가 차면 오래된 버전부터 지워야 한다):
@@ -74,15 +75,21 @@ git rev-list --count origin/main..HEAD   # 0이어야 한다
 
 ## 실행
 
+현재 운영 서버는 `tokyo` workspace에 있고 `tokyo.tfvars`(gitignore됨)를 사용한다.
+
 ```powershell
 cd iac\terraform
-Copy-Item terraform.tfvars.example terraform.tfvars
-# terraform.tfvars 편집 — 최소한 ssh_public_key_path, allowed_ssh_cidrs 확인
-
 terraform init
-terraform plan
-terraform apply
+terraform workspace select tokyo
+terraform plan -var-file=tokyo.tfvars
+terraform apply -var-file=tokyo.tfvars
 ```
+
+**`tokyo` workspace에서는 `-var-file=tokyo.tfvars`를 절대 빠뜨리지 않는다.**
+`terraform.tfvars`는 옵션을 주지 않아도 항상 자동 로드되며, 현재 로컬 파일에는 서울
+롤백 값이 남아 있다. var-file을 생략하면 도쿄 리소스를 서울 값으로 파괴·재생성하는
+plan이 나올 수 있다. 새 환경을 처음 만들 때만 `terraform.tfvars.example`을
+`terraform.tfvars`로 복사하고 SSH 키 경로와 접근 CIDR을 확인한다.
 
 apply는 1~~2분이면 끝나지만 **부트스트랩은 그 뒤로 5~~10분 더 걸린다**(pip이 pandas를
 빌드한다). 진행 상황:
@@ -162,8 +169,8 @@ grep WEB_ADMIN_PASSWORD ~/stock_chatbot/.env
 **`bundle_id` / `blueprint_id`는 리전마다 다를 수 있다.** 값이 거부되면 확인한다:
 
 ```powershell
-aws lightsail get-bundles --region ap-northeast-2
-aws lightsail get-blueprints --region ap-northeast-2
+aws lightsail get-bundles --region ap-northeast-1
+aws lightsail get-blueprints --region ap-northeast-1
 ```
 
 **부트스트랩은 `pytest`를 설치하지 않는다.** `requirements.txt`만 설치하는데
@@ -194,6 +201,6 @@ sudo systemctl restart stock-chatbot
 
 ```powershell
 # 인프라 삭제 — data/는 함께 사라진다. 먼저 스냅샷을 찍는다.
-terraform destroy
+terraform destroy -var-file=tokyo.tfvars
 ```
 

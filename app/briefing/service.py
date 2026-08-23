@@ -1,17 +1,24 @@
-"""모닝/마감 브리핑 생성·전송.
+"""요청 시각에 맞는 장전/장중/장후 브리핑 생성·전송.
 
-스케줄러 cron이 호출하며, /briefing 명령으로 수동 실행(휴장일 무시)도
-가능하다. LLM 코멘트 생성이 실패하면 데이터 전용 브리핑으로 대체한다.
+장전·장후는 스케줄러 cron도 호출하며, /briefing 명령과 메뉴는 현재 JST
+세션을 자동 판정해 수동 실행(휴장일 무시)한다. LLM 코멘트 생성이 실패하면
+데이터 전용 브리핑으로 대체한다.
 """
 
 import html
 import logging
+from datetime import datetime
+
 from core.clock import now as clock_now
 
 from telegram import Update
 from telegram.ext import Application, ContextTypes
 
 from core.config import (
+    BRIEFING_MARKET_CLOSE_HOUR,
+    BRIEFING_MARKET_CLOSE_MINUTE,
+    BRIEFING_MARKET_OPEN_HOUR,
+    BRIEFING_MARKET_OPEN_MINUTE,
     BRIEFING_NEWS_MAX_ITEMS,
     TELEGRAM_CHAT_ID,
     TELEGRAM_MESSAGE_LIMIT,
@@ -26,6 +33,19 @@ from stocks.quotes import format_quant_summary
 logger = logging.getLogger(__name__)
 
 _WEEKDAYS_KO = ["월", "화", "수", "목", "금", "토", "일"]
+
+
+def select_briefing_kind(moment: datetime | None = None) -> str:
+    """JST 요청 시각을 아시아 시장의 장전·장중·장후로 분류한다."""
+    current = moment or clock_now()
+    minute_of_day = current.hour * 60 + current.minute
+    open_minute = BRIEFING_MARKET_OPEN_HOUR * 60 + BRIEFING_MARKET_OPEN_MINUTE
+    close_minute = BRIEFING_MARKET_CLOSE_HOUR * 60 + BRIEFING_MARKET_CLOSE_MINUTE
+    if minute_of_day < open_minute:
+        return "morning"
+    if minute_of_day < close_minute:
+        return "intraday"
+    return "evening"
 
 
 def _today_header() -> str:
@@ -125,6 +145,40 @@ def _news_headlines_payload(news_items: list[dict]) -> list[dict]:
     ]
 
 
+async def _build_sentiment_section(
+    app: Application,
+    watchlist: dict[str, str],
+) -> tuple[dict, str]:
+    news_log = app.bot_data.get("news_log")
+    if news_log is None or not watchlist:
+        return {}, ""
+
+    entries = await news_log.snapshot(since_hours=24)
+    sentiment_stats = aggregate_sentiment_by_code(entries, watchlist)
+    if not sentiment_stats:
+        return {}, ""
+
+    lines = ["<b>관심종목 뉴스 감성(24시간)</b>"]
+    for code, stats in sentiment_stats.items():
+        name = html.escape(watchlist.get(code, code))
+        avg = stats.get("avg_sentiment")
+        marker = _sentiment_marker(avg)
+        avg_part = f"{avg:+.2f}" if isinstance(avg, (int, float)) else "-"
+        lines.append(f"{marker} {name} ({code}): {stats['count']}건, 평균 {avg_part}")
+    return sentiment_stats, "\n".join(lines)
+
+
+def _sentiment_payload(sentiment_stats: dict) -> dict:
+    return {
+        code: {
+            "count": stats.get("count"),
+            "avg_sentiment": stats.get("avg_sentiment"),
+            "titles": stats.get("titles", []),
+        }
+        for code, stats in sentiment_stats.items()
+    }
+
+
 async def send_morning_briefing(app: Application, force: bool = False) -> None:
     if not force and await _is_holiday(app):
         logger.info("[BRIEFING] 휴장일이라 모닝 브리핑을 건너뜁니다.")
@@ -158,6 +212,45 @@ async def send_morning_briefing(app: Application, force: bool = False) -> None:
     await _deliver(app, sections, "모닝 브리핑")
 
 
+async def send_intraday_briefing(app: Application, force: bool = False) -> None:
+    if not force and await _is_holiday(app):
+        logger.info("[BRIEFING] 휴장일이라 장중 브리핑을 건너뜁니다.")
+        return
+
+    wm = app.bot_data["watchlist_manager"]
+    watchlist = await wm.get_all()
+    quant_context, quant_text = await _build_quant_section(app, include_fund_flow=True)
+    news_items = await _collect_briefing_news(app)
+    sentiment_stats, sentiment_section = await _build_sentiment_section(app, watchlist)
+    market_view = app.bot_data["market_view_manager"].get_sight() or ""
+
+    comment = await _write_llm_comment(
+        app,
+        {
+            "kind": "intraday",
+            "market_view": market_view,
+            "quant_context": quant_context,
+            "news_headlines": _news_headlines_payload(news_items),
+            "sentiment_stats": _sentiment_payload(sentiment_stats),
+        },
+    )
+
+    sections = [f"<b>📈 장중 브리핑</b> {_today_header()}"]
+    if quant_text:
+        sections.append(quant_text)
+    news_section = _format_news_section(news_items, "장중 주요 뉴스")
+    if news_section:
+        sections.append(news_section)
+    if sentiment_section:
+        sections.append(sentiment_section)
+    if comment:
+        sections.append(f"<b>장중 관찰 포인트</b>\n{html.escape(comment)}")
+    if len(sections) == 1:
+        sections.append("표시할 데이터가 없습니다.")
+
+    await _deliver(app, sections, "장중 브리핑")
+
+
 async def send_evening_briefing(app: Application, force: bool = False) -> None:
     if not force and await _is_holiday(app):
         logger.info("[BRIEFING] 휴장일이라 마감 브리핑을 건너뜁니다.")
@@ -168,21 +261,7 @@ async def send_evening_briefing(app: Application, force: bool = False) -> None:
     quant_context, quant_text = await _build_quant_section(app, include_fund_flow=True)
     market_view = app.bot_data["market_view_manager"].get_sight() or ""
 
-    sentiment_section = ""
-    sentiment_stats: dict = {}
-    news_log = app.bot_data.get("news_log")
-    if news_log is not None and watchlist:
-        entries = await news_log.snapshot(since_hours=24)
-        sentiment_stats = aggregate_sentiment_by_code(entries, watchlist)
-        if sentiment_stats:
-            lines = ["<b>관심종목 뉴스 감성(24시간)</b>"]
-            for code, stats in sentiment_stats.items():
-                name = html.escape(watchlist.get(code, code))
-                avg = stats.get("avg_sentiment")
-                marker = _sentiment_marker(avg)
-                avg_part = f"{avg:+.2f}" if isinstance(avg, (int, float)) else "-"
-                lines.append(f"{marker} {name} ({code}): {stats['count']}건, 평균 {avg_part}")
-            sentiment_section = "\n".join(lines)
+    sentiment_stats, sentiment_section = await _build_sentiment_section(app, watchlist)
 
     comment = await _write_llm_comment(
         app,
@@ -191,14 +270,7 @@ async def send_evening_briefing(app: Application, force: bool = False) -> None:
             "market_view": market_view,
             "quant_context": quant_context,
             "news_headlines": [],
-            "sentiment_stats": {
-                code: {
-                    "count": stats.get("count"),
-                    "avg_sentiment": stats.get("avg_sentiment"),
-                    "titles": stats.get("titles", []),
-                }
-                for code, stats in sentiment_stats.items()
-            },
+            "sentiment_stats": _sentiment_payload(sentiment_stats),
         },
     )
 
@@ -216,29 +288,32 @@ async def send_evening_briefing(app: Application, force: bool = False) -> None:
 
 
 async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/briefing morning|evening — 수동 실행(휴장일 무시)."""
+    """/briefing [morning|intraday|evening] — 기본은 요청 시각으로 자동 선택."""
     message = update.effective_message
     if message is None:
         return
     args = context.args or []
-    command = args[0].lower() if args else ""
+    command = args[0].lower() if args else select_briefing_kind()
     app = context.application
     actions = {
         "morning": ("모닝", send_morning_briefing),
+        "intraday": ("장중", send_intraday_briefing),
         "evening": ("마감", send_evening_briefing),
     }
     selected = actions.get(command)
     if selected is None:
         await message.reply_text(
             "사용법:\n"
+            "/briefing — 요청 시각에 맞춰 장전·장중·장후 자동 실행\n"
             "/briefing morning — 모닝 브리핑 즉시 실행\n"
+            "/briefing intraday — 장중 브리핑 즉시 실행\n"
             "/briefing evening — 마감 브리핑 즉시 실행"
         )
         return
 
     query = getattr(update, "callback_query", None)
     callback_data = str(getattr(query, "data", ""))
-    is_menu = callback_data == f"nav:briefing:{command}"
+    is_menu = callback_data in {"nav:briefing", f"nav:briefing:{command}"}
     label, action = selected
     if is_menu:
         await set_menu_button_text(message, callback_data, "◐ 생성 중")
@@ -246,4 +321,5 @@ async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await action(app, force=True)
     finally:
         if is_menu:
-            await set_menu_button_text(message, callback_data, label)
+            restored_label = "📰 브리핑" if callback_data == "nav:briefing" else label
+            await set_menu_button_text(message, callback_data, restored_label)

@@ -74,11 +74,11 @@ FEATURE = FeatureSpec(
             "briefing",
             "브리핑 생성",
             cmd_briefing,
-            usage="morning|evening",
+            usage="[morning|intraday|evening]",
         ),
     ),
     menus=(
-        MenuSpec("📰 브리핑", "nav:briefing", 1, "📰 브리핑", 1),
+        MenuSpec("📰 브리핑", "nav:briefing", 1, "📰 브리핑", 2),
     ),
     install_services=_install_services,
     install_jobs=_install_jobs,

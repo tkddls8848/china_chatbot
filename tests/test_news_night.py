@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from core.clock import KST
+from core.clock import JST
 from llm.night_digest import NightDigestAnalyzer, NightDigestError
 from news.night import (
     collect_night_source,
@@ -151,11 +151,11 @@ def _payload(analysis="야간 흐름 요약이다.", indexes=(0,)):
 # ── 야간 구간 판정 ────────────────────────────────────
 
 def test_night_window_covers_the_configured_hours():
-    assert is_night_window(datetime(2026, 8, 18, 3, 0, tzinfo=KST))
-    assert is_night_window(datetime(2026, 8, 18, 0, 0, tzinfo=KST))
+    assert is_night_window(datetime(2026, 8, 18, 3, 0, tzinfo=JST))
+    assert is_night_window(datetime(2026, 8, 18, 0, 0, tzinfo=JST))
     # 종료 시각은 이미 주간이다. 그 주기가 야간 큐를 비운다.
-    assert not is_night_window(datetime(2026, 8, 18, 7, 0, tzinfo=KST))
-    assert not is_night_window(datetime(2026, 8, 18, 14, 0, tzinfo=KST))
+    assert not is_night_window(datetime(2026, 8, 18, 7, 0, tzinfo=JST))
+    assert not is_night_window(datetime(2026, 8, 18, 14, 0, tzinfo=JST))
 
 
 # ── 큐 ────────────────────────────────────────────────
@@ -214,7 +214,7 @@ def test_queue_overflow_does_not_leave_evicted_article_pending(tmp_path):
             article_id=f"overflow-{index}",
             title=f"Headline {index}",
             content="본문",
-            published_at=datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+            published_at=datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
         )
 
     first = SourceSpec(
@@ -259,7 +259,7 @@ def test_night_collection_reserves_and_queues_without_translating(tmp_path):
             article_id=f"a-{index}",
             title=f"Fed holds rates {index}",
             content="본문",
-            published_at=datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+            published_at=datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
         )
         for index in range(3)
     ]
@@ -292,7 +292,7 @@ def test_night_collection_releases_articles_the_queue_did_not_take(tmp_path):
         article_id="a-0",
         title="Fed holds rates",
         content="본문",
-        published_at=datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+        published_at=datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
     )
     spec = SourceSpec(key="gnews_us", label="구글뉴스", fetch=lambda: [article], market="US")
 
@@ -317,7 +317,7 @@ def test_night_collection_releases_articles_the_queue_did_not_take(tmp_path):
 def test_analyzer_returns_analysis_and_highlights(tmp_path):
     analyzer = _analyzer(tmp_path, _payload())
 
-    result = analyzer.analyze("US", "00:00~07:00 KST", [{"index": 0, "title": "t"}])
+    result = analyzer.analyze("US", "00:00~07:00 JST", [{"index": 0, "title": "t"}])
 
     assert result["analysis"] == "야간 흐름 요약이다."
     assert result["highlights"][0]["title"] == "한국어 제목 0"

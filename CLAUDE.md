@@ -46,7 +46,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - 뉴스 주기마다 `NEWS_GLOBAL_SOURCES`와 RSS 소스를 모두 실행한다. 주기는 60분이다.
   짧게 돌리면 번역 슬롯이 늘 최신순 상위로 채워져 같은 사건을 하루에 몇 번씩
   번역한다 — 텀을 늘려 한 주기가 보는 후보 폭을 키우고 그 안에서 고른다.
-- **KST 00~07시에는 기사별 번역을 하지 않는다.** 그 시간의 주기는 원문만
+- **JST 00~07시에는 기사별 번역을 하지 않는다.** 그 시간의 주기는 원문만
   `night_queue.json`에 모으고(`collect_night_articles`), 07시에 시장별로 한 번씩만
   LLM을 불러 묶음 요약을 보낸다(`send_night_digest`). 자는 7시간을 기사별로
   번역하면 소스 6곳 × 시간당 4건 = 168 호출인데 아침에 읽는 내용은 그만큼 늘지
@@ -153,34 +153,16 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - 환경 변수는 `app/core/config.py`에서만 읽고 `.env.example`에 현재 키를 기록한다.
   운영자가 조정하지 않는 설정은 같은 모듈의 리터럴 상수로 둔다.
 - **배경 CPU 작업(보정)은 예산 안에서만 돈다. 매 주기 필수인 foreground
-  작업은 예산으로 재지 않는다.** 사전선별의 매 주기 후보 점수화(foreground)는
-  이 기능을 쓰는 한 피할 수 없는 비용이라 텔레그램·뉴스 긴급 경로와
-  마찬가지로 무제한으로 둔다. 예산(`NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS`)은
-  보정(calibration)만 재는 하루 총량이고, `foreground_cpu_seconds`는 관측만
-  하지 이 값을 깎지 않는다 — 둘을 한 풀에서 같이 깎던 예전 구조에서는
-  foreground만으로 하루치를 다 써 보정이 한 번도 못 도는 굶주림이 있었다
-  (실측: trial 0 · 남은 예산 0.00h로 매번 중단). 순간 부하(버스트)는 이
-  예산이 아니라 보정 조각의 실행 주기·회당 CPU·조각 단위
-  (`NEWS_PREFILTER_MAINTENANCE_*`)가 낮게 누른다 — 1분마다 최대 15초 페이스면
-  보정 자체의 하루 이론상 최대치가 1,440회 × 15초 = 6.0h라, 예산(6.0h)이
-  실제 상한으로 걸린다(1분·10초 페이스는 실측(2026-08-22)에서 매 주기가
-  슬라이스를 꽉 채우고 urgent 정지가 드물어 일감 부족이 아니라 페이스
-  자체가 병목임을 확인한 뒤 1.5배로 올렸다). 조각마다
-  `wait_for_urgent_idle`·load average·남은 예산을 다시
-  확인해 오래 가로막지 않는다. Lightsail `micro_3_0`(2 vCPU, vCPU당
-  baseline 10% = 하루 4.8 vCPU-hour)의 `NEWS_PREFILTER_LIGHTSAIL_*` 상수는
-  참고치일 뿐 위 계산에 관여하지 않는다.
-- **15초 페이스를 매일 쓰면 관측 총사용률이 baseline 위에 계속 머물러
-  버스트 크레딧을 쓰기만 한다**(실측 2026-08-23: 12%). Lightsail 크레딧
-  잔량은 API로 못 읽으므로(`GetInstanceMetricData`가 IAM에서 막혀 있다)
-  코드가 남은 크레딧을 보고 스스로 조절할 수 없다. 그래서
-  `run_prefilter_maintenance`(`features/news_prefilter/feature.py`)가
-  `today()` 날짜 홀짝으로 이틀에 하루는 충전일로 강제한다 — 그날은 슬라이스를
-  `NEWS_PREFILTER_MAINTENANCE_RECHARGE_SLICE_SECONDS`(4초, baseline을 확실히
-  밑도는 값)로 낮춰 순 충전이 나게 하고, 나머지 하루는 평소 15초로 쓴다.
-  이 이틀 주기는 시작점일 뿐이다 — Lightsail 콘솔의 실제 burst capacity
-  그래프가 계속 내려가면 충전일을 늘리고, 여유가 쌓이기만 하면 지출일을
-  늘린다.
+  작업은 고정 슬라이스로 재지 않는다.** `run_prefilter_maintenance`는 직전
+  1분의 실제 foreground CPU를 측정하고, 2 vCPU 전체 용량의 9%에서 그 값을
+  뺀 잔여분만 보정(calibration)에 배정한다. 유휴 주기의 최대치는 10.8
+  CPU-second(60초 × 2 × 9%)이고, 하루 보정 상한은 4.32 CPU-hour다. 각 2초
+  조각마다 `wait_for_urgent_idle`·load average·남은 예산을 다시 확인한다.
+- **버스트 크레딧은 고가치 작업에 우선 배정한다.** 리서치, 야간 뉴스
+  다이제스트, 시장 컨센서스 분석·수집은 `burst_phase`로 표시한다. 이 구간에는
+  프리필터 보정이 시작되지 않으며, 고가치 작업 자체는 평시 9% 제한을 받지
+  않는다. Lightsail 크레딧 잔량을 API로 읽지 못해도 평시를 baseline 아래로
+  유지해 충전하고 요청 시에는 저장된 크레딧을 쓸 수 있는 구조다.
 - 상태 파일은 `data/<feature>/`에 둔다. 설정은 상태 파일에 저장하지 않는다.
 - **상태 파일은 `core/storage.py`의 원자적 쓰기로만 저장한다.** 대상 파일을 직접
   열어 쓰면 그 순간 내용이 비고, 실패하면 잘린 JSON이 남아 다음 기동이 상태를
@@ -209,10 +191,10 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - **시각은 `core/clock.py`의 `now()`·`today()`만 쓴다.** `datetime.now()`·`date.today()`는
   호스트 타임존을 따라가서 서버를 다른 타임존에 올리면 `/market`의 하루 경계와 보존
   기간이 통째로 밀린다. ruff의 `DTZ` 규칙이 이걸 막는다(테스트는 예외).
-  저장된 타임스탬프를 `now()`와 비교할 때는 `ensure_kst()`로 감싼다 — aware 전환
+  저장된 타임스탬프를 `now()`와 비교할 때는 `ensure_jst()`로 감싼다 — aware 전환
   이전에 쓴 `data/` 파일에는 오프셋이 없어 그냥 비교하면 TypeError로 죽는다.
   예외는 셋뿐이다: Cloudflare 할당량 리셋은 UTC 00시 기준이고
-  (`llm/backends.py`), 기사 시각은 소스 타임존을 `news/utils.py`가 KST로 변환하며,
+  (`llm/backends.py`), 기사 시각은 소스 타임존을 `news/utils.py`가 JST로 변환하며,
   사전선별의 하루 CPU 예산도 Neurons와 같은 UTC 00시에 리셋한다
   (`features/news_prefilter/service.py`) — 두 예산의 경계를 맞춰 두면 한쪽이
   소진된 날을 다른 쪽 로그와 같은 일자로 읽을 수 있다.

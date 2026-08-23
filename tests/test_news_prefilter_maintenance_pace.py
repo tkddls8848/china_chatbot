@@ -1,45 +1,65 @@
-"""보정 페이스의 충전/지출 이틀 주기(CLAUDE.md 변경 원칙, 2026-08-23)."""
+"""평시 9% CPU 예산과 고가치 버스트 우선순위 회귀 테스트."""
 
-from datetime import date
+import asyncio
 
+import pytest
+
+from core import workers
 from core.config import (
-    NEWS_PREFILTER_MAINTENANCE_RECHARGE_SLICE_SECONDS,
-    NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS,
+    NEWS_PREFILTER_LIGHTSAIL_VCPUS,
+    NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES,
+    NEWS_PREFILTER_TARGET_CPU_UTILIZATION,
 )
 from features.news_prefilter import feature as prefilter_feature
 
 
-def test_day_parity_alternates_recharge_and_spend(monkeypatch):
-    monkeypatch.setattr(prefilter_feature, "today", lambda: date(2026, 8, 23))
-    even_day = prefilter_feature._is_recharge_day()
-
-    monkeypatch.setattr(prefilter_feature, "today", lambda: date(2026, 8, 24))
-    odd_day = prefilter_feature._is_recharge_day()
-
-    assert even_day != odd_day
-
-
-def test_recharge_day_uses_the_lower_slice(monkeypatch):
-    monkeypatch.setattr(prefilter_feature, "_is_recharge_day", lambda: True)
-
-    assert (
-        prefilter_feature._maintenance_slice_seconds()
-        == NEWS_PREFILTER_MAINTENANCE_RECHARGE_SLICE_SECONDS
+def test_idle_cycle_uses_nine_percent_of_instance_capacity():
+    expected = (
+        NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES
+        * 60
+        * NEWS_PREFILTER_LIGHTSAIL_VCPUS
+        * NEWS_PREFILTER_TARGET_CPU_UTILIZATION
     )
 
-
-def test_spend_day_uses_the_full_slice(monkeypatch):
-    monkeypatch.setattr(prefilter_feature, "_is_recharge_day", lambda: False)
-
-    assert (
-        prefilter_feature._maintenance_slice_seconds()
-        == NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS
-    )
+    assert NEWS_PREFILTER_TARGET_CPU_UTILIZATION == 0.09
+    assert prefilter_feature._maintenance_slice_seconds(0.0) == pytest.approx(expected)
 
 
-def test_recharge_slice_is_meaningfully_below_spend_slice():
-    """충전일이 지출일보다 확실히 낮아야 순 충전이 된다."""
-    assert (
-        NEWS_PREFILTER_MAINTENANCE_RECHARGE_SLICE_SECONDS
-        < NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS
-    )
+def test_foreground_cpu_is_deducted_from_calibration_slice():
+    full = prefilter_feature._maintenance_slice_seconds(0.0)
+
+    assert prefilter_feature._maintenance_slice_seconds(2.5) == pytest.approx(full - 2.5)
+    assert prefilter_feature._maintenance_slice_seconds(full + 1.0) == 0.0
+
+
+def test_burst_phase_marks_high_value_work_until_it_finishes():
+    async def exercise():
+        assert not workers.is_burst_active()
+        async with workers.burst_phase("test"):
+            assert workers.is_burst_active()
+            async with workers.burst_phase("nested"):
+                assert workers.is_burst_active()
+            assert workers.is_burst_active()
+        assert not workers.is_burst_active()
+
+    asyncio.run(exercise())
+
+
+def test_prefilter_yields_without_optimizing_during_burst(monkeypatch):
+    class _Service:
+        def __init__(self):
+            self.optimized = False
+
+        def account_foreground_cpu(self):
+            return 1.0
+
+        async def optimize_chunk(self, _seconds):
+            self.optimized = True
+
+    service = _Service()
+    app = type("App", (), {"bot_data": {"news_prefilter": service}})()
+    monkeypatch.setattr(prefilter_feature, "is_burst_active", lambda: True)
+
+    asyncio.run(prefilter_feature.run_prefilter_maintenance(app))
+
+    assert not service.optimized

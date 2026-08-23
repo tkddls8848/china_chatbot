@@ -4,6 +4,7 @@ from briefing.calendar import TradeCalendar
 from briefing.service import (
     cmd_briefing,
     send_evening_briefing,
+    send_intraday_briefing,
     send_morning_briefing,
 )
 
@@ -11,5 +12,6 @@ __all__ = [
     "TradeCalendar",
     "cmd_briefing",
     "send_evening_briefing",
+    "send_intraday_briefing",
     "send_morning_briefing",
 ]

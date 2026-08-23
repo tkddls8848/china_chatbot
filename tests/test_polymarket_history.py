@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from core.clock import KST
+from core.clock import JST
 from features.market_sentiment.polymarket import (
     PolymarketClient,
     PolymarketContract,
@@ -99,16 +99,16 @@ def _flat_history(days: int, price: float, *, end_day: date = TODAY):
 
 # ── 이력 봉투 파싱 ─────────────────────────────────────
 
-def test_history_envelope_is_read_into_kst_points():
-    stamp = int(datetime(2026, 8, 15, 8, 30, tzinfo=KST).timestamp())
+def test_history_envelope_is_read_into_jst_points():
+    stamp = int(datetime(2026, 8, 15, 8, 30, tzinfo=JST).timestamp())
 
     points = parse_price_history({"history": [{"t": stamp, "p": 0.42}]})
 
     assert len(points) == 1
     moment, price = points[0]
     assert price == 0.42
-    assert moment.astimezone(KST).hour == 8
-    assert moment.astimezone(KST).minute == 30
+    assert moment.astimezone(JST).hour == 8
+    assert moment.astimezone(JST).minute == 30
 
 
 def test_unexpected_history_envelope_raises_instead_of_emptying():
@@ -120,7 +120,7 @@ def test_unexpected_history_envelope_raises_instead_of_emptying():
 
 
 def test_out_of_range_or_malformed_points_are_dropped():
-    stamp = int(datetime(2026, 8, 15, 8, 30, tzinfo=KST).timestamp())
+    stamp = int(datetime(2026, 8, 15, 8, 30, tzinfo=JST).timestamp())
 
     points = parse_price_history(
         {
@@ -138,8 +138,8 @@ def test_out_of_range_or_malformed_points_are_dropped():
 
 
 def test_history_points_are_sorted_by_time():
-    early = int(datetime(2026, 8, 14, 8, 30, tzinfo=KST).timestamp())
-    late = int(datetime(2026, 8, 15, 8, 30, tzinfo=KST).timestamp())
+    early = int(datetime(2026, 8, 14, 8, 30, tzinfo=JST).timestamp())
+    late = int(datetime(2026, 8, 15, 8, 30, tzinfo=JST).timestamp())
 
     points = parse_price_history(
         {"history": [{"t": late, "p": 0.6}, {"t": early, "p": 0.4}]}
@@ -567,11 +567,11 @@ def test_future_snapshot_time_is_not_written(monkeypatch):
 
 
 def test_history_timestamps_from_utc_land_on_the_right_day():
-    """CLOB은 UTC 초를 준다. KST 08:35 표본이 하루 밀리면 안 된다."""
+    """CLOB은 UTC 초를 준다. JST 08:35 표본이 하루 밀리면 안 된다."""
     utc_moment = datetime(2026, 8, 15, 23, 30, tzinfo=timezone.utc)
     points = parse_price_history(
         {"history": [{"t": int(utc_moment.timestamp()), "p": 0.5}]}
     )
 
-    # 2026-08-15 23:30 UTC = 2026-08-16 08:30 KST → 그날 08:35 표본에 잡힌다.
+    # 2026-08-15 23:30 UTC = 2026-08-16 08:30 JST → 그날 08:35 표본에 잡힌다.
     assert sample_price(points, snapshot_moment(date(2026, 8, 16))) == 0.5

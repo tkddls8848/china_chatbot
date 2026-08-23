@@ -397,7 +397,9 @@ def test_optimizer_trains_on_original_titles_with_time_split():
                 )
             )
 
-    result = optimize_for_cpu_budget(samples, None, 0.05)
+    # 느린 공유/Windows 러너에서도 최소 한 trial을 시작할 수 있는 테스트 예산.
+    # 운영 예산을 검증하는 테스트가 아니라 시간 분할 학습 경로를 보는 항목이다.
+    result = optimize_for_cpu_budget(samples, None, 0.25)
 
     assert result.trials >= 1
     assert result.model is not None

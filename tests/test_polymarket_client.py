@@ -152,7 +152,7 @@ def test_parse_contracts_skips_broken_records_without_failing_the_page():
     assert [contract.condition_id for contract in contracts] == ["0xabc", "0xdef"]
 
 
-def test_end_date_is_normalised_to_kst():
+def test_end_date_is_normalised_to_jst():
     contract = parse_contract(_record(endDate="2026-12-31T12:00:00Z"))
 
     assert contract.end_date.utcoffset().total_seconds() == 9 * 3600

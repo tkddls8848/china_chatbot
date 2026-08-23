@@ -63,13 +63,6 @@ def research_menu() -> InlineKeyboardMarkup:
     ])
 
 
-def briefing_menu() -> InlineKeyboardMarkup:
-    return _keyboard([
-        [("모닝", "nav:briefing:morning"), ("마감", "nav:briefing:evening")],
-        *_back(),
-    ])
-
-
 def system_menu() -> InlineKeyboardMarkup:
     """시스템 상태 아래에 붙는 하위 항목. `/system`의 인자를 버튼으로 옮긴 것이다."""
     return _keyboard([
@@ -142,11 +135,8 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             from research.handlers import cmd_research
             await cmd_research(update, _context(context, [command]))
     elif action == "briefing":
-        await message.edit_text(
-            "<b>브리핑</b>",
-            parse_mode="HTML",
-            reply_markup=briefing_menu(),
-        )
+        from briefing.service import cmd_briefing
+        await cmd_briefing(update, _context(context, []))
     elif action.startswith("briefing:"):
         from briefing.service import cmd_briefing
         await cmd_briefing(update, _context(context, [action.split(":", 1)[1]]))
@@ -205,11 +195,8 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 reply_markup=research_menu(),
             )
         elif action == "briefing":
-            await message.reply_text(
-                "<b>브리핑</b>",
-                parse_mode="HTML",
-                reply_markup=briefing_menu(),
-            )
+            from briefing.service import cmd_briefing
+            await cmd_briefing(update, _context(context, []))
         else:
             await message.reply_text("<b>관리</b>", parse_mode="HTML", reply_markup=_keyboard([
                 [("시스템 상태", "nav:system"), ("종목 DB 갱신", "nav:stockdb")], *_back()

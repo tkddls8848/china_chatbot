@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from core.clock import ensure_kst, now
+from core.clock import ensure_jst, now
 from core.storage import write_json_atomic
 
 
@@ -30,7 +30,7 @@ class NewsLog:
         kept = []
         for entry in self._entries:
             try:
-                if ensure_kst(datetime.fromisoformat(str(entry.get("ts")))) >= cutoff:
+                if ensure_jst(datetime.fromisoformat(str(entry.get("ts")))) >= cutoff:
                     kept.append(entry)
             except (TypeError, ValueError):
                 continue
@@ -87,7 +87,7 @@ class NewsLog:
             result = []
             for entry in self._entries:
                 try:
-                    if ensure_kst(datetime.fromisoformat(str(entry.get("ts")))) >= cutoff:
+                    if ensure_jst(datetime.fromisoformat(str(entry.get("ts")))) >= cutoff:
                         result.append(dict(entry))
                 except (TypeError, ValueError):
                     continue

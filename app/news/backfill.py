@@ -19,7 +19,7 @@ from core.clock import today as clock_today
 
 from llm.market_digest import MarketDigestAnalyzer, MarketDigestError
 from news.sources import fetch_google_news_history
-from news.utils import filter_articles_for_kst_day
+from news.utils import filter_articles_for_jst_day
 from state import MarketDigestStore
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ async def backfill_market_digests(
         except Exception as exc:
             logger.warning("[DIGEST] fetch failed for %s %s: %s", market, day, exc)
             continue
-        articles = filter_articles_for_kst_day(articles, day)[:articles_per_day]
+        articles = filter_articles_for_jst_day(articles, day)[:articles_per_day]
         if len(articles) < min_articles:
             # 표본이 얕은 날을 계산해 봐야 차트가 다시 출렁인다. 건너뛰고
             # 다음 호출에서 다시 시도한다.

@@ -30,7 +30,7 @@ class DailyCpuBudget:
 
     @staticmethod
     def _utc_day() -> str:
-        # Neurons 예산과 같은 UTC 00시 리셋 — core/clock.py의 now()/today()(KST)를
+        # Neurons 예산과 같은 UTC 00시 리셋 — core/clock.py의 now()/today()(JST)를
         # 쓰지 않는 명시적 예외. 두 예산의 경계를 맞춰야 한쪽이 소진된 날을
         # 다른 쪽 로그와 같은 일자로 읽을 수 있다.
         return datetime.now(timezone.utc).date().isoformat()
@@ -71,8 +71,8 @@ class DailyCpuBudget:
         payload["updated_at"] = now().isoformat(timespec="seconds")
         write_json_atomic(self._state_file, payload)
 
-    def account_foreground_cpu(self) -> None:
-        """관측 전용 — 이 값은 예산을 깎지 않는다."""
+    def account_foreground_cpu(self) -> float:
+        """직전 체크포인트 이후의 foreground CPU초를 기록하고 반환한다."""
         self._reset_day_if_needed()
         current = time.process_time()
         delta = max(0.0, current - self._last_process_cpu)
@@ -81,6 +81,7 @@ class DailyCpuBudget:
         self._last_process_cpu = current
         self._background_since_checkpoint = 0.0
         self._persist()
+        return foreground
 
     def record_background_cpu(self, cpu_seconds: float) -> None:
         self._reset_day_if_needed()

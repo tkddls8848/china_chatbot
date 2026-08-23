@@ -22,18 +22,21 @@ Polymarket이 한국 IP를 지역 차단(451, 8-4)해 도쿄 실측을 했고, �
 `tokyo`가 지금 운영 중인 서버(1GB `micro_3_0`, `ap-northeast-1`)이고 `default`는
 서울(정지됨, 롤백용으로 며칠 더 둔다). `tokyo.tfvars`(gitignore됨)를 쓴다.
 
-**아직 안 끝난 정리 항목** — 관찰 기간이 끝나면 다음을 한다:
+**이전 정리 체크리스트** — 설정 전환은 먼저 반영했고, 나머지는 관찰 기간이 끝나면
+처리한다:
 
 - [ ] 서울 인스턴스·고정 IP 삭제(`terraform workspace select default && terraform destroy`)
-- [ ] `iac/terraform/variables.tf`의 `aws_region`·`availability_zone` 기본값을
-      도쿄로 바꾸고, "KST 스케줄과 한국·중국 소스 지연을 고려해 서울" 주석을
-      실제 이전 사유로 고친다. `tokyo` workspace를 `default`로 흡수(또는 반대로
-      기본값을 이미 도쿄로 바꿨으니 `tokyo` workspace/`tokyo.tfvars`를 정리)
+- [ ] 서울 destroy가 끝나면 `iac/terraform/seoul-rollback/` 폴더째 삭제
+- [x] `iac/terraform/variables.tf`와 `terraform.tfvars.example`의 리전·AZ를
+      도쿄로, `manage_firewall`을 `false`로 바꾸고 리전 설명을 실제 이전 사유로 수정
+- [ ] `tokyo` workspace를 `default`로 흡수(또는 반대로 `tokyo` workspace와
+      `tokyo.tfvars`를 운영 기준으로 유지하고 서울용 `terraform.tfvars`를 정리)
 - [ ] `iam-policy.json`의 `aws:RequestedRegion`을 `ap-northeast-1` 하나로 다시
       좁힌다(지금은 이전 기간이라 서울·도쿄 둘 다 열어 둠) — 관리자 권한으로
       `create-policy-version` 재적용 필요
 - [ ] `POLYMARKET_PROXY_URL`을 서버 `.env`에서 지운다(도쿄는 차단 안 되므로
       더 이상 안 씀 — 코드는 그대로 둬도 무해하니 급하지 않다)
+- [ ] 더 이상 쓰지 않는 `polymarket-proxy-tokyo` 인스턴스 삭제
 - [ ] 도쿄 리전에 남은 테스트 키페어(`test-kp-tokyo5`) 콘솔에서 삭제
 
 ## 1. 접속
@@ -43,6 +46,7 @@ Polymarket이 한국 IP를 지역 차단(451, 8-4)해 도쿄 실측을 했고, �
 
 ```powershell
 cd iac\terraform
+terraform workspace select tokyo
 terraform output -raw ssh_command
 terraform output -raw public_ip
 terraform output -raw web_admin_tunnel_command   # 8787은 방화벽에서 닫혀 있다
@@ -56,9 +60,11 @@ terraform output -raw web_admin_tunnel_command   # 8787은 방화벽에서 닫�
 | `verify_commands` | 기동 후 검증 묶음 (Neurons 집계 명령 포함) |
 | `rollback_command` | 서버 정지 |
 
-방화벽은 **22번만 열려 있고** `allowed_ssh_cidrs`로 좁혀져 있다. 집 IP가 바뀌면
-접속이 막힌다 — `curl -s https://checkip.amazonaws.com`으로 확인하고
-`terraform.tfvars`를 고쳐 `apply`한다.
+방화벽은 **22번만 열려 있고** 허용 IP가 집 회선으로 좁혀져 있다. 도쿄는
+`manage_firewall = false`라 Terraform이 방화벽을 관리하지 않는다. 집 IP가 바뀌어
+접속이 막히면 `curl -s https://checkip.amazonaws.com`으로 확인하고 Lightsail 콘솔에서
+허용 IP를 바꾼다. 도쿄 운영 IAM은 `OpenInstancePublicPorts`를 허용하지 않으므로
+`tokyo.tfvars`를 고쳐 `apply`하는 방식은 실패한다.
 
 관리 웹 비밀번호는 부트스트랩이 무작위로 만들어 서버 `.env`에 넣었다.
 
@@ -120,7 +126,7 @@ getUpdates request`를 돌려주고 **양쪽이 번갈아 죽는다.** 로컬 �
 봇이 꺼져 있는 동안 지나간 스케줄은 **따라잡지 않는다.** APScheduler jobstore가
 메모리라 놓친 실행은 그냥 사라진다. 아래 창을 피해서 재기동한다.
 
-| KST | 무엇 | 놓치면 |
+| JST | 무엇 | 놓치면 |
 |---|---|---|
 | **08:35 ~ 10:35** | Polymarket 스냅숏(08:35, 재시도 09:35·10:35) | 그날 스냅숏이 통째로 빈다. 가동률 게이트(7일 중 6일)에서 하루를 깎는다 |
 | **07:00** | 야간 다이제스트 발송 | 큐가 다음 주간 주기로 넘어간다(첫 주간 주기가 큐를 확인하므로 유실은 아니다) |
@@ -167,7 +173,7 @@ grep -n '^ALLOWED_CHAT_IDS=' ~/stock_chatbot/.env
 
 | 구분 | 값 |
 |---|---|
-| 무료 한도 | 10,000 Neurons/일 (**UTC 00시 = KST 09시** 리셋) |
+| 무료 한도 | 10,000 Neurons/일 (**UTC 00시 = JST 09시** 리셋) |
 | 60분 주기 상한 | 하루 408건 번역 (주간 17주기 × 소스 6곳 × 4건) + 야간 요약 4회 |
 | 20분 주기 시절 실측 | 하루 272~323건 ≈ 3,000~3,600 |
 
@@ -185,7 +191,7 @@ journalctl -u stock-chatbot --since "$(date -u -d '6 days ago' '+%Y-%m-%d 00:00:
 ```
 
 **로컬 `bot.log`로는 이 측정을 할 수 없다.** 로그 포맷(`%(asctime)s`)이 호스트
-로컬 시각을 오프셋 없이 찍어 한 줄만 보고 UTC 일자를 복원할 수 없다. KST
+로컬 시각을 오프셋 없이 찍어 한 줄만 보고 UTC 일자를 복원할 수 없다. JST
 호스트라는 외부 가정을 얹어야 환산되므로 판정 근거로는 서버 수치만 쓴다.
 
 **판정과 조치**
@@ -214,9 +220,10 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 ```
 
 `중단=budget`이 **매일** 나오면 예산이 아니라 관측량을 먼저 줄인다. 배경 보정은
-지출일 기준 하루 6.0h(`NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS`) 안에서만
-돌고, 이틀에 하루는 충전일로 페이스를 낮춘다(10절, CLAUDE.md 변경 원칙 참고).
-긴급 뉴스 구간·load average 1.5 이상에서도 스스로 물러난다.
+하루 4.32 CPU-hour(`NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS`) 안에서만
+돌고, 직전 1분의 foreground CPU를 빼 전체 2 vCPU의 9% 안에서 적응적으로
+페이스를 잡는다. 긴급 뉴스·버스트 우선 작업·load average 1.5 이상에서도
+스스로 물러난다.
 
 일주일 뒤 `/system prefilter`로 네 축을 본다.
 
@@ -283,7 +290,7 @@ Gamma API는 인증이 필요 없고 LLM 비용도 0이다. 문제는 커버리�
 |---|---|
 | Gamma `/markets` 클라이언트·파서 | `app/features/market_sentiment/polymarket.py` |
 | 게이트·theme allowlist·polarity | `app/features/market_sentiment/polymarket_rules.py` |
-| 08:35 KST 스냅숏 job | `app/features/market_sentiment/snapshot.py` |
+| 08:35 JST 스냅숏 job | `app/features/market_sentiment/snapshot.py` |
 | 스냅숏 저장·일별 정렬·게이트 계산 | `app/state/polymarket_consensus.py` |
 | 과거 시세 백필(일회성 도구) | `polymarket_history.py`, `app/polymarket_backfill.py` |
 | 하단 패널 | `app/features/market_sentiment/chart.py` |
@@ -419,9 +426,9 @@ POLYMARKET_PROXY_URL=http://user:pass@proxy-host:port
 뗄 수 있는 부속물로 두는 게 목적이라, 본 배포(`iac/terraform/`)에 편입하지
 않았다. 유지보수(재기동·설정 변경)는 Lightsail 콘솔의 브라우저 SSH로 한다
 — `stock-chatbot-deployer` IAM 자격으로는 `ap-northeast-1`의
-`GetInstanceAccessDetails`·`OpenInstancePublicPorts`가 막혀 있어(리전을
-`ap-northeast-2`로 제한한 `iam-policy.json` 조건과는 별개로, 다른 리전에서도
-CLI로 키를 뽑아내거나 방화벽을 여는 건 항상 막힌다) 로컬 CLI로는 SSH 키를
+`GetInstanceAccessDetails`·`OpenInstancePublicPorts`가 막혀 있어(서울·도쿄를 허용한
+`iam-policy.json`의 리전 조건과는 별개로, 허용된 리전에서도 CLI로 키를 뽑아내거나
+방화벽을 여는 건 항상 막힌다) 로컬 CLI로는 SSH 키를
 받을 수 없다.
 
 프록시 출구(도쿄)가 막히는 날이 오면 인스턴스를 지우고 다른 리전에 새로
@@ -465,8 +472,8 @@ CLI로 키를 뽑아내거나 방화벽을 여는 건 항상 막힌다) 로컬 C
 
 | 장치 | 주기 | 자리 |
 |---|---|---|
-| tar 백업 cron | 매일 03:00 KST, 14일 보관 | `/home/<app_user>/backup-YYYY-MM-DD.tgz` |
-| Lightsail 자동 스냅샷 | 매일 04:00 KST (19:00 UTC) | 콘솔 |
+| tar 백업 cron | 매일 03:00 JST, 14일 보관 | `/home/<app_user>/backup-YYYY-MM-DD.tgz` |
+| Lightsail 자동 스냅샷 | 매일 04:00 JST (19:00 UTC) | 콘솔 |
 | 원자적 쓰기 | 매 저장 | `core/storage.py` (임시파일 → fsync → `os.replace`) |
 
 ```bash
@@ -526,13 +533,13 @@ free -h; uptime; systemctl status stock-chatbot --no-pager | grep Memory
 
 load average가 상시 1.5 이상이면 사전선별이 스스로 물러나 보정이 진행되지
 않는다. 그 상태가 계속되면 관측량이나 bundle을 다시 본다 —
-`NEWS_PREFILTER_LIGHTSAIL_*` 상수는 `micro_3_0`(2 vCPU, baseline 10%)에 맞춰져
-있고 bundle을 바꾸면 함께 바꾼다.
+`NEWS_PREFILTER_LIGHTSAIL_VCPUS`는 `micro_3_0`(2 vCPU, baseline 10%)에,
+`NEWS_PREFILTER_TARGET_CPU_UTILIZATION`은 평시 9%에 맞춰져 있다. bundle을
+바꾸면 vCPU 수를 함께 바꾼다.
 
-보정 슬라이스는 `today()` 날짜 홀짝으로 이틀에 하루만 지출 페이스(15초)를
-쓰고 나머지 하루는 충전 페이스(4초)로 낮춘다(CLAUDE.md 변경 원칙,
-2026-08-23) — 크레딧 잔량을 API로 못 읽어(`GetInstanceMetricData`가 IAM
-밖) 코드가 스스로 못 재기 때문이다. `journalctl | grep PREFILTER`의 각
-줄 끝에 `충전일` 표시가 있는지로 오늘이 어느 날인지 바로 확인된다. 콘솔의
-burst capacity 그래프가 계속 내려가면 `NEWS_PREFILTER_MAINTENANCE_*` 비율을
-다시 본다.
+`journalctl | grep PREFILTER`에는 보정 CPU와 직전 주기의 `foreground` CPU가
+함께 찍힌다. 두 값을 합친 주기당 목표 상한은 10.8 CPU-second다. 리서치,
+야간 다이제스트, 시장 컨센서스 처리 중에는 `버스트 우선 작업 진행 중 · 보정
+양보`가 찍힌다. 이 작업들은 9% 제한 밖에서 실행되어 모아 둔 burst capacity를
+우선 사용한다. 콘솔의 CPU 평균이 계속 9%를 넘으면 목표값보다 먼저 봇 외
+프로세스와 스케줄 중첩 여부를 확인한다.

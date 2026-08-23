@@ -20,6 +20,7 @@ from core.config import (
     MARKET_CHART_MARKETS,
     NEWS_MARKET_BACKFILL_QUERIES,
 )
+from core.workers import burst_job
 from features.market_sentiment.window import MarketSessionWindow, completed_windows
 from llm.overnight_tone import OvernightToneError
 from news.sources import fetch_google_news_history
@@ -231,6 +232,7 @@ async def capture_window(
     return True
 
 
+@burst_job("시장 컨센서스 원자료 분석")
 async def capture_completed_overnight_windows(app) -> None:
     """Scheduled catch-up: at most one newest missing window per market."""
     for market in sorted(MARKET_CHART_MARKETS):

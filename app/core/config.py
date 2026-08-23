@@ -59,6 +59,9 @@ TELEGRAM_CONNECT_TIMEOUT_SECONDS = 10.0
 TELEGRAM_READ_TIMEOUT_SECONDS = 20.0
 TELEGRAM_WRITE_TIMEOUT_SECONDS = 20.0
 TELEGRAM_POOL_TIMEOUT_SECONDS = 10.0
+# 새 update가 오면 즉시 반환되므로 응답 지연은 늘지 않는다. 유휴 시에만
+# getUpdates 재요청을 기본 10초보다 덜 자주 보내 CPU·네트워크 wakeup을 줄인다.
+TELEGRAM_POLL_TIMEOUT_SECONDS = 30
 TELEGRAM_CONCURRENT_UPDATES = 2
 TELEGRAM_STATUS_MAX_ATTEMPTS = 2
 TELEGRAM_STATUS_RETRY_DELAY_SECONDS = 0.5
@@ -198,7 +201,7 @@ NEWS_SOURCE_ARTICLE_LIMIT = 250
 NEWS_TRANSLATION_QUALITY_REJECT_LIMIT = 3
 
 # ── 야간 뉴스 다이제스트 ──────────────────────────────
-# KST 00~07시에는 기사별 번역을 하지 않는다. 원문만 큐에 모아 두었다가 07시에
+# JST 00~07시에는 기사별 번역을 하지 않는다. 원문만 큐에 모아 두었다가 07시에
 # 시장별로 한 번씩만 LLM을 불러 묶음 요약을 보낸다. 7시간을 기사별로 번역하면
 # 소스 6곳 × 시간당 5건 = 210 호출인데, 읽는 사람은 자고 있어 아침에 한 번에
 # 읽는다 — 같은 내용을 시장 수(최대 4회) 호출로 줄인다.
@@ -239,39 +242,20 @@ NEWS_PREFILTER_EXPLORATION_SLOTS = 1
 # 이어지는 경우가 있어, 재탕은 막되 후속 보도까지 막지는 않는 길이다.
 NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS = 24
 
-# Terraform 기본 bundle(micro_3_0: 2 vCPU, vCPU당 baseline 10%)의 하루 지속
-# 가능 CPU는 4.8 vCPU-hour다. 이 둘은 참고치일 뿐 아래 계산에 관여하지 않는다
-# — 사전선별의 매 주기 후보 점수화(foreground)는 이 기능을 쓰는 한 피할 수
-# 없는 필수 비용이라, 텔레그램·뉴스 긴급 경로와 마찬가지로 예산으로 재지
-# 않고 무제한으로 둔다.
+# Terraform 기본 bundle(micro_3_0: 2 vCPU, vCPU당 baseline 10%)에서 평시 봇
+# 프로세스는 전체 vCPU 용량의 9%만 쓰는 것을 목표로 한다. 매 보정 주기마다
+# 직전 주기의 필수 foreground CPU를 먼저 빼고 남은 몫만 보정에 배정한다.
+# 리서치·야간 다이제스트·시장 컨센서스는 burst_phase로 이 제한에서 제외하며,
+# 그 구간에는 보정을 멈춰 모아 둔 버스트 크레딧을 사용자 작업에 우선 쓴다.
 NEWS_PREFILTER_LIGHTSAIL_VCPUS = 2
-NEWS_PREFILTER_LIGHTSAIL_BASELINE = 0.10
-# 보정(calibration) 자체만 재는 하루 총량이다. 순간 부하(버스트)는 이 값이
-# 아니라 아래 주기·조각 값이 낮게 누른다 — 1분/10초 페이스로 실측해 보니
-# (2026-08-22) 매 주기가 슬라이스를 꽉 채우고(trial 40~50대) urgent 정지가
-# 드물어, 일감 부족이 아니라 페이스 자체가 병목이었다. 슬라이스를 10→15초로
-# 1.5배 올려 이론상 하루 최대치를 1,440회 × 15초 = 6.0h로 올리고, 이 예산도
-# 같이 6.0h로 올려 예산이 조기에 가로막지 않게 한다.
-# foreground와 한 풀을 공유해 재던 예전 구조에서는 foreground만으로 하루치를
-# 다 써 보정이 한 번도 못 도는 굶주림이 있었다(실측: trial 0 · 남은 예산
-# 0.00h로 매번 중단) — 그래서 foreground는 이제 이 예산을 깎지 않는다.
-NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS = 21600.0
-# 1분마다 최대 15 CPU-second를 한 코어에서 나눠 쓴다. 2초 조각 사이마다
-# 긴급 뉴스 구간과 load average를 다시 확인해 오래 가로막지 않는다.
+NEWS_PREFILTER_TARGET_CPU_UTILIZATION = 0.09
+# 9% × 2 vCPU × 24시간 = 4.32 CPU-hour. foreground는 주기별 잔여량에서
+# 차감하고, 이 일일 상한은 보정 작업 자체가 그보다 더 쓰지 못하게 하는 이중
+# 안전장치다.
+NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS = 15552.0
+# 1분마다 최대 10.8 CPU-second(60 × 2 × 9%)를 한 코어에서 나눠 쓴다.
+# 실제 조각은 직전 1분의 foreground CPU만큼 더 작아진다.
 NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES = 1
-NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS = 15.0
-# 15초 페이스는 관측 총사용률을 baseline(micro_3_0 10%) 위로 올려 버스트
-# 크레딧을 계속 쓰기만 한다(실측 2026-08-23: 12%). 계속 쓰기만 하면 크레딧이
-# 결국 마른다 — Lightsail 크레딧 잔량은 API로 못 읽으므로(GetInstanceMetricData가
-# IAM에서 막혀 있다) 정확한 소진 시점을 코드로 계산하지 않는다. 대신 날짜
-# 홀짝으로 이틀에 한 번은 이 값 대신 아래 충전용 슬라이스로 낮춰 충전 구간을
-# 강제로 둔다(`_maintenance_slice_seconds`, feature.py). 충전일 페이스는
-# baseline보다 확실히 낮게 잡아야 순 충전이 된다 — 4초면 듀티사이클이
-# 4/60 ≈ 6.7%(1vCPU) = 약 3.3%p(2vCPU)로 다른 부하를 더해도 10%를 넉넉히
-# 밑돈다. 이 비율(하루걸러 하루)은 시작점일 뿐이다 — 콘솔의 실제 burst
-# capacity 그래프가 계속 내려가면 충전일을 늘리고, 여유가 쌓이기만 하면
-# 지출일을 늘린다.
-NEWS_PREFILTER_MAINTENANCE_RECHARGE_SLICE_SECONDS = 4.0
 NEWS_PREFILTER_MAINTENANCE_CHUNK_SECONDS = 2.0
 NEWS_PREFILTER_MAX_LOAD_AVERAGE = 1.5
 
@@ -468,6 +452,12 @@ BRIEFING_MORNING_MINUTE = 50
 BRIEFING_EVENING_ENABLED = True
 BRIEFING_EVENING_HOUR = 17
 BRIEFING_EVENING_MINUTE = 40
+# 수동 브리핑은 JST 기준 아시아 시장 세션에 맞춰 장전·장중·장후를 고른다.
+# 17시는 한국(15:30), 중국(16:00 JST), 홍콩(17:00 JST)이 모두 끝나는 경계다.
+BRIEFING_MARKET_OPEN_HOUR = 9
+BRIEFING_MARKET_OPEN_MINUTE = 0
+BRIEFING_MARKET_CLOSE_HOUR = 17
+BRIEFING_MARKET_CLOSE_MINUTE = 0
 BRIEFING_NEWS_MAX_ITEMS = 14
 BRIEFING_PROMPT_FILE = PROMPT_DIR / "briefing_ko.txt"
 BRIEFING_TIMEOUT = 180
