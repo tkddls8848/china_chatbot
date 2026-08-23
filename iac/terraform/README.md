@@ -35,6 +35,16 @@ Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정�
    `iam-policy.json`은 이 디렉터리에 있고 `ap-northeast-2`로 리전을 제한한다.
    다른 리전을 쓰면 `aws:RequestedRegion` 값도 함께 바꾼다.
 
+   **이미 붙어 있는 정책을 고칠 때는 `create-policy`가 아니라 새 버전을 만든다**
+   (관리형 정책은 버전이 있고 5개가 차면 오래된 버전부터 지워야 한다):
+   ```powershell
+   $arn = (aws iam list-policies --query "Policies[?PolicyName=='StockChatbotLightsail'].Arn" --output text)
+   aws iam create-policy-version --policy-arn $arn --policy-document file://iam-policy.json --set-as-default
+   ```
+   리전을 두 개 다 허용해 둔 임시 상태(2026-08-23, 서울→도쿄 이전 기간)라면
+   이전이 끝나고 서울을 정리한 뒤 `ap-northeast-1` 하나로 다시 좁힌다 —
+   최소 권한 원칙을 그대로 두는 게 목적이라 이전 기간에만 두 리전을 연다.
+
    **root 자격증명으로는 붙일 대상이 없다.** `aws sts get-caller-identity`의 `Arn`이
    `:root`로 끝나면 IAM 사용자가 아니라는 뜻이고, `attach-user-policy`에 계정 이메일을
    넣으면 `NoSuchEntity`가 난다. 콘솔 IAM → 사용자에서 사용자를 만들어 위 정책을 붙이고,

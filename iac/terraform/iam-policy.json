@@ -58,7 +58,7 @@
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "ap-northeast-2"
+          "aws:RequestedRegion": ["ap-northeast-2", "ap-northeast-1"]
         }
       }
     }

@@ -11,9 +11,30 @@
 |---|---|
 | `iac/terraform/README.md` | 인스턴스 생성, 부트스트랩, 최초 전환(cutover), 삭제 |
 | **이 문서** | 접속, 상태 확인, 배포 갱신, 설정 변경, 실측, 판정, 백업·복구, 장애 대응 |
-| `docs/next-steps.md` | 웹 서비스화 계획 (앞으로 만들 것) |
+| `docs/polymarket-web.md` | 웹 서비스화 계획 (앞으로 만들 것) |
 
 ---
+
+## 0. 리전 이전 진행 중 (2026-08-23, 서울 → 도쿄)
+
+Polymarket이 한국 IP를 지역 차단(451, 8-4)해 도쿄 실측을 했고, 그 결과를 근거로
+운영 서버 자체를 도쿄로 옮겼다. `iac/terraform/`은 workspace로 나뉜다 —
+`tokyo`가 지금 운영 중인 서버(1GB `micro_3_0`, `ap-northeast-1`)이고 `default`는
+서울(정지됨, 롤백용으로 며칠 더 둔다). `tokyo.tfvars`(gitignore됨)를 쓴다.
+
+**아직 안 끝난 정리 항목** — 관찰 기간이 끝나면 다음을 한다:
+
+- [ ] 서울 인스턴스·고정 IP 삭제(`terraform workspace select default && terraform destroy`)
+- [ ] `iac/terraform/variables.tf`의 `aws_region`·`availability_zone` 기본값을
+      도쿄로 바꾸고, "KST 스케줄과 한국·중국 소스 지연을 고려해 서울" 주석을
+      실제 이전 사유로 고친다. `tokyo` workspace를 `default`로 흡수(또는 반대로
+      기본값을 이미 도쿄로 바꿨으니 `tokyo` workspace/`tokyo.tfvars`를 정리)
+- [ ] `iam-policy.json`의 `aws:RequestedRegion`을 `ap-northeast-1` 하나로 다시
+      좁힌다(지금은 이전 기간이라 서울·도쿄 둘 다 열어 둠) — 관리자 권한으로
+      `create-policy-version` 재적용 필요
+- [ ] `POLYMARKET_PROXY_URL`을 서버 `.env`에서 지운다(도쿄는 차단 안 되므로
+      더 이상 안 씀 — 코드는 그대로 둬도 무해하니 급하지 않다)
+- [ ] 도쿄 리전에 남은 테스트 키페어(`test-kp-tokyo5`) 콘솔에서 삭제
 
 ## 1. 접속
 
