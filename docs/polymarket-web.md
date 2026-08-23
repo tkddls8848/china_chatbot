@@ -136,26 +136,14 @@ HTML을 내보내고 필요한 곳만 fetch로 채운다.
 
 ### 0단계 — 로컬 환경을 현재 기준에 맞춘다
 
-로컬 `.env`는 2026-08-11 값이다. **명시값이 코드 기본값을 이기므로** 지금 로컬에서
-봇을 켜면 옛 동작을 본다. 서버와 다른 설정으로 재현하게 되는 것이 실제 비용이다.
-
-| 키 | 로컬 `.env` | 현재 기준 |
-|---|---:|---:|
-| `FEATURES_ENABLED` | `news_prefilter` 없음 | 있음 |
-| `NEWS_SOURCE_ARTICLE_LIMIT` | 30 | 250 |
-| `SCHEDULER_INTERVAL_MINUTES` | 20 | 60 |
-| `NEWS_DIGEST_SEND_LIMIT` | 3 | 2 |
-
-`NEWS_PREFILTER_MODE`와 `NEWS_NIGHT_*`는 로컬에 없고 코드 기본값이 먹는다 —
-없는 키를 새로 넣지 않는다.
-
-```powershell
-.\venv\Scripts\python.exe -c "import sys; sys.path.insert(0,'app'); import core.config"
-```
+**2026-08-23부터 이 단계가 사실상 사라졌다.** `FEATURES_ENABLED`·
+`NEWS_SOURCE_ARTICLE_LIMIT`·`SCHEDULER_INTERVAL_MINUTES`·
+`NEWS_DIGEST_SEND_LIMIT`·`NEWS_PREFILTER_MODE`·`NEWS_NIGHT_*`는 더 이상
+env가 아니라 `app/core/config.py`의 리터럴이다 — 로컬 `.env`에 옛 값이
+남아 있어도 더 이상 읽히지 않으므로 로컬·서버 설정이 갈릴 여지가 없다.
+`git pull` 한 번이면 로컬도 서버와 같은 값을 본다.
 
 로컬 봇을 켤 때는 서버와 같은 토큰이므로 **한쪽만 켠다.**
-
-*완료 기준*: 위 명령이 오류 없이 끝나고 `.env`의 네 값이 표와 같다.
 
 ### 1단계 — 산출물을 굽는다 (웹 없이)
 

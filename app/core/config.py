@@ -1,8 +1,15 @@
 """환경 변수 로딩과 전역 설정 상수.
 
 설정 저장 방침:
-  - `.env` = 비밀값과 운영자가 조정하는 설정. 시작 시 1회, 이 모듈에서만 읽는다.
-  - 운영자가 조정하지 않는 설정 = 이 모듈의 리터럴 상수.
+  - `.env` = 외부 공개되면 안 되는 비밀값·자격증명만(토큰, 비밀번호, 프록시
+    URL처럼 값 안에 자격증명이 섞인 것, chat id처럼 운영자 개인 식별값).
+    시작 시 1회, 이 모듈에서만 읽는다.
+  - 그 외 모든 설정(기능 켜기·끄기, 수량·주기 같은 튜닝값 포함)은 이 모듈의
+    리터럴 상수다. 값을 바꾸려면 코드를 고쳐야 하고 git에 남는다 — 바뀐
+    이력을 서버 `.env`가 아니라 git이 갖고 있어야 무엇을 언제 왜 바꿨는지
+    나중에 추적된다. 예외는 `CLOUDFLARE_MODEL` 하나뿐이다: Cloudflare가
+    모델을 폐기·개명하면 이 값이 코드 배포 없이 즉시 바뀌어야 번역·분석이
+    전부 죽는 걸 막을 수 있어서 env로 남긴다.
     다른 모듈은 여기서 상수를 import 하며 `os.environ`에 직접 접근하지 않는다.
   - `data/<기능키>/*.json` = 봇이 수집·축적하는 데이터(관심종목, 전송 이력,
     종목 DB 등)로, 소유 기능별 하위 디렉토리에 둔다. 설정값은 저장하지
@@ -30,18 +37,20 @@ class ConfigurationError(RuntimeError):
     """설정값이 잘못되어 봇을 기동할 수 없을 때 발생한다."""
 
 
-def _env_bool(name: str, default: str = "false") -> bool:
-    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
-
-
-_DEFAULT_FEATURES = (
-    "instruments,quant,watchlist,news_prefilter,news,market_sentiment,"
-    "research,briefing,signal_scoring,system_admin,web_admin"
-)
 FEATURES_ENABLED = frozenset(
-    key.strip()
-    for key in os.environ.get("FEATURES_ENABLED", _DEFAULT_FEATURES).split(",")
-    if key.strip()
+    {
+        "instruments",
+        "quant",
+        "watchlist",
+        "news_prefilter",
+        "news",
+        "market_sentiment",
+        "research",
+        "briefing",
+        "signal_scoring",
+        "system_admin",
+        "web_admin",
+    }
 )
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -82,7 +91,7 @@ RUNTIME_LOCK_FILE = DATA_DIR / "runtime" / "bot.lock"
 PROMPT_DIR        = BASE_DIR / "prompts"
 
 # ── 번역 ──────────────────────────────────────────────
-TRANSLATION_ENABLED = _env_bool("TRANSLATION_ENABLED", "true")
+TRANSLATION_ENABLED = True
 # 기사 본문이 200자 내외라 출력 토큰 상한도 함께 내렸다. 남겨 둘 이유가 없다 —
 # 이 값이 곧 한 기사의 최대 지연이다. 다만 잘리면 JSON 파싱이 실패해 그 기사가
 # 통째로 버려지므로, 제목·종목 배열까지 합친 봉투에 여유를 두고 잡았다.
@@ -113,6 +122,9 @@ CLOUDFLARE_FAILURE_COOLDOWN_SECONDS = 300
 # /research 분석과 /market 다이제스트는 전용 플래그 없이 기능 키가 켜지면
 # 항상 LLM을 쓴다. 그래서 자격증명 요구 여부는 FEATURES_ENABLED로 판단한다.
 _LLM_FEATURE_KEYS = frozenset({"research", "market_sentiment"})
+# 브리핑 절 전체(BRIEFING_*)보다 먼저 정의한다 — 아래 검증기가 모듈 로딩
+# 중간(줄 141)에 곧바로 불려 그 시점에 이미 값이 있어야 한다.
+BRIEFING_LLM_ENABLED = True
 
 
 def _validate_cloudflare_credentials() -> None:
@@ -120,7 +132,7 @@ def _validate_cloudflare_credentials() -> None:
     if not (
         TRANSLATION_ENABLED
         or (FEATURES_ENABLED & _LLM_FEATURE_KEYS)
-        or _env_bool("BRIEFING_LLM_ENABLED", "true")
+        or BRIEFING_LLM_ENABLED
     ):
         return
     missing = [
@@ -143,8 +155,8 @@ _validate_cloudflare_credentials()
 # ── 관리 웹(web_admin 기능) ───────────────────────────
 # 봇 프로세스에 내장되는 관리용 웹 대시보드. FEATURES_ENABLED의 web_admin
 # 키로 켜고 끄며, 봇을 제어하므로 WEB_ADMIN_PASSWORD를 지정해야만 기동한다.
-WEB_ADMIN_HOST = os.environ.get("WEB_ADMIN_HOST", "127.0.0.1")
-WEB_ADMIN_PORT = int(os.environ.get("WEB_ADMIN_PORT", "8787"))
+WEB_ADMIN_HOST = "127.0.0.1"
+WEB_ADMIN_PORT = 8787
 WEB_ADMIN_USER = os.environ.get("WEB_ADMIN_USER", "admin")
 WEB_ADMIN_PASSWORD = os.environ.get("WEB_ADMIN_PASSWORD", "")
 
@@ -157,15 +169,12 @@ TELEGRAM_MESSAGE_LIMIT = 4096
 # 주기에서는 상한이 발행량보다 훨씬 커서 사실상 발행되는 대로 다 번역했다.
 # 60분 주기 × 주간 17주기 × 소스 6곳 × 4건 = 하루 408건으로, 이제 상한이
 # 먼저 걸린다 — 그 안에서 무엇을 고를지가 사전선별과 재탕 차단의 몫이다.
-NEWS_GLOBAL_LIMIT = int(os.environ.get("NEWS_GLOBAL_LIMIT", "4"))
+NEWS_GLOBAL_LIMIT = 4
 # 번역한 기사 중 소스 하나가 실제로 **송출**할 건수. impact가 높은 순으로
 # 고르고 나머지는 텔레그램 메시지에서만 빠진다 — 번역·감성 결과는 그대로
 # news_log·prediction_log에 남아 /view·/market·signal_scoring이 읽는다.
 # 탈락분을 다시 집어 재번역하지 않도록 확정(confirm)까지 마친다.
-NEWS_DIGEST_SEND_LIMIT = max(
-    1,
-    int(os.environ.get("NEWS_DIGEST_SEND_LIMIT", "2")),
-)
+NEWS_DIGEST_SEND_LIMIT = 2
 NEWS_DIGEST_MESSAGE_MAX_CHARS = 3500
 # 다이제스트 한 기사의 제목·본문 표시 상한. 프롬프트도 본문을 200자 내외로
 # 지시하지만 그것은 지시일 뿐이라, 모델이 길게 답하는 주기가 섞이면 메시지가
@@ -180,10 +189,7 @@ NEWS_LIVE_MAX_AGE_HOURS = 48
 # 잘린 기사는 다음 주기에도 목록에 남지 않으면 영영 보이지 않는다. 60분
 # 주기에서는 한 주기가 덮어야 할 시간이 3배라 이 깊이가 더 중요해졌다.
 # gnews는 이 값을 시장 수로, gnews_us·gnews_kr은 질의 수로 다시 나눠 쓴다.
-NEWS_SOURCE_ARTICLE_LIMIT = max(
-    1,
-    int(os.environ.get("NEWS_SOURCE_ARTICLE_LIMIT", "250")),
-)
+NEWS_SOURCE_ARTICLE_LIMIT = 250
 
 # 번역 결과가 품질 검사에 걸린 기사는 버리고 다음 후보로 넘어간다. 그 기사는
 # 이미 Neurons를 썼으므로, 한 소스가 한 주기에 몇 건까지 헛돌지 여기서 막는다.
@@ -196,15 +202,9 @@ NEWS_TRANSLATION_QUALITY_REJECT_LIMIT = 3
 # 시장별로 한 번씩만 LLM을 불러 묶음 요약을 보낸다. 7시간을 기사별로 번역하면
 # 소스 6곳 × 시간당 5건 = 210 호출인데, 읽는 사람은 자고 있어 아침에 한 번에
 # 읽는다 — 같은 내용을 시장 수(최대 4회) 호출로 줄인다.
-NEWS_NIGHT_DIGEST_ENABLED = _env_bool("NEWS_NIGHT_DIGEST_ENABLED", "true")
-NEWS_NIGHT_START_HOUR = int(os.environ.get("NEWS_NIGHT_START_HOUR", "0"))
-NEWS_NIGHT_END_HOUR = int(os.environ.get("NEWS_NIGHT_END_HOUR", "7"))
-if not 0 <= NEWS_NIGHT_START_HOUR <= 23 or not 0 <= NEWS_NIGHT_END_HOUR <= 23:
-    raise ConfigurationError("NEWS_NIGHT_START_HOUR·END_HOUR는 0~23이어야 합니다")
-if NEWS_NIGHT_START_HOUR == NEWS_NIGHT_END_HOUR:
-    raise ConfigurationError(
-        "NEWS_NIGHT_START_HOUR와 NEWS_NIGHT_END_HOUR가 같으면 야간 구간이 없습니다"
-    )
+NEWS_NIGHT_DIGEST_ENABLED = True
+NEWS_NIGHT_START_HOUR = 0
+NEWS_NIGHT_END_HOUR = 7
 NEWS_NIGHT_DIGEST_PROMPT_FILE = PROMPT_DIR / "night_digest_ko.txt"
 NEWS_NIGHT_DIGEST_TIMEOUT = 180
 NEWS_NIGHT_DIGEST_NUM_PREDICT = 2048
@@ -220,10 +220,9 @@ NEWS_NIGHT_DIGEST_MAX_HIGHLIGHTS = 8
 
 # ── 번역 전 로컬 뉴스 사건 메모리·사전선별 ───────────
 # shadow는 점수·후보·LLM 결과만 축적하고 현재 최신순 번역 순서를 바꾸지 않는다.
-# 최소 일주일의 정책 비교가 끝난 뒤에만 active로 올린다.
-NEWS_PREFILTER_MODE = os.environ.get("NEWS_PREFILTER_MODE", "shadow").strip().lower()
-if NEWS_PREFILTER_MODE not in {"shadow", "active"}:
-    raise ConfigurationError("NEWS_PREFILTER_MODE는 shadow 또는 active여야 합니다")
+# 최소 일주일의 정책 비교가 끝난 뒤에만 active로 올린다. 승격 절차는
+# docs/server-ops.md 7절을 따른다.
+NEWS_PREFILTER_MODE = "shadow"
 
 NEWS_PREFILTER_EVENT_WINDOW_HOURS = 72
 NEWS_PREFILTER_MAX_EVENTS = 5000
@@ -277,36 +276,16 @@ NEWS_PREFILTER_MAINTENANCE_CHUNK_SECONDS = 2.0
 NEWS_PREFILTER_MAX_LOAD_AVERAGE = 1.5
 
 
-def _parse_rss_feeds() -> list[tuple[str, str]]:
-    """NEWS_RSS_FEEDS='라벨|URL,라벨|URL' → [(라벨, URL), ...]"""
-    raw = os.environ.get("NEWS_RSS_FEEDS", "").strip()
-    feeds: list[tuple[str, str]] = []
-    for chunk in raw.split(","):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        label, _, url = chunk.partition("|")
-        label, url = label.strip(), url.strip()
-        if label and url.startswith("http"):
-            feeds.append((label, url))
-    return feeds
-
-
-NEWS_GLOBAL_SOURCE_KEYS = [
-    key.strip().lower()
-    for key in os.environ.get(
-        "NEWS_GLOBAL_SOURCES",
-        "futu,sina,gnews,gnews_us,gnews_kr",
-    ).split(",")
-    if key.strip()
+NEWS_GLOBAL_SOURCE_KEYS = ["futu", "sina", "gnews", "gnews_us", "gnews_kr"]
+NEWS_RSS_FEEDS: list[tuple[str, str]] = [
+    ("mk-stock", "https://www.mk.co.kr/rss/50200011/"),
 ]
-NEWS_RSS_FEEDS = _parse_rss_feeds()
 NEWS_SOURCE_FAILURE_THRESHOLD = 3
 # 주기가 60분이라 60분 쿨다운은 한 주기도 쉬지 못하고 곧바로 다시 불린다.
 # 연속 실패한 소스는 두 주기를 쉬게 둔다.
 NEWS_SOURCE_COOLDOWN_MINUTES = 120
 # 뉴스 메시지에 감성 점수 표기 여부와, 관심종목 부정 뉴스 경고 기준(-1~0).
-NEWS_SENTIMENT_ENABLED = _env_bool("NEWS_SENTIMENT_ENABLED", "true")
+NEWS_SENTIMENT_ENABLED = True
 NEWS_NEGATIVE_ALERT_THRESHOLD = -0.6
 # /view 감성 뷰 집계에 사용할 최근 신호 일수.
 VIEW_LOOKBACK_DAYS = 3
@@ -315,7 +294,7 @@ VIEW_LOOKBACK_DAYS = 3
 # 최신순으로 채워, 읽히지 않는 번역에 Neurons를 태웠다. 주기를 늘리면 한
 # 주기가 보는 후보 폭이 3배가 되어 같은 번역 건수로 더 나은 기사를 고른다.
 # 이 값을 되돌릴 때는 NEWS_SOURCE_COOLDOWN_MINUTES도 함께 본다.
-SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "60"))
+SCHEDULER_INTERVAL_MINUTES = 60
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
 RESEARCH_ANALYSIS_TIMEOUT = 600
@@ -353,14 +332,14 @@ NON_URGENT_DEFER_TIMEOUT_SECONDS = 180
 RESEARCH_REMOVE_RELEVANCE_THRESHOLD = 0.35
 RESEARCH_HISTORY_LIMIT = 5
 # 강세 섹터 구성종목을 리서치 후보군에 추가
-RESEARCH_SECTOR_CANDIDATES_ENABLED = _env_bool("RESEARCH_SECTOR_CANDIDATES_ENABLED", "true")
+RESEARCH_SECTOR_CANDIDATES_ENABLED = True
 RESEARCH_SECTOR_CANDIDATE_LIMIT = 14
 # 미국 후보 발굴: Yahoo Finance 프리셋 스크리너(yfinance.screen).
-RESEARCH_US_CANDIDATES_ENABLED = _env_bool("RESEARCH_US_CANDIDATES_ENABLED", "true")
+RESEARCH_US_CANDIDATES_ENABLED = True
 RESEARCH_US_CANDIDATE_LIMIT = 12
 RESEARCH_US_SCREENERS = ("day_gainers", "most_actives")
 # 한국 후보 발굴: FinanceDataReader KRX 시세 목록의 등락률 상위.
-RESEARCH_KR_CANDIDATES_ENABLED = _env_bool("RESEARCH_KR_CANDIDATES_ENABLED", "true")
+RESEARCH_KR_CANDIDATES_ENABLED = True
 RESEARCH_KR_CANDIDATE_LIMIT = 12
 # 거래대금(원) 하한. 급등만 보고 잡주를 추천 후보로 올리지 않기 위한 필터.
 RESEARCH_KR_MIN_TRADING_VALUE = 5000000000.0
@@ -375,25 +354,13 @@ NEWS_LOG_RETENTION_DAYS = 30
 # Source-to-market mapping for the market sentiment dashboard.  Values are
 # ISO-like market keys (CN, HK, US, KR, JP, ...); an unmapped source is kept as
 # "OTHER" instead of being silently mixed into another market.
-def _parse_market_map() -> dict[str, str]:
-    raw = os.environ.get("NEWS_SOURCE_MARKETS", "").strip()
-    mapping: dict[str, str] = {
-        "futu": "CN",
-        "sina": "CN",
-        "gnews_us": "US",
-        "gnews_kr": "KR",
-    }
-    for item in raw.split(","):
-        source, separator, market = item.rpartition(":")
-        if not separator:
-            continue
-        source, market = source.strip().lower(), market.strip().upper()
-        if source and market:
-            mapping[source] = market
-    return mapping
-
-
-NEWS_SOURCE_MARKETS = _parse_market_map()
+NEWS_SOURCE_MARKETS = {
+    "futu": "CN",
+    "sina": "CN",
+    "gnews_us": "US",
+    "gnews_kr": "KR",
+    "mk-stock": "KR",
+}
 MARKET_CHART_LOOKBACK_DAYS = 7
 MARKET_CHART_MIN_ARTICLES = 6
 MARKET_CHART_MIN_DAYS = 3
@@ -424,11 +391,10 @@ MARKET_DIGEST_COUNT_TOLERANCE_RATIO = 0.2
 # ── 전일 움직임 ↔ 당일 개장 전 센티먼트 아노말리 ─────────
 # 구현과 승격을 분리한다. 백필 G0·G6·G7을 확인하기 전에는 기존 /market 화면을
 # 유지하고, true일 때만 세션 기반 수집 job과 새 화면을 사용한다.
-MARKET_ANOMALY_ENABLED = _env_bool("MARKET_ANOMALY_ENABLED", "false")
-MARKET_ANOMALY_COLLECTION_ENABLED = _env_bool(
-    "MARKET_ANOMALY_COLLECTION_ENABLED",
-    "false",
-)
+MARKET_ANOMALY_ENABLED = False
+# G5 라이브 수집 기간에만 명시적으로 켠다(뉴스·LLM 할당량 사용). 끌 때는
+# 이 리터럴을 false로 바꾸고 커밋한다.
+MARKET_ANOMALY_COLLECTION_ENABLED = True
 MARKET_ANOMALY_FILE = DATA_DIR / "market_sentiment" / "overnight_tone.json"
 MARKET_ANOMALY_BACKFILL_FILE = (
     DATA_DIR / "market_sentiment" / "anomaly_backfill.json"
@@ -461,8 +427,8 @@ POLYMARKET_BACKFILL_FILE = DATA_DIR / "market_sentiment" / "polymarket_backfill.
 POLYMARKET_BASE_URL = "https://gamma-api.polymarket.com"
 # 과거 시세는 Gamma가 아니라 CLOB에 있다. 인증은 마찬가지로 없다.
 POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
-POLYMARKET_ENABLED = _env_bool("POLYMARKET_ENABLED", "false")
-POLYMARKET_PANEL_ENABLED = _env_bool("POLYMARKET_PANEL_ENABLED", "false")
+POLYMARKET_ENABLED = True
+POLYMARKET_PANEL_ENABLED = False
 # Gamma가 이 서버 출구 IP의 지역을 막을 때만 채운다(docs/server-ops.md 8-4).
 # 비어 있으면(기본) 직접 호출한다 — polymarket_proxy.py가 이 값 하나로
 # 세션에 프록시를 물릴지 말지를 정한다.
@@ -494,13 +460,14 @@ NEWS_MARKET_BACKFILL_QUERIES = {
 }
 
 # 모닝/마감 브리핑과 관심종목 편입·편출 성과표(호스트 현지 시각 기준 cron)
-BRIEFING_MORNING_ENABLED = _env_bool("BRIEFING_MORNING_ENABLED", "true")
-BRIEFING_MORNING_HOUR = int(os.environ.get("BRIEFING_MORNING_HOUR", "8"))
-BRIEFING_MORNING_MINUTE = int(os.environ.get("BRIEFING_MORNING_MINUTE", "50"))
-BRIEFING_EVENING_ENABLED = _env_bool("BRIEFING_EVENING_ENABLED", "true")
-BRIEFING_EVENING_HOUR = int(os.environ.get("BRIEFING_EVENING_HOUR", "17"))
-BRIEFING_EVENING_MINUTE = int(os.environ.get("BRIEFING_EVENING_MINUTE", "40"))
-BRIEFING_LLM_ENABLED = _env_bool("BRIEFING_LLM_ENABLED", "true")
+# BRIEFING_LLM_ENABLED는 위(줄 120)에 이미 정의돼 있다 — Cloudflare 자격증명
+# 검증기가 모듈 로딩 중간에 그 값을 곧바로 써야 해서 앞으로 옮겼다.
+BRIEFING_MORNING_ENABLED = True
+BRIEFING_MORNING_HOUR = 8
+BRIEFING_MORNING_MINUTE = 50
+BRIEFING_EVENING_ENABLED = True
+BRIEFING_EVENING_HOUR = 17
+BRIEFING_EVENING_MINUTE = 40
 BRIEFING_NEWS_MAX_ITEMS = 14
 BRIEFING_PROMPT_FILE = PROMPT_DIR / "briefing_ko.txt"
 BRIEFING_TIMEOUT = 180

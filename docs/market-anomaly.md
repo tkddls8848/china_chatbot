@@ -30,9 +30,11 @@
   KR 4, US 19). 첫 실행 뒤 품질 미달 창도 시도 표본으로 저장하도록 보완했으므로 다음
   실행부터 G7의 `dense_ratio` 분모가 탈락 창을 포함한다.
 - 현재 모든 시장이 G1 최소 표본 120개에 미달하고 G6 재채점·G7 원천 감사도 아직
-  수행 전이다. 따라서 G0·G6·G7은 실패 상태이며 `MARKET_ANOMALY_ENABLED=false`를
-  유지한다. G5 측정 기간에는 외부 호출 비용을 명시적으로 승인한 뒤
-  `MARKET_ANOMALY_COLLECTION_ENABLED=true`만 켠다. 표본을 며칠에 나눠 채운 뒤
+  수행 전이다. 따라서 G0·G6·G7은 실패 상태이며 `config.py`의
+  `MARKET_ANOMALY_ENABLED`를 `False`로 유지한다. G5 측정 기간에는 외부 호출
+  비용을 명시적으로 승인한 뒤 `MARKET_ANOMALY_COLLECTION_ENABLED`만 `True`로
+  켠다(2026-08-23부터 이 둘도 env가 아니라 `config.py` 리터럴이다 — 값을
+  바꾸려면 코드를 고치고 커밋한다). 표본을 며칠에 나눠 채운 뒤
   `--rescore`, `--audit`, `--report` 순으로 판정해야 한다.
 - 관련 단위 테스트 12개와 저장소 전체 테스트 457개, ruff를 통과했다. 운영 데이터
   게이트가 통과하기 전에는 4~5단계를 완료로 간주하지 않는다.
@@ -358,7 +360,7 @@ prompts/overnight_tone_ko.txt
 | 기능 키 | **새로 만들지 않는다.** `market_sentiment` 안 | 산출물이 바뀌는 것이지 새 기능이 아니다. 폴리마켓과 같은 판단 |
 | 상태 파일 | `data/market_sentiment/overnight_tone.json`(라이브), `anomaly_backfill.json`(백필) | 6절대로 섞지 않는다 |
 | 보존 | 180일 | 게이트가 60창을 보고 30일 화면이 그 위에 얹힌다. 창 하나가 한 줄이라 4시장×180일=720줄, 사전선별식 offset 이어 읽기가 필요 없다 |
-| env 키 | 화면 `MARKET_ANOMALY_ENABLED`, 비용 발생 수집 `MARKET_ANOMALY_COLLECTION_ENABLED`(둘 다 기본 `false`) | 수집은 G5 측정 기간에만 별도 승인해 켠다. 임계값·회귀 창·표본 하한은 코드 상수다. env로 빼면 서버와 로컬의 판정이 갈려 게이트 표본이 섞인다(`docs/next-steps.md` A-9와 같은 규약) |
+| 플래그 | 화면 `MARKET_ANOMALY_ENABLED`, 비용 발생 수집 `MARKET_ANOMALY_COLLECTION_ENABLED`(둘 다 기본 `False`) | 수집은 G5 측정 기간에만 별도 승인해 켠다. 임계값·회귀 창·표본 하한과 이 두 플래그 전부 `config.py` 리터럴이다(2026-08-23부터). env로 빼면 서버와 로컬의 판정이 갈려 게이트 표본이 섞인다(`docs/polymarket-web.md` A-9와 같은 규약) |
 | 스케줄 | 시장별 `open(D+1)` 직후, +2시간 재시도 창 | 창의 끝이 개장이다. 놓쳐도 백필 경로가 같은 코드라 회수된다 — 폴리마켓 스냅숏과 달리 하루를 잃지 않는다 |
 | Neurons | 하루 4회 ≈ 35 | 지금 `/market`은 요청당 최대 40회를 부른다. **총량은 오히려 준다** |
 | CPU | 회귀는 시장당 최대 60점의 Theil–Sen. 캘린더 빌드 기동 시 1회(XKRX 1.96s) | 일 4점 운영 계산은 미미하다. 180세션 전체 walk-forward는 백필에서만 수행 |

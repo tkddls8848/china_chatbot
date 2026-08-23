@@ -109,34 +109,29 @@ getUpdates request`를 돌려주고 **양쪽이 번갈아 죽는다.** 로컬 �
 잡는다 — `data/`는 영구 루트 디스크에 있어 재부팅으로 사라지지 않지만,
 스냅숏 창을 덮으면 그날 하루치를 잃는다.
 
-## 5. 설정 변경 (`.env`)
+## 5. 설정 변경
 
-환경변수는 `app/core/config.py`에서만 읽는다. **`.env`의 명시값이 코드 기본값을
-이기므로**, 코드 기본값이 바뀌어도 `.env`에 옛 값이 적혀 있으면 옛 동작을 본다.
+**`.env`는 비밀값·자격증명만 갖는다**(토큰, 비밀번호, 프록시 URL, chat id).
+그 외 모든 설정 — 기능 켜기/끄기, 수량·주기 같은 튜닝값 — 은
+`app/core/config.py`의 리터럴 상수다(2026-08-23 정리). 값을 바꾸려면 코드를
+고치고 git에 커밋한다 — 서버 `.env`를 직접 고치던 예전 방식은 무엇을 언제
+왜 바꿨는지가 서버에만 남고 git 이력에는 없었다.
 
-현재 서버가 명시해야 하는 값:
-
-| 키 | 현재 값 | 왜 |
-|---|---:|---|
-| `ALLOWED_CHAT_IDS` | 최소 한 개의 숫자 | **비면 기동하지 않는다**(아래) |
-| `FEATURES_ENABLED` | `news_prefilter` 포함 | 켜야 사전선별 관측이 시작된다 |
-| `NEWS_SOURCE_ARTICLE_LIMIT` | 250 | 사전선별이 깊이를 CPU로 산다. Neurons는 안 늘어난다 |
-| `SCHEDULER_INTERVAL_MINUTES` | 60 | 한 주기가 보는 후보 폭을 키운다 |
-| `NEWS_DIGEST_SEND_LIMIT` | 2 | 번역 4건 중 2건만 송출 |
-| `NEWS_GLOBAL_LIMIT` | 4 | 소스당 한 주기 번역 건수 |
-
-```env
-FEATURES_ENABLED=instruments,quant,watchlist,news_prefilter,news,market_sentiment,research,briefing,signal_scoring,system_admin,web_admin
-NEWS_SOURCE_ARTICLE_LIMIT=250
-SCHEDULER_INTERVAL_MINUTES=60
-NEWS_DIGEST_SEND_LIMIT=2
+```bash
+cd ~/stock_chatbot
+git log -1 --oneline        # 갱신 전 커밋을 기억해 둔다
+git pull
+sudo systemctl restart stock-chatbot
 ```
 
-`NEWS_SOURCE_ARTICLE_LIMIT` 250은 `news_prefilter`가 함께 켜져 있을 때만 쓴다.
-둘 중 하나만 올리면 깊이만 커지고 고르는 기준은 그대로다.
-
-`NEWS_PREFILTER_MODE`(shadow)와 `NEWS_NIGHT_*`(KST 00~07시)는 서버 `.env`에 없고
-코드 기본값이 먹는다 — **없는 키를 새로 넣지 않는다.** 값을 바꿔야 할 때만 넣는다.
+지금 서버 `.env`에 남아 있어야 하는 키는 `.env.example`에 적힌 것뿐이다:
+`TELEGRAM_BOT_TOKEN`·`TELEGRAM_CHAT_ID`·`ALLOWED_CHAT_IDS`·
+`CLOUDFLARE_ACCOUNT_ID`·`CLOUDFLARE_API_TOKEN`·`CLOUDFLARE_MODEL`(모델
+폐기·개명에 코드 배포 없이 대응하는 유일한 예외)·`WEB_ADMIN_USER`·
+`WEB_ADMIN_PASSWORD`·`POLYMARKET_PROXY_URL`. 이 목록 밖의 키가 `.env`에
+남아 있다면(예: 옛 `NEWS_GLOBAL_LIMIT=4`) 지운다 — `load_dotenv`가 이걸
+`os.environ`에 얹어도 더 이상 아무도 읽지 않으니 무해하지만, 다음에 값을
+바꿀 때 "여기 있는 값이 진짜인가" 혼란을 남긴다.
 
 **`ALLOWED_CHAT_IDS`가 비면 `ConfigurationError`로 기동하지 않는다.** 빈 값을
 전체 허용으로 읽던 분기를 없앴기 때문이다(상태가 채팅별로 나뉘어 있지 않아
@@ -174,8 +169,9 @@ journalctl -u stock-chatbot --since "$(date -u -d '6 days ago' '+%Y-%m-%d 00:00:
 
 **판정과 조치**
 
-- 한도를 넘기면 `NEWS_SOURCE_ARTICLE_LIMIT`부터 내린다. 하루 기사량을 정하는
-  상한은 송출 상한(`NEWS_DIGEST_SEND_LIMIT`)이 아니라 이 값이다.
+- 한도를 넘기면 `config.py`의 `NEWS_SOURCE_ARTICLE_LIMIT`부터 내리고 커밋한다.
+  하루 기사량을 정하는 상한은 송출 상한(`NEWS_DIGEST_SEND_LIMIT`)이 아니라
+  이 값이다.
 - 소진되면 그날 남은 시간 동안 `/research`와 `/market`이 **막힌다.** 뉴스
   다이제스트만 비는 게 아니다.
 - 여유가 크게 남으면 깊이(본문 길이·후보 수)를 먼저 올린다. **깊이는 싸고
@@ -197,8 +193,9 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 ```
 
 `중단=budget`이 **매일** 나오면 예산이 아니라 관측량을 먼저 줄인다. 배경 보정은
-하루 4.2 vCPU-hour(전체 4.8h의 87.5%) 안에서만 돌고, 긴급 뉴스 구간·load average
-1.5 이상에서는 스스로 물러난다.
+지출일 기준 하루 6.0h(`NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS`) 안에서만
+돌고, 이틀에 하루는 충전일로 페이스를 낮춘다(10절, CLAUDE.md 변경 원칙 참고).
+긴급 뉴스 구간·load average 1.5 이상에서도 스스로 물러난다.
 
 일주일 뒤 `/system prefilter`로 네 축을 본다.
 
@@ -217,11 +214,11 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 
 **판정과 조치**
 
-- 네 축 통과 → 서버 `.env`에 `NEWS_PREFILTER_MODE=active`. 탐색 슬롯 1개가 번역
-  슬롯 하나를 임의 깊이 기사에 배정하기 시작하므로 그 뒤부터 편향 없는 라벨이
-  쌓인다. 다시 일주일 뒤 AUC를 재읽는다.
+- 네 축 통과 → `config.py`의 `NEWS_PREFILTER_MODE`를 `"active"`로 바꾸고
+  커밋·배포한다. 탐색 슬롯 1개가 번역 슬롯 하나를 임의 깊이 기사에 배정하기
+  시작하므로 그 뒤부터 편향 없는 라벨이 쌓인다. 다시 일주일 뒤 AUC를 재읽는다.
 - 불일치가 0에 가까움 → 깊이만 올린 셈이니 `NEWS_SOURCE_ARTICLE_LIMIT`을 30으로
-  되돌리고 기능을 끈다. 점수가 순서를 못 바꾸면 유지할 값이 없다.
+  되돌리고(커밋) 기능을 끈다. 점수가 순서를 못 바꾸면 유지할 값이 없다.
 - AUC가 0.5 근처 → 올리지 않는다. 가중치를 손보기 전에 어떤 feature가 실제로
   살아 있는지 본다(실측: 종목 매칭은 원문 제목의 8.2%에서만 걸린다).
 
@@ -301,12 +298,9 @@ job이 도중에 막히면(가동률 게이트가 이미 값을 쌓아 온 신�
 백필을 기다렸다 수집을 켤 이유가 없다. 수집은 Neurons를 쓰지 않고 표시도 꺼져
 있어 켜 두는 비용이 사실상 없으며, 그동안 가동률 일주일이 저절로 쌓인다.
 
-서버 `.env`에 한 줄만 넣고 재기동한다. `POLYMARKET_PANEL_ENABLED`는 `false`
-그대로 둔다 — **수집하되 표시하지 않는다.**
-
-```env
-POLYMARKET_ENABLED=true
-```
+`config.py`의 `POLYMARKET_ENABLED`를 `True`로 바꾸고 커밋·배포한다.
+`POLYMARKET_PANEL_ENABLED`는 `False` 그대로 둔다 — **수집하되 표시하지
+않는다.**
 
 같은 날 **서버에서** 백필을 한 번 돌린다. 로컬에서 돌려도 판정은 같지만, 서버
 파일이어야 `/system polymarket`이 두 축을 한 화면에 그린다.
@@ -339,15 +333,18 @@ cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
 `polymarket_history.py` 첫머리에도 적어 두었다. **지운 채로 승격하지 않는다.**
 
 - 백필 미달 → **거기서 끝낸다.** 라이브를 30일 더 봐도 같은 항목이 통과할 근거는
-  없다. `POLYMARKET_ENABLED`를 되돌리고 8-5로 간다.
+  없다. `config.py`의 `POLYMARKET_ENABLED`를 `False`로 되돌리고(커밋) 8-5로 간다.
 - 백필 통과 → 일주일 뒤 최근 7일 스냅숏이 6일 이상인지만 확인하고
-  `POLYMARKET_PANEL_ENABLED=true`로 올린다. 그 뒤 `/market`을 한 번 호출해 하단
-  패널이 붙는지, 위 순위·캡션이 그대로인지 눈으로 확인한다.
+  `config.py`의 `POLYMARKET_PANEL_ENABLED`를 `True`로 올린다(커밋). 그 뒤
+  `/market`을 한 번 호출해 하단 패널이 붙는지, 위 순위·캡션이 그대로인지
+  눈으로 확인한다.
 
-게이트 임계값(`POLYMARKET_MIN_VOLUME` 등)은 백필과 라이브 사이에 바꾸지 않는다.
-바꾸면 두 표본이 달라져 백필 판정을 라이브에 얹을 수 없다. 그래서 env가 아니라
-`config.py`의 상수다 — 바꾸려면 코드를 고쳐야 하고 git에 남는다. env로 남은 키는
-`POLYMARKET_ENABLED`·`POLYMARKET_PANEL_ENABLED` 둘뿐이다.
+게이트 임계값(`POLYMARKET_MIN_VOLUME` 등)과 `POLYMARKET_ENABLED`·
+`POLYMARKET_PANEL_ENABLED`는 전부 `config.py`의 상수다 — 바꾸려면 코드를
+고쳐야 하고 git에 남는다. 백필과 라이브 사이에 게이트 임계값을 바꾸지
+않는 이유는 바꾸면 두 표본이 달라져 백필 판정을 라이브에 얹을 수 없어서다.
+env로 남은 폴리마켓 키는 `POLYMARKET_PROXY_URL` 하나뿐이다(지역 차단용
+자격증명이 섞여 있어 git에 올릴 수 없다, 8-4).
 
 ### 8-4. 라이브 수집이 지역 차단(451)에 막히면 — 프록시
 
@@ -413,7 +410,9 @@ CLI로 키를 뽑아내거나 방화벽을 여는 건 항상 막힌다) 로컬 C
 
 기준 미달을 "조금만 더 보자"로 넘기지 않는다.
 
-1. 서버 `.env`에서 `POLYMARKET_*` 전부 제거, 봇 재기동.
+1. `config.py`의 `POLYMARKET_ENABLED`·`POLYMARKET_PANEL_ENABLED`를 둘 다
+   `False`로 바꾸고 커밋·배포한다. 서버 `.env`에 `POLYMARKET_PROXY_URL`이
+   있으면 지우고 재기동한다.
 2. 서버·로컬의 `data/market_sentiment/polymarket_consensus.json`과
    `polymarket_backfill.json` 삭제.
 3. 코드 제거 — 파일 통째 삭제:
@@ -424,7 +423,7 @@ CLI로 키를 뽑아내거나 방화벽을 여는 건 항상 막힌다) 로컬 C
    - `app/features/market_sentiment/snapshot.py`
    - `app/polymarket_backfill.py`
    - `app/state/polymarket_consensus.py`
-   - `tests/test_polymarket_{client,rules,consensus,panel,wiring,history,smoke}.py`
+   - `tests/test_polymarket_{client,rules,consensus,panel,wiring,history,smoke,proxy}.py`
 4. 코드 제거 — 부분 되돌리기:
    - `app/core/config.py`의 `POLYMARKET_*` 블록
    - `app/features/market_sentiment/feature.py`의 서비스·job 조립

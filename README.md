@@ -105,12 +105,9 @@ RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
 
 ## 관리 웹 (선택)
 
-봇 프로세스에 내장되는 관리용 웹 대시보드로, 관심 종목·뉴스·리서치·시스템 상태를 브라우저에서 확인·관리합니다. 다른 기능과 같이 `FEATURES_ENABLED`의 `web_admin` 키로 켜고 끄며, 봇을 제어하므로 비밀번호를 지정해야만 기동합니다.
+봇 프로세스에 내장되는 관리용 웹 대시보드로, 관심 종목·뉴스·리서치·시스템 상태를 브라우저에서 확인·관리합니다. 다른 기능과 같이 `app/core/config.py`의 `FEATURES_ENABLED`에 `web_admin` 키가 들어 있으면 켜지며, 봇을 제어하므로 비밀번호를 지정해야만 기동합니다. 호스트·포트는 `127.0.0.1:8787` 고정 리터럴이고, 사용자·비밀번호만 `.env`에 둡니다.
 
 ```env
-FEATURES_ENABLED=...,web_admin
-WEB_ADMIN_HOST=127.0.0.1
-WEB_ADMIN_PORT=8787
 WEB_ADMIN_USER=admin
 WEB_ADMIN_PASSWORD=<반드시 지정>
 ```
