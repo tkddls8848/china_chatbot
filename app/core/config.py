@@ -261,6 +261,18 @@ NEWS_PREFILTER_CALIBRATION_DAILY_BUDGET_SECONDS = 21600.0
 # 긴급 뉴스 구간과 load average를 다시 확인해 오래 가로막지 않는다.
 NEWS_PREFILTER_MAINTENANCE_INTERVAL_MINUTES = 1
 NEWS_PREFILTER_MAINTENANCE_SLICE_SECONDS = 15.0
+# 15초 페이스는 관측 총사용률을 baseline(micro_3_0 10%) 위로 올려 버스트
+# 크레딧을 계속 쓰기만 한다(실측 2026-08-23: 12%). 계속 쓰기만 하면 크레딧이
+# 결국 마른다 — Lightsail 크레딧 잔량은 API로 못 읽으므로(GetInstanceMetricData가
+# IAM에서 막혀 있다) 정확한 소진 시점을 코드로 계산하지 않는다. 대신 날짜
+# 홀짝으로 이틀에 한 번은 이 값 대신 아래 충전용 슬라이스로 낮춰 충전 구간을
+# 강제로 둔다(`_maintenance_slice_seconds`, feature.py). 충전일 페이스는
+# baseline보다 확실히 낮게 잡아야 순 충전이 된다 — 4초면 듀티사이클이
+# 4/60 ≈ 6.7%(1vCPU) = 약 3.3%p(2vCPU)로 다른 부하를 더해도 10%를 넉넉히
+# 밑돈다. 이 비율(하루걸러 하루)은 시작점일 뿐이다 — 콘솔의 실제 burst
+# capacity 그래프가 계속 내려가면 충전일을 늘리고, 여유가 쌓이기만 하면
+# 지출일을 늘린다.
+NEWS_PREFILTER_MAINTENANCE_RECHARGE_SLICE_SECONDS = 4.0
 NEWS_PREFILTER_MAINTENANCE_CHUNK_SECONDS = 2.0
 NEWS_PREFILTER_MAX_LOAD_AVERAGE = 1.5
 

@@ -170,6 +170,17 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   확인해 오래 가로막지 않는다. Lightsail `micro_3_0`(2 vCPU, vCPU당
   baseline 10% = 하루 4.8 vCPU-hour)의 `NEWS_PREFILTER_LIGHTSAIL_*` 상수는
   참고치일 뿐 위 계산에 관여하지 않는다.
+- **15초 페이스를 매일 쓰면 관측 총사용률이 baseline 위에 계속 머물러
+  버스트 크레딧을 쓰기만 한다**(실측 2026-08-23: 12%). Lightsail 크레딧
+  잔량은 API로 못 읽으므로(`GetInstanceMetricData`가 IAM에서 막혀 있다)
+  코드가 남은 크레딧을 보고 스스로 조절할 수 없다. 그래서
+  `run_prefilter_maintenance`(`features/news_prefilter/feature.py`)가
+  `today()` 날짜 홀짝으로 이틀에 하루는 충전일로 강제한다 — 그날은 슬라이스를
+  `NEWS_PREFILTER_MAINTENANCE_RECHARGE_SLICE_SECONDS`(4초, baseline을 확실히
+  밑도는 값)로 낮춰 순 충전이 나게 하고, 나머지 하루는 평소 15초로 쓴다.
+  이 이틀 주기는 시작점일 뿐이다 — Lightsail 콘솔의 실제 burst capacity
+  그래프가 계속 내려가면 충전일을 늘리고, 여유가 쌓이기만 하면 지출일을
+  늘린다.
 - 상태 파일은 `data/<feature>/`에 둔다. 설정은 상태 파일에 저장하지 않는다.
 - **상태 파일은 `core/storage.py`의 원자적 쓰기로만 저장한다.** 대상 파일을 직접
   열어 쓰면 그 순간 내용이 비고, 실패하면 잘린 JSON이 남아 다음 기동이 상태를
@@ -189,7 +200,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   **절차서**다(접속·배포·설정·실측·판정·백업·장애). 절차이므로 항목이 끝나도
   지우지 않는다. 인스턴스 생성·최초 전환·삭제는 `iac/terraform/README.md`에만 있다.
   나머지는 **계획서**이고 항목이 끝나면 지운다 — 완료 기록은 git 이력이 맡는다.
-  현재 계획서는 둘이다: `docs/next-steps.md`(리서치·시장 컨센서스의 웹 서비스화,
+  현재 계획서는 둘이다: `docs/polymarket-web.md`(리서치·시장 컨센서스의 웹 서비스화,
   세력 행동 추정, 미 대통령 게시물 추적)와 `docs/market-anomaly.md`(시장 감성을
   추세에서 이상 탐지로 바꾸기). **계획서를 새로 파는 것은 주제가 기존 계획서와
   독립일 때뿐이고, 다 끝나면 파일째 지운다.** 종류를 섞지 않는다: 절차서에 할 일을
