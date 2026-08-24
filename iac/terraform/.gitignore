@@ -5,7 +5,7 @@
 crash.log
 crash.*.log
 
-# 실제 값. *.tfvars.example만 커밋한다(리전 전환 등 임시 tfvars도 포함).
+# 실제 값. *.tfvars.example만 커밋한다.
 *.tfvars
 !*.tfvars.example
 *.auto.tfvars

@@ -32,9 +32,8 @@ Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정�
    aws lightsail get-bundles --region ap-northeast-1 --query 'bundles[?bundleId==`micro_3_0`]'   # 확인
   ```
 
-   `iam-policy.json`은 이 디렉터리에 있고, 서울→도쿄 이전 기간인 현재는
-   `ap-northeast-1`·`ap-northeast-2` 두 리전을 허용한다. 서울을 정리한 뒤에는
-   `aws:RequestedRegion`을 `ap-northeast-1` 하나로 다시 좁힌다.
+   `iam-policy.json`은 이 디렉터리에 있고, 운영 리전인 도쿄
+   (`ap-northeast-1`)만 허용한다.
 
    **이미 붙어 있는 정책을 고칠 때는 `create-policy`가 아니라 새 버전을 만든다**
    (관리형 정책은 버전이 있고 5개가 차면 오래된 버전부터 지워야 한다):
@@ -42,9 +41,7 @@ Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정�
    $arn = (aws iam list-policies --query "Policies[?PolicyName=='StockChatbotLightsail'].Arn" --output text)
    aws iam create-policy-version --policy-arn $arn --policy-document file://iam-policy.json --set-as-default
    ```
-   리전을 두 개 다 허용해 둔 임시 상태(2026-08-23, 서울→도쿄 이전 기간)라면
-   이전이 끝나고 서울을 정리한 뒤 `ap-northeast-1` 하나로 다시 좁힌다 —
-   최소 권한 원칙을 그대로 두는 게 목적이라 이전 기간에만 두 리전을 연다.
+   기존 정책에도 이 파일을 반영해야 리전 조건이 도쿄 하나로 좁혀진다.
 
    **root 자격증명으로는 붙일 대상이 없다.** `aws sts get-caller-identity`의 `Arn`이
    `:root`로 끝나면 IAM 사용자가 아니라는 뜻이고, `attach-user-policy`에 계정 이메일을
@@ -75,21 +72,20 @@ git rev-list --count origin/main..HEAD   # 0이어야 한다
 
 ## 실행
 
-현재 운영 서버는 `tokyo` workspace에 있고 `tokyo.tfvars`(gitignore됨)를 사용한다.
+현재 운영 서버는 `default` workspace에 있고 `terraform.tfvars`(gitignore됨)를 사용한다.
+리전과 AZ의 기준값은 도쿄(`ap-northeast-1`, `ap-northeast-1a`)다.
 
 ```powershell
 cd iac\terraform
 terraform init
-terraform workspace select tokyo
-terraform plan -var-file=tokyo.tfvars
-terraform apply -var-file=tokyo.tfvars
+terraform workspace select default
+terraform plan
+terraform apply
 ```
 
-**`tokyo` workspace에서는 `-var-file=tokyo.tfvars`를 절대 빠뜨리지 않는다.**
-`terraform.tfvars`는 옵션을 주지 않아도 항상 자동 로드되며, 현재 로컬 파일에는 서울
-롤백 값이 남아 있다. var-file을 생략하면 도쿄 리소스를 서울 값으로 파괴·재생성하는
-plan이 나올 수 있다. 새 환경을 처음 만들 때만 `terraform.tfvars.example`을
-`terraform.tfvars`로 복사하고 SSH 키 경로와 접근 CIDR을 확인한다.
+`terraform.tfvars`는 옵션을 주지 않아도 자동 로드된다. 새 환경을 처음 만들 때는
+`terraform.tfvars.example`을 `terraform.tfvars`로 복사하고 SSH 키 경로와 접근 CIDR을
+확인한다.
 
 apply는 1~~2분이면 끝나지만 **부트스트랩은 그 뒤로 5~~10분 더 걸린다**(pip이 pandas를
 빌드한다). 진행 상황:
@@ -201,6 +197,6 @@ sudo systemctl restart stock-chatbot
 
 ```powershell
 # 인프라 삭제 — data/는 함께 사라진다. 먼저 스냅샷을 찍는다.
-terraform destroy -var-file=tokyo.tfvars
+terraform destroy
 ```
 

@@ -15,29 +15,13 @@
 
 ---
 
-## 0. 리전 이전 진행 중 (2026-08-23, 서울 → 도쿄)
+## 0. 운영 리전
 
-Polymarket이 한국 IP를 지역 차단(451, 8-4)해 도쿄 실측을 했고, 그 결과를 근거로
-운영 서버 자체를 도쿄로 옮겼다. `iac/terraform/`은 workspace로 나뉜다 —
-`tokyo`가 지금 운영 중인 서버(1GB `micro_3_0`, `ap-northeast-1`)이고 `default`는
-서울(정지됨, 롤백용으로 며칠 더 둔다). `tokyo.tfvars`(gitignore됨)를 쓴다.
-
-**이전 정리 체크리스트** — 설정 전환은 먼저 반영했고, 나머지는 관찰 기간이 끝나면
-처리한다:
-
-- [ ] 서울 인스턴스·고정 IP 삭제(`terraform workspace select default && terraform destroy`)
-- [ ] 서울 destroy가 끝나면 `iac/terraform/seoul-rollback/` 폴더째 삭제
-- [x] `iac/terraform/variables.tf`와 `terraform.tfvars.example`의 리전·AZ를
-      도쿄로, `manage_firewall`을 `false`로 바꾸고 리전 설명을 실제 이전 사유로 수정
-- [ ] `tokyo` workspace를 `default`로 흡수(또는 반대로 `tokyo` workspace와
-      `tokyo.tfvars`를 운영 기준으로 유지하고 서울용 `terraform.tfvars`를 정리)
-- [ ] `iam-policy.json`의 `aws:RequestedRegion`을 `ap-northeast-1` 하나로 다시
-      좁힌다(지금은 이전 기간이라 서울·도쿄 둘 다 열어 둠) — 관리자 권한으로
-      `create-policy-version` 재적용 필요
-- [ ] `POLYMARKET_PROXY_URL`을 서버 `.env`에서 지운다(도쿄는 차단 안 되므로
-      더 이상 안 씀 — 코드는 그대로 둬도 무해하니 급하지 않다)
-- [ ] 더 이상 쓰지 않는 `polymarket-proxy-tokyo` 인스턴스 삭제
-- [ ] 도쿄 리전에 남은 테스트 키페어(`test-kp-tokyo5`) 콘솔에서 삭제
+운영 서버는 도쿄의 1GB `micro_3_0` 인스턴스(`ap-northeast-1a`)다. Polymarket이
+한국 IP를 지역 차단(451)해 도쿄 실측 후 이전했으며, 서울 인프라는 2026-08-24에
+삭제했다. `iac/terraform/`의 `default` workspace와 `terraform.tfvars`가 도쿄 서버만
+관리하고, `iam-policy.json`의 리전 조건도 `ap-northeast-1`만 허용한다. 실제 AWS
+관리형 정책 갱신은 IAM 관리자 자격 증명으로 새 정책 버전을 적용한다.
 
 ## 1. 접속
 
@@ -46,7 +30,6 @@ Polymarket이 한국 IP를 지역 차단(451, 8-4)해 도쿄 실측을 했고, �
 
 ```powershell
 cd iac\terraform
-terraform workspace select tokyo
 terraform output -raw ssh_command
 terraform output -raw public_ip
 terraform output -raw web_admin_tunnel_command   # 8787은 방화벽에서 닫혀 있다
@@ -64,7 +47,7 @@ terraform output -raw web_admin_tunnel_command   # 8787은 방화벽에서 닫�
 `manage_firewall = false`라 Terraform이 방화벽을 관리하지 않는다. 집 IP가 바뀌어
 접속이 막히면 `curl -s https://checkip.amazonaws.com`으로 확인하고 Lightsail 콘솔에서
 허용 IP를 바꾼다. 도쿄 운영 IAM은 `OpenInstancePublicPorts`를 허용하지 않으므로
-`tokyo.tfvars`를 고쳐 `apply`하는 방식은 실패한다.
+`terraform.tfvars`를 고쳐 `apply`하는 방식은 실패한다.
 
 관리 웹 비밀번호는 부트스트랩이 무작위로 만들어 서버 `.env`에 넣었다.
 
@@ -426,8 +409,8 @@ POLYMARKET_PROXY_URL=http://user:pass@proxy-host:port
 뗄 수 있는 부속물로 두는 게 목적이라, 본 배포(`iac/terraform/`)에 편입하지
 않았다. 유지보수(재기동·설정 변경)는 Lightsail 콘솔의 브라우저 SSH로 한다
 — `stock-chatbot-deployer` IAM 자격으로는 `ap-northeast-1`의
-`GetInstanceAccessDetails`·`OpenInstancePublicPorts`가 막혀 있어(서울·도쿄를 허용한
-`iam-policy.json`의 리전 조건과는 별개로, 허용된 리전에서도 CLI로 키를 뽑아내거나
+`GetInstanceAccessDetails`·`OpenInstancePublicPorts`가 막혀 있어(`iam-policy.json`의
+리전 조건과는 별개로, 허용된 도쿄 리전에서도 CLI로 키를 뽑아내거나
 방화벽을 여는 건 항상 막힌다) 로컬 CLI로는 SSH 키를
 받을 수 없다.
 
