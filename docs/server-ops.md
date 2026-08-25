@@ -384,6 +384,12 @@ POLYMARKET_PROXY_URL=http://user:pass@proxy-host:port
 쓰려면 서버에 `pip install pysocks`가 먼저 있어야 한다(requests의 SOCKS
 지원 의존성이고 이 프로젝트가 기본으로 깔지 않는다).
 
+프록시 서버 자체가 연결 불능이거나 경유 요청이 timeout이면 그 프로세스는
+직접 연결로 한 번 failover하고 이후 페이지도 직접 읽는다. Gamma가 응답한
+`HTTP 451`은 프록시 장애가 아니므로 이 전환을 일으키지 않는다. failover 로그가
+보이면 프록시를 복구하거나, 직접 연결이 계속 `200`인 서버라면 아래처럼 설정을
+지워 불필요한 timeout을 없앤다.
+
 떼어낼 때는 `.env`에서 `POLYMARKET_PROXY_URL`을 지우고 재기동하면 된다.
 완전히 걷어내려면(신호로서 가치가 없다고 판단한 경우) 이 값을 지운 뒤
 `polymarket_proxy.py` 파일과 `feature.py`·`polymarket_backfill.py`의
