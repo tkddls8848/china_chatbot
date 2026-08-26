@@ -38,5 +38,20 @@ def write_text_atomic(path: Path, data: str) -> None:
         raise
 
 
+def write_bytes_atomic(path: Path, data: bytes) -> None:
+    """`path`를 바이트 산출물로 원자 교체한다 (PNG 등)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(temporary, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def write_json_atomic(path: Path, payload: Any, *, indent: int | None = None) -> None:
     write_text_atomic(path, json.dumps(payload, ensure_ascii=False, indent=indent))

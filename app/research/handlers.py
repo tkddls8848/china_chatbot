@@ -421,6 +421,23 @@ async def _run_research_job(
             news_count=len(news_items),
             candidate_count=len(candidate_universe),
         )
+        try:
+            from webpub_export import publish_research
+
+            public_result = {
+                **result,
+                "news_count": len(news_items),
+                "candidate_count": len(candidate_universe),
+            }
+            await run_non_urgent(
+                publish_research,
+                market_view,
+                public_result,
+                mvm.get_history_summaries(),
+            )
+        except Exception:
+            # 공개용 사본 실패가 리서치 결과와 텔레그램 전달을 막으면 안 된다.
+            logger.warning("[WEBPUB] 리서치 산출물 저장 실패", exc_info=True)
 
     sections = format_result_sections(
         result,

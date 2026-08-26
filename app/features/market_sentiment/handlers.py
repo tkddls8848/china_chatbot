@@ -320,6 +320,15 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         image = await run_non_urgent(
             render_market_chart, ready_markets, days, consensus
         )
+        try:
+            from webpub_export import publish_market
+
+            await run_non_urgent(
+                publish_market, image.getvalue(), ready_markets, consensus, days
+            )
+        except Exception:
+            # 공개용 사본 실패가 텔레그램의 본래 차트 전송을 막으면 안 된다.
+            logger.warning("[WEBPUB] 시장 산출물 저장 실패", exc_info=True)
         ranking = " | ".join(
             f"{market_label(market)} {stats['avg_sentiment']:+.2f} ({stats['count']})"
             for market, stats in sorted(ready_markets.items(), key=lambda item: item[1]["avg_sentiment"], reverse=True)

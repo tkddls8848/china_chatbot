@@ -1,0 +1,12 @@
+# Caddy는 TLS와 Basic 인증을 처리하고, 내부 전용 웹 프로세스에만 프록시한다.
+# 실제 무료 서브도메인으로 첫 줄을 바꾸고 PASSWORD_HASH를 caddy hash-password
+# 출력으로 교체한다. `http://` 접두사는 쓰지 않는다.
+your-name.duckdns.org {
+    encode zstd gzip
+
+    basic_auth {
+        friend PASSWORD_HASH
+    }
+
+    reverse_proxy 127.0.0.1:8788
+}
