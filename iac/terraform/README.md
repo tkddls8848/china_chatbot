@@ -7,11 +7,12 @@ Lightsail 인프라 생성, 초기화, 서비스 전환 절차를 한곳에 정�
 
 |                                                       | 담당                                       |
 | ----------------------------------------------------- | ---------------------------------------- |
-| Lightsail 인스턴스·고정 IP·SSH 키페어·방화벽(22만)                 | **Terraform**                            |
+| Lightsail 인스턴스·고정 IP·SSH 키페어·방화벽(22·80·443)            | **Terraform**                            |
 | 스왑 2G, 타임존 JST, apt 패키지, git clone, venv, pip install | **user_data 부트스트랩**                      |
 | systemd 유닛 설치, 백업 cron, 자동 스냅샷                        | **user_data 부트스트랩**                      |
 | `.env` 작성(토큰·자격증명)                                    | 사람 (SSH)                                 |
 | `data/` 이관, 로컬 봇 정지, 서비스 기동                           | 사람 (`terraform output cutover_commands`) |
+| 도메인 연결, Caddy 설치·인증서, 공개 웹 노출                        | 사람 (`docs/server-ops.md` 11절)           |
 
 
 **부트스트랩은 봇을 기동하지 않는다.** `data/runtime/bot.lock`은 머신 단위라 다른
@@ -156,11 +157,19 @@ grep WEB_ADMIN_PASSWORD ~/stock_chatbot/.env
 유닛 설치·`daemon-reload`·`enable --now` → `/var/lib/<이름>` 마커와
 `/var/log/<이름>-bootstrap.log`, `/etc/cron.d/<이름>-backup` 교체 → 검증 후 옛 서비스·cron 제거.
 
-**방화벽 리소스는 규칙 전체를 대체한다.** 22만 선언했으므로 Lightsail이 기본으로
-열어두는 80/443도 닫힌다. 의도된 동작이다. 다만 **콘솔에서 손으로 좁힌 규칙은 다음
-`apply`가 `allowed_ssh_cidrs` 값으로 되돌린다.** 콘솔에서 관리하고 싶으면
-`manage_firewall = false`로 두고, 생성 직후 콘솔에서 80/443을 직접 닫는다
-(이 앱은 어떤 웹 포트도 쓰지 않는다).
+**방화벽 리소스는 규칙 전체를 대체한다.** `main.tf`가 선언한 22·80·443만 열리고
+나머지는 닫힌다. 80/443은 공개 웹(Caddy) 몫이고, 관리 웹 8787과 공개 웹 프로세스
+8788은 어느 쪽도 열지 않는다 — 둘 다 `127.0.0.1` 바인딩이다. **콘솔이나 CLI로 손대면
+다음 `apply`가 되돌린다.** 그래서 도쿄 배포는 `manage_firewall = false`로 두고 포트를
+CLI로 바꾼다:
+
+```powershell
+aws lightsail get-instance-port-states --region ap-northeast-1 --instance-name stock-chatbot
+```
+
+`stock-chatbot-deployer` IAM은 `ap-northeast-1`에서 포트 개폐가 허용된다
+(2026-08-26 실측). 예전 주석의 `AccessDenied`는 `iam-policy.json`이 리전을
+`ap-northeast-2`로 걸어 두었을 때의 이야기다.
 
 **`bundle_id` / `blueprint_id`는 리전마다 다를 수 있다.** 값이 거부되면 확인한다:
 

@@ -11,7 +11,8 @@
 |---|---|
 | `iac/terraform/README.md` | 인스턴스 생성, 부트스트랩, 최초 전환(cutover), 삭제 |
 | **이 문서** | 접속, 상태 확인, 배포 갱신, 설정 변경, 실측, 판정, 백업·복구, 장애 대응 |
-| `docs/polymarket-web.md` | 웹 서비스화 계획 (앞으로 만들 것) |
+| `docs/polymarket-web.md` | 웹 공개·`market_actor`·`potus_feed` 계획 (앞으로 만들 것) |
+| `docs/market-anomaly.md` | 시장 감성 이상 탐지 계획 (앞으로 만들 것) |
 
 ---
 
@@ -43,11 +44,23 @@ terraform output -raw web_admin_tunnel_command   # 8787은 방화벽에서 닫�
 | `verify_commands` | 기동 후 검증 묶음 (Neurons 집계 명령 포함) |
 | `rollback_command` | 서버 정지 |
 
-방화벽은 **22번만 열려 있고** 허용 IP가 집 회선으로 좁혀져 있다. 도쿄는
-`manage_firewall = false`라 Terraform이 방화벽을 관리하지 않는다. 집 IP가 바뀌어
-접속이 막히면 `curl -s https://checkip.amazonaws.com`으로 확인하고 Lightsail 콘솔에서
-허용 IP를 바꾼다. 도쿄 운영 IAM은 `OpenInstancePublicPorts`를 허용하지 않으므로
-`terraform.tfvars`를 고쳐 `apply`하는 방식은 실패한다.
+방화벽은 **22·80·443**이 열려 있고 셋 다 `0.0.0.0/0`이다(2026-08-26 실측).
+80·443은 공개 웹(Caddy) 몫이고 11절이 다룬다. 관리 웹 8787과 공개 웹 프로세스
+8788은 **열지 않는다** — 둘 다 `127.0.0.1` 바인딩이다.
+
+도쿄는 `manage_firewall = false`라 Terraform이 방화벽을 관리하지 않는다. 포트는
+CLI로 직접 연다. `stock-chatbot-deployer` IAM은 `ap-northeast-1`에서
+`OpenInstancePublicPorts`가 **허용된다**(2026-08-26 실측). 리전 조건이
+`ap-northeast-2`이던 시절의 `AccessDenied`는 더 이상 나오지 않는다.
+
+```powershell
+aws lightsail get-instance-port-states --region ap-northeast-1 --instance-name stock-chatbot
+aws lightsail open-instance-public-ports --region ap-northeast-1 --instance-name stock-chatbot --port-info fromPort=443,toPort=443,protocol=TCP
+```
+
+22를 집 회선으로 좁히려면 같은 명령의 `--port-info`에 `cidrs=<내 IP>/32`를 붙인다.
+좁힌 뒤 IP가 바뀌어 접속이 막히면 `curl -s https://checkip.amazonaws.com`으로 새
+IP를 확인하고 다시 연다.
 
 관리 웹 비밀번호는 부트스트랩이 무작위로 만들어 서버 `.env`에 넣었다.
 
@@ -57,9 +70,14 @@ grep WEB_ADMIN_PASSWORD ~/stock_chatbot/.env
 
 ## 2. 상태 확인
 
+**유닛이 셋이다.** 봇(`stock-chatbot`), 공개 웹(`stock-chatbot-web`, 11절),
+리버스 프록시(`caddy`, 11절). 셋은 서로 독립이라 봇을 재기동해도 웹은 마지막
+산출물을 계속 보여 준다.
+
 ```bash
 systemctl status stock-chatbot --no-pager
 systemctl is-enabled stock-chatbot          # enabled 여야 재부팅 후 자동 기동된다
+systemctl is-active stock-chatbot-web caddy # 공개 웹 두 유닛
 cd ~/stock_chatbot && git log -1 --oneline  # 서버가 어느 커밋에 서 있나
 journalctl -u stock-chatbot -n 50 --no-pager
 ```
@@ -235,8 +253,9 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 
 ## 8. Polymarket 컨센서스 파일럿
 
-기본 꺼짐(`POLYMARKET_ENABLED=false`)인 섀도 파일럿이다. `market_sentiment`의
-외부 소스이지 별도 기능 키가 아니다.
+**수집만 켠 섀도 파일럿이다**(`POLYMARKET_ENABLED=True`,
+`POLYMARKET_PANEL_ENABLED=False`). 즉 스냅숏은 매일 쌓지만 `/market` 하단 패널은
+아직 그리지 않는다. `market_sentiment`의 외부 소스이지 별도 기능 키가 아니다.
 
 ### 무엇으로 쓸 수 있나
 
@@ -343,6 +362,24 @@ cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
 백필이 답하지 못하는 두 가지(median spread, job 가동률)는
 `polymarket_history.py` 첫머리에도 적어 두었다. **지운 채로 승격하지 않는다.**
 
+**현재 판정 (2026-08-26).** 백필은 전부 통과했고 **라이브 가동률만 미달**이다.
+
+| 축 | 값 | 기준 | 판정 |
+|---|---:|---:|---|
+| 백필 스냅숏 일수 | 26 | 24 | 통과 |
+| 백필 유효 daily delta | 26 | 24 | 통과 |
+| 공통 이벤트 3개 이상인 날 비율 | 1.00 | 0.80 | 통과 |
+| 독립 theme | 5 | 3 | 통과 |
+| 최대 theme 기여도 | 0.31 | 0.50 이하 | 통과 |
+| median spread | 0.01 | 0.05 이하 | 통과 — 단 조회 시점 호가다 |
+| **최근 7일 스냅숏(가동률)** | **4** | **6** | **미달** |
+
+가동률을 깎은 날은 8/21·8/22(원인 미상 — journal 보존 밖이다)와 8/25다. 8/25는
+8-4의 프록시 인스턴스를 삭제한 뒤에도 `.env`에 URL이 남아 08:35·09:35·10:35
+재시도가 전부 프록시 timeout으로 죽었다. `.env`에서 지운 뒤 8/26은 직접 호출로
+성공했다(`contracts=988`). 남은 일은 **8/26부터 7일 중 6일**을 채우는 것뿐이므로,
+그때까지 08:35~10:35 창을 덮는 재기동을 하지 않는다(4절).
+
 - 백필 미달 → **거기서 끝낸다.** 라이브를 30일 더 봐도 같은 항목이 통과할 근거는
   없다. `config.py`의 `POLYMARKET_ENABLED`를 `False`로 되돌리고(커밋) 8-5로 간다.
 - 백필 통과 → 일주일 뒤 최근 7일 스냅숏이 6일 이상인지만 확인하고
@@ -398,30 +435,29 @@ POLYMARKET_PROXY_URL=http://user:pass@proxy-host:port
 이걸로도 안 풀리면(프록시 출구도 막히거나, 프록시를 구할 수 없으면) 8-5를
 밟는다.
 
-#### 지금 세워 둔 프록시 (2026-08-22)
+#### 프록시 현황: 지금은 없다 (2026-08-26)
 
 한국(AWS 서울·KT 회선 둘 다) 전부 `gamma-api.polymarket.com`·`clob.polymarket.com`이
-451이고 도쿄(`ap-northeast-1`)는 둘 다 200임을 임시 인스턴스로 실측한 뒤, 같은
-리전에 상시용 프록시를 세웠다.
+451이고 도쿄(`ap-northeast-1`)는 둘 다 200이다 — 이 실측이 서버를 도쿄로 옮긴
+이유다. 봇 자체가 도쿄에 있게 된 뒤로 프록시는 필요가 없어졌다.
 
-| 항목 | 값 |
+| 항목 | 현재 |
 |---|---|
-| 인스턴스 | `polymarket-proxy-tokyo` (`ap-northeast-1a`, `nano_3_0`, `ubuntu_22_04`) |
-| 프록시 | tinyproxy, 포트 80(기본 개방 포트라 `OpenInstancePublicPorts` 불필요) |
-| 접근 제어 | `Allow` ACL을 이 서버의 고정 IP(`3.34.234.102`)로 제한 + Basic Auth 이중 |
-| 자격 증명 | 서버 `.env`의 `POLYMARKET_PROXY_URL`에만 있다. 여기(git)에는 적지 않는다 |
+| 프록시 인스턴스 | 없음. `ap-northeast-1`에 남은 Lightsail 인스턴스는 `stock-chatbot` 하나뿐이다 |
+| 서버 `.env`의 `POLYMARKET_PROXY_URL` | 없음(2026-08-26 제거) |
+| 실제 호출 | 직접 연결로 `200` |
 
-**이 인스턴스는 terraform이 관리하지 않는다** — AWS CLI로 직접 만들었다. 붙였다
-뗄 수 있는 부속물로 두는 게 목적이라, 본 배포(`iac/terraform/`)에 편입하지
-않았다. 유지보수(재기동·설정 변경)는 Lightsail 콘솔의 브라우저 SSH로 한다
-— `stock-chatbot-deployer` IAM 자격으로는 `ap-northeast-1`의
-`GetInstanceAccessDetails`·`OpenInstancePublicPorts`가 막혀 있어(`iam-policy.json`의
-리전 조건과는 별개로, 허용된 도쿄 리전에서도 CLI로 키를 뽑아내거나
-방화벽을 여는 건 항상 막힌다) 로컬 CLI로는 SSH 키를
-받을 수 없다.
+**걷어낼 때는 인스턴스 삭제와 `.env` 정리를 같은 날 한다.** 8/25에 스냅숏을
+통째로 잃은 것이 순서를 어긴 결과다 — 인스턴스는 이미 없는데 `.env`에 URL이
+남아 세 번의 재시도가 전부 `ConnectTimeout`으로 죽었다. 커밋 `5f05f00`(8/26)부터는
+프록시가 연결 불능이면 직접 연결로 failover하지만, 그건 timeout을 한 번 문 뒤의
+일이라 지연이 그대로 붙는다. 설정을 지우는 쪽이 항상 낫다.
 
-프록시 출구(도쿄)가 막히는 날이 오면 인스턴스를 지우고 다른 리전에 새로
-세운다 — 상태를 갖지 않는 부속물이라 다시 만드는 비용이 낮다.
+다시 필요해지면(도쿄 출구까지 막히면) 위 절차대로 세우고 `.env` 한 줄로 켠다.
+상태를 갖지 않는 부속물이라 다시 만드는 비용이 낮다. **이 인스턴스는 terraform이
+관리하지 않는다** — 붙였다 뗄 수 있는 부속물로 두는 게 목적이라 본
+배포(`iac/terraform/`)에 편입하지 않는다. 유지보수는 Lightsail 콘솔의 브라우저
+SSH로 한다(`GetInstanceAccessDetails`는 IAM에 없어 로컬 CLI로 키를 뽑을 수 없다).
 
 ### 8-5. 철수 (하나라도 미달이면)
 
@@ -532,3 +568,111 @@ load average가 상시 1.5 이상이면 사전선별이 스스로 물러나 보�
 양보`가 찍힌다. 이 작업들은 9% 제한 밖에서 실행되어 모아 둔 burst capacity를
 우선 사용한다. 콘솔의 CPU 평균이 계속 9%를 넘으면 목표값보다 먼저 봇 외
 프로세스와 스케줄 중첩 여부를 확인한다.
+## 11. 공개 웹 (읽기 전용)
+
+봇이 구워 둔 산출물만 보여 주는 **별도 프로세스**다. 웹에는 실행 트리거가 없다 —
+`/research run`과 `/market` 재계산은 텔레그램에만 둔다. 누구나 누를 수 있으면
+Neurons가 링크를 받은 사람 수만큼 나가고, 리서치 상태는 단일 사용자 형식이라
+동시 실행이 서로를 덮는다.
+
+```text
+브라우저 ── https://<도메인>:443 ── Caddy (TLS + Basic 인증) ── http://127.0.0.1:8788 ── webpub
+```
+
+내부 구간이 HTTP인 것은 loopback이라 인터넷으로 평문이 나가지 않기 때문이다.
+Basic 인증도 TLS가 성립한 뒤에 처리된다.
+
+| 자리 | 파일 |
+|---|---|
+| 굽기(봇 안에서만 호출) | `app/webpub_export.py` |
+| 읽기 전용 웹(`GET`만) | `app/webpub.py` |
+| systemd 유닛 | `deploy/stock-chatbot-web.service` |
+| 프록시 설정 견본 | `deploy/Caddyfile.example` |
+| 산출물 | `data/webpub/`의 `market.json`·`market_chart.png`·`research.json`·`meta.json` |
+
+### 11-1. 웹 프로세스
+
+부트스트랩은 이 유닛을 설치하지 않는다(봇 유닛만 만든다). 인스턴스를 새로 만들면
+직접 설치한다.
+
+```bash
+sudo cp ~/stock_chatbot/deploy/stock-chatbot-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now stock-chatbot-web
+curl -s localhost:8788/api/meta        # 산출물 시각. 봇이 아직 굽기 전이면 {}
+```
+
+봇과 독립이라 봇을 재기동해도 웹은 마지막 산출물을 계속 보여 준다. 코드 갱신
+(3절)으로 `app/webpub.py`가 바뀌었으면 이 유닛도 함께 재기동한다.
+
+```bash
+sudo systemctl restart stock-chatbot-web
+```
+
+### 11-2. 도메인과 인증서
+
+Caddy는 apt 저장소에서 받는다.
+
+```bash
+sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt-get update && sudo apt-get install -y caddy
+```
+
+설치 직후의 Caddy는 기본 환영 페이지를 80번에 띄운다. `/etc/caddy/Caddyfile`을
+`deploy/Caddyfile.example` 형태로 **먼저 바꾼 뒤** 기동한다.
+
+- 첫 줄은 도메인만 적는다. `http://`를 붙이면 자동 HTTPS가 꺼진다.
+- 비밀번호는 평문이 아니라 `caddy hash-password` 출력(bcrypt)을 넣는다.
+- 도메인의 A 레코드가 고정 IP(`terraform output -raw public_ip`)를 가리키고 있어야
+  발급이 된다. 80번이 닫혀 있으면 HTTP-01 검증이 실패한다(1절).
+
+```bash
+caddy hash-password --plaintext '<비밀번호>'
+sudo nano /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy || sudo systemctl restart caddy
+journalctl -u caddy -n 30 --no-pager | grep -i certificate
+```
+
+인증서는 Let's Encrypt에서 자동 발급·갱신된다. **AWS가 주는 호스트네임
+(`*.compute.amazonaws.com`)으로는 발급되지 않는다** — CA가 정책으로 거부한다.
+도메인이 반드시 필요한 이유가 이것이다.
+
+갱신은 만료 30일 전에 자동으로 일어난다. 확인만 한다.
+
+```bash
+sudo ls -l /var/lib/caddy/.local/share/caddy/certificates/*/*/          # 발급 시각
+echo | openssl s_client -connect <도메인>:443 -servername <도메인> 2>/dev/null | openssl x509 -noout -dates
+```
+
+### 11-3. 비밀번호 교체
+
+접근 로그의 방문 수가 지인 수와 맞지 않으면 먼저 바꾼다.
+
+```bash
+caddy hash-password --plaintext '<새 비밀번호>'
+sudo nano /etc/caddy/Caddyfile        # basic_auth 줄의 해시만 교체
+sudo systemctl reload caddy
+journalctl -u caddy --since today --no-pager | grep -c '"status":200'
+```
+
+그래도 계속되면 443을 닫고(1절) SSH 터널로 되돌린다 —
+`ssh -L 8788:127.0.0.1:8788 ubuntu@<고정 IP>`.
+
+### 11-4. 장애
+
+| 증상 | 원인 | 조치 |
+|---|---|---|
+| 502 Bad Gateway | `stock-chatbot-web`이 죽었다 | `systemctl status stock-chatbot-web`, 로그 확인 후 재기동 |
+| 인증서 발급 실패 | A 레코드가 안 맞거나 80이 닫혔다 | `dig +short <도메인>`과 1절의 포트 상태를 함께 본다 |
+| 화면은 뜨는데 "산출물이 아직 없습니다" | 봇이 아직 굽지 않았다 | `/market`이나 `/research run`을 한 번 돌린다 |
+| 기준 시각이 하루 이상 밀렸다 | 봇의 굽기 경로가 실패하고 있다 | `journalctl -u stock-chatbot`에서 `[WEBPUB]` 줄을 본다 |
+
+```bash
+systemctl status stock-chatbot-web caddy --no-pager
+journalctl -u stock-chatbot-web -n 50 --no-pager
+journalctl -u stock-chatbot --no-pager | grep WEBPUB | tail -10   # 굽기 실패 여부
+ls -la ~/stock_chatbot/data/webpub/
+```

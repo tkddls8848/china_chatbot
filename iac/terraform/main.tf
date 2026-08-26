@@ -80,10 +80,13 @@ resource "aws_lightsail_static_ip_attachment" "this" {
 # ---------------------------------------------------------------------------
 # 방화벽
 #
-# 이 리소스는 인스턴스의 공개 포트 규칙 전체를 대체한다. 따라서 22만 선언하면
-# Lightsail이 기본으로 열어두는 80/443도 함께 닫힌다 — 의도된 동작이다.
-# 관리 웹(8787)은 여기에 절대 넣지 않는다. HTTP Basic 인증뿐이라 평문 노출되며,
-# 접근은 SSH 터널로만 한다(outputs의 web_admin_tunnel_command 참조).
+# 이 리소스는 인스턴스의 공개 포트 규칙 전체를 대체한다. 여기 없는 포트는 닫히므로
+# 공개 웹이 쓰는 80/443을 함께 선언한다. 80은 ACME HTTP-01 검증과 https 리다이렉트
+# 전용이고 실제 열람은 443이다 — Caddy의 자동 HTTPS가 둘 다 처리한다.
+# 관리 웹(8787)과 공개 웹 프로세스(8788)는 여기에 절대 넣지 않는다. 8787은 HTTP
+# Basic뿐이라 평문 노출되고, 8788은 인증이 없다(TLS와 인증은 앞단 Caddy가 맡는다).
+# 둘 다 127.0.0.1에만 바인딩되며 8787 접근은 SSH 터널로만 한다
+# (outputs의 web_admin_tunnel_command 참조).
 #
 # 방화벽을 Lightsail 콘솔에서 직접 관리하려면 manage_firewall = false 로 둔다.
 # 그러지 않으면 콘솔에서 좁힌 규칙을 다음 apply가 var.allowed_ssh_cidrs 로 되돌린다.
@@ -99,5 +102,19 @@ resource "aws_lightsail_instance_public_ports" "this" {
     from_port = 22
     to_port   = 22
     cidrs     = var.allowed_ssh_cidrs
+  }
+
+  port_info {
+    protocol  = "tcp"
+    from_port = 80
+    to_port   = 80
+    cidrs     = ["0.0.0.0/0"]
+  }
+
+  port_info {
+    protocol  = "tcp"
+    from_port = 443
+    to_port   = 443
+    cidrs     = ["0.0.0.0/0"]
   }
 }

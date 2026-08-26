@@ -17,27 +17,36 @@
 
 이 파일은 **계획서**다. 항목이 끝나면 지우고, 전부 끝나면 이 파일을 지운다 — 완료
 기록은 git 이력이 맡는다. 서버를 상대로 하는 상시 절차는 `docs/server-ops.md`,
-웹 공개·`market_actor`·`potus_feed` 계획은 `docs/polymarket-web.md`에 있다. 그중 하나와
-순서가 얽힌다: **`/market` 화면을 웹에 굽는 것(`docs/polymarket-web.md` 3-2)은 이 문서
-8절의 화면 교체 뒤가 낫다** — 지금의 추세 그림에 맞춰 굽기 코드를 굳히면 같은 화면을
-두 번 만든다.
+웹 공개·`market_actor`·`potus_feed` 계획은 `docs/polymarket-web.md`에 있다.
 
-## 실행 상태 (2026-08-21)
+**웹 굽기가 먼저 나갔다.** 원래는 이 문서 8절의 화면 교체를 먼저 하고 그 결과를
+굽는 순서가 나았지만, 2026-08-26에 `webpub_export.publish_market`이 **지금의 추세
+그림**을 그대로 굽기 시작했다. 그래서 8절에서 화면을 바꿀 때 `app/webpub_export.py`의
+payload(`markets`·`consensus`·`lookback_days`)와 `app/webpub.py`의 시장 화면을
+**같은 커밋에서 함께 바꾼다** — 한쪽만 바꾸면 텔레그램과 웹이 다른 그림을 보여 준다.
+
+## 실행 상태 (2026-08-27)
 
 - 1~2단계 구현과 3패널 후보 화면, 기능 플래그, `/system anomaly`, 백필·재채점·GDELT
-  감사 명령을 구현했다. 기존 `/market` 경로는 보존했고 기본 플래그는 꺼져 있다.
-- 첫 백필 실행은 후보 창 80개 중 품질 하한을 통과한 46개를 저장했다(CN 11, HK 12,
-  KR 4, US 19). 첫 실행 뒤 품질 미달 창도 시도 표본으로 저장하도록 보완했으므로 다음
-  실행부터 G7의 `dense_ratio` 분모가 탈락 창을 포함한다.
-- 현재 모든 시장이 G1 최소 표본 120개에 미달하고 G6 재채점·G7 원천 감사도 아직
-  수행 전이다. 따라서 G0·G6·G7은 실패 상태이며 `config.py`의
-  `MARKET_ANOMALY_ENABLED`를 `False`로 유지한다. G5 측정 기간에는 외부 호출
-  비용을 명시적으로 승인한 뒤 `MARKET_ANOMALY_COLLECTION_ENABLED`만 `True`로
-  켠다(2026-08-23부터 이 둘도 env가 아니라 `config.py` 리터럴이다 — 값을
-  바꾸려면 코드를 고치고 커밋한다). 표본을 며칠에 나눠 채운 뒤
-  `--rescore`, `--audit`, `--report` 순으로 판정해야 한다.
-- 관련 단위 테스트 12개와 저장소 전체 테스트 457개, ruff를 통과했다. 운영 데이터
-  게이트가 통과하기 전에는 4~5단계를 완료로 간주하지 않는다.
+  감사 명령을 구현했다. 기존 `/market` 경로는 보존했고 화면 플래그
+  `MARKET_ANOMALY_ENABLED`는 `False` 그대로다.
+- **G5 라이브 수집은 켜져 있다**(`MARKET_ANOMALY_COLLECTION_ENABLED = True`).
+  서버 `overnight_tone.json`에 2026-08-18~08-25의 **23개 창**이 쌓였다
+  (CN 6 · HK 6 · KR 6 · US 5). 끌 때는 이 리터럴을 `False`로 바꾸고 커밋한다.
+- **백필 46개 창은 로컬에만 있다.** `data/market_sentiment/anomaly_backfill.json`
+  (2025-11-27~12-30, CN 11 · HK 12 · KR 4 · US 19)은 로컬에서 돌린 결과이고 서버에는
+  그 파일이 없다. `/system anomaly`가 백필과 라이브를 한 화면에 그리려면 **서버에서
+  한 번 다시 돌린다** — Polymarket 쪽에서 같은 이유로 정한 규칙(`docs/server-ops.md`
+  8-2)이 여기에도 그대로 적용된다.
+- 첫 실행 뒤 품질 미달 창도 시도 표본으로 저장하도록 보완했으므로 다음 실행부터
+  G7의 `dense_ratio` 분모가 탈락 창을 포함한다.
+- **G1 최소 표본 120개에 모든 시장이 크게 미달한다.** 시장별로 가장 많은 US도
+  백필 19 + 라이브 5다. G6 재채점·G7 원천 감사도 아직 수행 전이라 G0·G6·G7은
+  실패 상태다. 표본을 며칠에 나눠 채운 뒤 `--rescore`, `--audit`, `--report`
+  순으로 판정한다.
+- 저장소 전체 테스트는 **497 passed · 6 skipped · 5 xfailed**, ruff 통과
+  (2026-08-26 실측). 운영 데이터 게이트가 통과하기 전에는 4~5단계를 완료로
+  간주하지 않는다.
 
 ## 0. 왜 바꾸는가
 

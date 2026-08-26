@@ -100,12 +100,12 @@ variable "manage_firewall" {
   description = <<-EOT
     방화벽 규칙을 Terraform이 소유할지 여부.
 
-    true  — Terraform이 규칙 전체를 소유한다. 22만 열리고 Lightsail 기본값인
-            80/443은 닫힌다. **콘솔에서 손으로 바꾼 규칙은 다음 apply가 되돌린다.**
-    false — Terraform이 방화벽을 건드리지 않고 콘솔에서 관리한다. 대신 인스턴스는
-            Lightsail 기본 규칙(22/80/443 전체 개방)으로 뜨므로, 생성 직후
-            **콘솔에서 80/443을 직접 닫아야 한다.** 이 앱은 어떤 웹 포트도 쓰지 않는다.
-            도쿄 운영 IAM은 OpenInstancePublicPorts를 허용하지 않으므로 기본값은 false다.
+    true  — Terraform이 규칙 전체를 소유한다. main.tf가 선언한 22·80·443만 열린다.
+            **콘솔에서 손으로 바꾼 규칙은 다음 apply가 되돌린다.**
+    false — Terraform이 방화벽을 건드리지 않고 콘솔에서 관리한다(기본값). 공개 웹의
+            80/443은 이미 열려 있어야 하고, 관리 웹(8787)과 공개 웹 프로세스(8788)는
+            **어떤 경우에도 열지 않는다** — 둘 다 127.0.0.1 바인딩이다.
+            `aws lightsail get-instance-port-states`로 현재 상태를 확인한다.
   EOT
   type        = bool
   default     = false
@@ -115,7 +115,9 @@ variable "allowed_ssh_cidrs" {
   description = <<-EOT
     SSH(22)를 허용할 IPv4 CIDR 목록. manage_firewall = true 일 때만 적용된다.
     기본값 0.0.0.0/0은 전 세계 개방이므로 고정 회선이면 ["<내 IP>/32"]로 좁힌다.
-    관리 웹(8787)은 어떤 값으로도 열지 않는다 — SSH 터널로만 접근한다.
+    공개 웹의 80/443은 이 값과 무관하게 전 세계 개방이다(main.tf에 고정) — 열람
+    제한은 Caddy의 Basic 인증이 맡는다. 관리 웹(8787)은 어떤 값으로도 열지 않는다
+    — SSH 터널로만 접근한다.
   EOT
   type        = list(string)
   default     = ["0.0.0.0/0"]

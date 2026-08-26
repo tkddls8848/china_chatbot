@@ -1,7 +1,8 @@
 # Caddy는 TLS와 Basic 인증을 처리하고, 내부 전용 웹 프로세스에만 프록시한다.
-# 실제 무료 서브도메인으로 첫 줄을 바꾸고 PASSWORD_HASH를 caddy hash-password
-# 출력으로 교체한다. `http://` 접두사는 쓰지 않는다.
-your-name.duckdns.org {
+# 첫 줄을 실제 도메인으로 바꾸고 PASSWORD_HASH를 `caddy hash-password` 출력으로
+# 교체한다. `http://` 접두사는 쓰지 않는다 — 붙이면 자동 HTTPS가 꺼진다.
+# 절차는 docs/server-ops.md 11절.
+example.com {
     encode zstd gzip
 
     basic_auth {

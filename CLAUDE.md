@@ -31,8 +31,11 @@ app/briefing/          브리핑 생성과 A주 거래일 캘린더
 app/stocks/            종목 DB와 시세
 app/state/             발송·뉴스·시장 감성 상태
 app/watchlist/         관심종목 상태
-app/webadmin/          관리 웹 대시보드
+app/webadmin/          관리 웹 대시보드(터널 전용, 8787)
+app/webpub.py          읽기 전용 공개 웹(별도 프로세스, 8788)
+app/webpub_export.py   공개 웹이 읽을 산출물 굽기
 prompts/               모델 프롬프트
+deploy/                systemd 유닛·Caddy 설정 견본
 iac/terraform/         Lightsail 배포
 tests/                 자동화 테스트
 ```
@@ -127,7 +130,8 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - 관심종목과 발송 이력도 현재 JSON 형식만 지원한다.
 - `/market`은 기사별 번역 대신 시장·일자별 헤드라인 다이제스트를 분석한다.
   완료된 과거 일자는 저장 결과를 재사용하고 오늘만 다시 계산한다.
-- **Polymarket 컨센서스는 기본 꺼짐(`POLYMARKET_ENABLED=false`)인 섀도 파일럿이다.**
+- **Polymarket 컨센서스는 수집만 켠 섀도 파일럿이다**(`POLYMARKET_ENABLED=True`,
+  `POLYMARKET_PANEL_ENABLED=False` — 매일 스냅숏을 쌓지만 패널은 아직 그리지 않는다).
   `market_sentiment`의 외부 소스이지 별도 기능 키가 아니다. 값은 거시 위험선호
   확률변화(pp)라 국가별 -1~+1 감성 점수와 축이 다르다 — 합산하거나 순위·리서치
   입력·브리핑 payload에 넣지 않고 `/market` 하단 별도 패널에만 그린다. 방향은
@@ -143,6 +147,16 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   최근 7일 중 6일 스냅숏이다. 서로를 대신하지 못한다 — 백필은 지표의 실질을
   하루에 판정하지만 job이 매일 도는지는 모르고, 라이브는 그 반대다.
   `/system polymarket`이 두 축을 한 화면에 그린다.
+- **공개 웹은 봇과 다른 프로세스이고 `GET`만 가진다.** 봇이 산출물을 갱신할 때
+  `webpub_export`가 `data/webpub/`에 구워 두고(`market.json`·`market_chart.png`·
+  `research.json`·`meta.json`), `webpub.py`는 그 파일을 그대로 내보낸다. 요청 때
+  렌더하지 않는다 — `render_market_chart`는 dpi 160짜리 12×7.5인치 figure라 지인
+  몇 명의 새로고침만으로 사전선별 보정이 밀린다. **실행 트리거는 웹에 열지 않는다**:
+  `/research run`·`/market` 재계산은 텔레그램에만 둔다. Neurons가 링크를 받은 사람
+  수만큼 나가고, 리서치 상태(`sight`·`history`)가 단일 사용자 형식이라 동시 실행이
+  서로의 맥락을 덮기 때문이다. 쓰기 API가 있는 관리 웹(8787)은 계속 터널 전용이고,
+  8788도 방화벽에 열지 않는다 — TLS와 Basic 인증은 앞단 Caddy가 맡는다
+  (`docs/server-ops.md` 11절).
 - 종목 canonical code는 시장마다 형식이 다르다. CN·HK는 **접두사 없는 숫자 코드**
   (`600519`, `00700`)이고, US·KR만 `US:NASDAQ:AAPL`·`KR:KOSPI:005930` 형식이다
   (`stocks/universe.py`의 `stock_key`). KR 6자리는 A주 코드와 겹치므로 US·KR에만

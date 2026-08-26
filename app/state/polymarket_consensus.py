@@ -39,7 +39,7 @@ from core.storage import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
-# 승격 게이트(docs/aws-next-steps.md). 백필이 이 기준으로 판정한다.
+# 승격 게이트(docs/server-ops.md). 백필이 이 기준으로 판정한다.
 PROMOTION_WINDOW_DAYS = 30
 # 라이브 수집에서 확인하는 것은 **가동률뿐이다.** 게이트의 실질은 백필이 이미
 # 판정했고 일주일 더 본다고 달라지지 않는다. 반대로 "매일 08:35에 봇이 살아
@@ -260,7 +260,7 @@ class PolymarketConsensusStore:
         self,
         window_days: int = PROMOTION_WINDOW_DAYS,
     ) -> dict[str, Any]:
-        """승격 게이트를 계산한다(docs/aws-next-steps.md 8-3).
+        """승격 게이트를 계산한다(docs/server-ops.md 8-3).
 
         하나라도 실패하면 패널을 켜지 않는다. 사람이 JSON을 열어 세는 대신
         `/system polymarket`이 이 값을 그대로 보여 준다.
