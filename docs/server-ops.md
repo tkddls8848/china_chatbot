@@ -575,8 +575,22 @@ load average가 상시 1.5 이상이면 사전선별이 스스로 물러나 보�
 Neurons가 링크를 받은 사람 수만큼 나가고, 리서치 상태는 단일 사용자 형식이라
 동시 실행이 서로를 덮는다.
 
-공개 주소는 **`https://nunchi.live`**(Route 53 등록, A 레코드가 고정 IP를 가리킨다),
-계정은 `friend` 하나다.
+공개 주소는 **`https://nunchi.live`**(Route 53 등록, A 레코드가 고정 IP를 가리킨다).
+
+**면을 나눠 둔다.** 잠금은 시스템이 아니라 **내용**을 지킨다 — 웹은 미리 구운 파일만
+내보내므로 공개돼도 Neurons가 나가지 않고, 쓰기 라우트가 없어 인증이 새도 잃는 것은
+열람뿐이다. 그런데 리서치 산출물에는 종목명·`add`/`watch`·confidence가 들어간다.
+색인되면 면책 문구와 무관하게 밖에서는 종목 추천으로 읽히고 되돌릴 수 없다.
+
+| 경로 | 내용 | 인증 |
+|---|---|---|
+| `/`, `/about`, `/market_chart.png`, `/api/market`, `/api/meta` | 국가별 감성 집계 | 없음 |
+| `/research`, `/api/research` | `sight`, 종목별 액션·confidence | `friend` 계정 |
+
+두 면 모두 `X-Robots-Tag: noindex, nofollow`를 받는다. **`robots.txt`로 크롤링을
+막지는 않는다** — 막으면 크롤러가 noindex를 읽지 못해 URL만 색인에 남을 수 있다.
+공개면의 nav에는 리서치 링크가 그대로 있어서, 익명 방문자가 누르면 브라우저
+인증창이 뜬다(의도된 동작이다).
 
 ```text
 브라우저 ── https://nunchi.live:443 ── Caddy (TLS + Basic 인증) ── http://127.0.0.1:8788 ── webpub
@@ -628,6 +642,7 @@ sudo apt-get update && sudo apt-get install -y caddy
 
 - 첫 줄은 도메인만 적는다. `http://`를 붙이면 자동 HTTPS가 꺼진다.
 - 비밀번호는 평문이 아니라 `caddy hash-password` 출력(bcrypt)을 넣는다.
+- `basic_auth`에는 경로 matcher(`@research`)를 붙인다. 빼면 사이트 전체가 잠긴다.
 - 도메인의 A 레코드가 고정 IP(`terraform output -raw public_ip`)를 가리키고 있어야
   발급이 된다. 80번이 닫혀 있으면 HTTP-01 검증이 실패한다(1절).
 
@@ -688,7 +703,8 @@ ls -la ~/stock_chatbot/data/webpub/
 |---|---|---|
 | 웹이 CPU 예산을 먹는다 | 사전선별 `중단=budget`이 매일 나온다(7절) | 굽는 주기를 줄인다. 그래도 계속되면 443을 닫는다 |
 | 메모리 압박 | 스왑 사용이 상시, OOM kill | 웹 프로세스를 이 인스턴스에서 뺀다 |
-| 공개 후 남용 | 접근 로그가 지인 수와 맞지 않는다 | 11-3의 비밀번호 교체. 계속되면 443을 닫고 터널로 되돌린다 |
+| 리서치면 남용 | 인증 성공 로그가 지인 수와 맞지 않는다 | 11-3의 비밀번호 교체 |
+| 공개면 남용 | 익명 트래픽이 스크레이퍼 수준으로 는다 | `basic_auth`의 `@research` matcher를 빼 전면 잠금. 계속되면 443을 닫고 터널로 되돌린다 |
 | 산출물이 낡는다 | `meta.json` 시각이 하루 이상 밀린다 | 봇 쪽 굽기 경로가 실패하고 있다. 11-4를 본다 |
 
 443을 닫아도 잃는 것은 열람뿐이다 — 봇도 `stock-chatbot-web`도 그대로 돌고,
