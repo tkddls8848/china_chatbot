@@ -17,7 +17,7 @@
 
 이 파일은 **계획서**다. 항목이 끝나면 지우고, 전부 끝나면 이 파일을 지운다 — 완료
 기록은 git 이력이 맡는다. 서버를 상대로 하는 상시 절차는 `docs/server-ops.md`,
-웹 공개·`market_actor`·`potus_feed` 계획은 `docs/polymarket-web.md`에 있다.
+`market_actor`·`potus_feed` 계획은 `docs/actor-potus.md`에 있다.
 
 **웹 굽기가 먼저 나갔다.** 원래는 이 문서 8절의 화면 교체를 먼저 하고 그 결과를
 굽는 순서가 나았지만, 2026-08-26에 `webpub_export.publish_market`이 **지금의 추세
@@ -369,7 +369,7 @@ prompts/overnight_tone_ko.txt
 | 기능 키 | **새로 만들지 않는다.** `market_sentiment` 안 | 산출물이 바뀌는 것이지 새 기능이 아니다. 폴리마켓과 같은 판단 |
 | 상태 파일 | `data/market_sentiment/overnight_tone.json`(라이브), `anomaly_backfill.json`(백필) | 6절대로 섞지 않는다 |
 | 보존 | 180일 | 게이트가 60창을 보고 30일 화면이 그 위에 얹힌다. 창 하나가 한 줄이라 4시장×180일=720줄, 사전선별식 offset 이어 읽기가 필요 없다 |
-| 플래그 | 화면 `MARKET_ANOMALY_ENABLED`, 비용 발생 수집 `MARKET_ANOMALY_COLLECTION_ENABLED`(둘 다 기본 `False`) | 수집은 G5 측정 기간에만 별도 승인해 켠다. 임계값·회귀 창·표본 하한과 이 두 플래그 전부 `config.py` 리터럴이다(2026-08-23부터). env로 빼면 서버와 로컬의 판정이 갈려 게이트 표본이 섞인다(`docs/polymarket-web.md` A-9와 같은 규약) |
+| 플래그 | 화면 `MARKET_ANOMALY_ENABLED`, 비용 발생 수집 `MARKET_ANOMALY_COLLECTION_ENABLED`(둘 다 기본 `False`) | 수집은 G5 측정 기간에만 별도 승인해 켠다. 임계값·회귀 창·표본 하한과 이 두 플래그 전부 `config.py` 리터럴이다(2026-08-23부터). env로 빼면 서버와 로컬의 판정이 갈려 게이트 표본이 섞인다(`docs/actor-potus.md` A-9와 같은 규약) |
 | 스케줄 | 시장별 `open(D+1)` 직후, +2시간 재시도 창 | 창의 끝이 개장이다. 놓쳐도 백필 경로가 같은 코드라 회수된다 — 폴리마켓 스냅숏과 달리 하루를 잃지 않는다 |
 | Neurons | 하루 4회 ≈ 35 | 지금 `/market`은 요청당 최대 40회를 부른다. **총량은 오히려 준다** |
 | CPU | 회귀는 시장당 최대 60점의 Theil–Sen. 캘린더 빌드 기동 시 1회(XKRX 1.96s) | 일 4점 운영 계산은 미미하다. 180세션 전체 walk-forward는 백필에서만 수행 |
@@ -429,7 +429,7 @@ mock한다.
   같은 규약으로 `/market` 화면에만 둔다.
 - **이상 창을 매매 신호로 쓰기.** 이 기능은 관측 보고다. G4를 승격 조건에서 뺀
   이유와 같다.
-- **종목 단위 이상 탐지.** 표본도 비용도 다르다. 그 자리는 `docs/polymarket-web.md`의 `market_actor` 계획에 있는 `E1`
+- **종목 단위 이상 탐지.** 표본도 비용도 다르다. 그 자리는 `docs/actor-potus.md`의 `market_actor` 계획에 있는 `E1`
   (움직였는데 설명이 없는 곳)이 이미 맡는다 — 이쪽은 대칭 축(설명은 있는데 가격과
   어긋난 곳)이다.
 - **백필 잔차와 라이브 잔차를 한 선으로 잇기.** 6절의 캐비어트 1 때문이다.

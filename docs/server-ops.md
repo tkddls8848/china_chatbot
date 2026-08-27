@@ -11,7 +11,7 @@
 |---|---|
 | `iac/terraform/README.md` | 인스턴스 생성, 부트스트랩, 최초 전환(cutover), 삭제 |
 | **이 문서** | 접속, 상태 확인, 배포 갱신, 설정 변경, 실측, 판정, 백업·복구, 장애 대응 |
-| `docs/polymarket-web.md` | 웹 공개·`market_actor`·`potus_feed` 계획 (앞으로 만들 것) |
+| `docs/actor-potus.md` | `market_actor`·`potus_feed` 계획 (앞으로 만들 것) |
 | `docs/market-anomaly.md` | 시장 감성 이상 탐지 계획 (앞으로 만들 것) |
 
 ---
@@ -575,8 +575,11 @@ load average가 상시 1.5 이상이면 사전선별이 스스로 물러나 보�
 Neurons가 링크를 받은 사람 수만큼 나가고, 리서치 상태는 단일 사용자 형식이라
 동시 실행이 서로를 덮는다.
 
+공개 주소는 **`https://nunchi.live`**(Route 53 등록, A 레코드가 고정 IP를 가리킨다),
+계정은 `friend` 하나다.
+
 ```text
-브라우저 ── https://<도메인>:443 ── Caddy (TLS + Basic 인증) ── http://127.0.0.1:8788 ── webpub
+브라우저 ── https://nunchi.live:443 ── Caddy (TLS + Basic 인증) ── http://127.0.0.1:8788 ── webpub
 ```
 
 내부 구간이 HTTP인 것은 loopback이라 인터넷으로 평문이 나가지 않기 때문이다.
@@ -644,7 +647,7 @@ journalctl -u caddy -n 30 --no-pager | grep -i certificate
 
 ```bash
 sudo ls -l /var/lib/caddy/.local/share/caddy/certificates/*/*/          # 발급 시각
-echo | openssl s_client -connect <도메인>:443 -servername <도메인> 2>/dev/null | openssl x509 -noout -dates
+echo | openssl s_client -connect nunchi.live:443 -servername nunchi.live 2>/dev/null | openssl x509 -noout -dates
 ```
 
 ### 11-3. 비밀번호 교체
@@ -666,7 +669,7 @@ journalctl -u caddy --since today --no-pager | grep -c '"status":200'
 | 증상 | 원인 | 조치 |
 |---|---|---|
 | 502 Bad Gateway | `stock-chatbot-web`이 죽었다 | `systemctl status stock-chatbot-web`, 로그 확인 후 재기동 |
-| 인증서 발급 실패 | A 레코드가 안 맞거나 80이 닫혔다 | `dig +short <도메인>`과 1절의 포트 상태를 함께 본다 |
+| 인증서 발급 실패 | A 레코드가 안 맞거나 80이 닫혔다 | `dig +short nunchi.live`과 1절의 포트 상태를 함께 본다 |
 | 화면은 뜨는데 "산출물이 아직 없습니다" | 봇이 아직 굽지 않았다 | `/market`이나 `/research run`을 한 번 돌린다 |
 | 기준 시각이 하루 이상 밀렸다 | 봇의 굽기 경로가 실패하고 있다 | `journalctl -u stock-chatbot`에서 `[WEBPUB]` 줄을 본다 |
 
@@ -676,3 +679,17 @@ journalctl -u stock-chatbot-web -n 50 --no-pager
 journalctl -u stock-chatbot --no-pager | grep WEBPUB | tail -10   # 굽기 실패 여부
 ls -la ~/stock_chatbot/data/webpub/
 ```
+
+### 11-5. 중단 기준
+
+공개를 되돌릴 조건을 미리 정해 둔다. "조금만 더 보자"로 넘기지 않는다.
+
+| 위험 | 신호 | 조치 |
+|---|---|---|
+| 웹이 CPU 예산을 먹는다 | 사전선별 `중단=budget`이 매일 나온다(7절) | 굽는 주기를 줄인다. 그래도 계속되면 443을 닫는다 |
+| 메모리 압박 | 스왑 사용이 상시, OOM kill | 웹 프로세스를 이 인스턴스에서 뺀다 |
+| 공개 후 남용 | 접근 로그가 지인 수와 맞지 않는다 | 11-3의 비밀번호 교체. 계속되면 443을 닫고 터널로 되돌린다 |
+| 산출물이 낡는다 | `meta.json` 시각이 하루 이상 밀린다 | 봇 쪽 굽기 경로가 실패하고 있다. 11-4를 본다 |
+
+443을 닫아도 잃는 것은 열람뿐이다 — 봇도 `stock-chatbot-web`도 그대로 돌고,
+`ssh -L 8788:127.0.0.1:8788`로 계속 볼 수 있다.
