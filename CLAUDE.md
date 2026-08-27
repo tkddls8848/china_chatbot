@@ -33,6 +33,7 @@ app/state/             발송·뉴스·시장 감성 상태
 app/watchlist/         관심종목 상태
 app/webadmin/          관리 웹 대시보드(터널 전용, 8787)
 app/webpub.py          읽기 전용 공개 웹(별도 프로세스, 8788)
+app/webpub_pages.py    공개 웹 화면(정적 HTML·CSS, 기동 시 1회 조립)
 app/webpub_export.py   공개 웹이 읽을 산출물 굽기
 prompts/               모델 프롬프트
 deploy/                systemd 유닛·Caddy 설정 견본
@@ -162,6 +163,11 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   **회원가입·계정별 상태, DB, SPA 빌드 파이프라인, 실시간 갱신은 만들지 않는다** —
   상태 파일이 단일 사용자 형식이고, 조회가 전부 "마지막 것 한 개"라 인덱스가 필요한
   질의가 없으며, 데이터가 분 단위로 바뀌지 않아 기준 시각을 적는 것으로 충분하다.
+  **화면(`webpub_pages.py`)은 정적 문자열이고 외부 폰트·CDN·프레임워크를 부르지
+  않는다.** 페이지는 기동 시 한 번 조립되고 값은 브라우저가 `/api/*`에서 채운다 —
+  이 프로세스가 요청을 받아 밖으로 나가는 경로를 만들지 않으려는 것이고, 빌드
+  산출물이 없어야 배포가 파일 복사로 끝나기 때문이다. 값을 넣을 때는 `esc()`를
+  거친다: 산출물에는 리서치 `reason`처럼 모델이 쓴 문자열이 그대로 들어 있다.
 - 종목 canonical code는 시장마다 형식이 다르다. CN·HK는 **접두사 없는 숫자 코드**
   (`600519`, `00700`)이고, US·KR만 `US:NASDAQ:AAPL`·`KR:KOSPI:005930` 형식이다
   (`stocks/universe.py`의 `stock_key`). KR 6자리는 A주 코드와 겹치므로 US·KR에만

@@ -38,3 +38,29 @@ def test_publish_research_preserves_full_result_and_history(tmp_path, monkeypatc
     assert payload["sight"] == "반도체"
     assert payload["last_result"] == result
     assert payload["history"] == [{"summary": "이전 결과"}]
+
+
+def test_public_pages_share_one_shell(tmp_path, monkeypatch):
+    """세 화면이 같은 헤더·푸터를 쓰고 현재 위치를 표시한다."""
+    monkeypatch.setattr(webpub, "WEBPUB_DIR", tmp_path)
+    client = TestClient(webpub.build_app())
+
+    for path in ("/", "/research", "/about"):
+        page = client.get(path)
+        assert page.status_code == 200
+        body = page.text
+        # 산출물이 없어도 화면 자체는 그려진다. 값은 브라우저가 /api/*로 채운다.
+        assert "nunchi" in body
+        for link in ("/", "/research", "/about"):
+            assert "href='" + link + "'" in body
+        assert "href='" + path + "' aria-current='page'" in body
+
+
+def test_pages_are_built_once_and_do_not_touch_the_filesystem(tmp_path, monkeypatch):
+    """페이지는 정적 문자열이다. 요청마다 다시 조립하거나 산출물을 읽지 않는다."""
+    monkeypatch.setattr(webpub, "WEBPUB_DIR", tmp_path / "missing")
+    client = TestClient(webpub.build_app())
+
+    first = client.get("/about").text
+    assert first == client.get("/about").text
+    assert first == webpub.ABOUT_HTML
