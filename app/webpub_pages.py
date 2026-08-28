@@ -268,6 +268,13 @@ font-variant-numeric:tabular-nums;white-space:nowrap}
 font-size:var(--fs-sm);line-height:1.9}
 .brief{background:var(--surface-1);border:1px solid var(--line);border-left:2px solid var(--gold);
 border-radius:var(--r3);padding:var(--sp-5);box-shadow:var(--elev-2)}
+.research-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 var(--sp-5)}
+.research-meta div{display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-3);
+padding:10px 0;border-bottom:1px solid var(--line2)}
+.research-meta div:nth-last-child(-n+2){border-bottom:0}
+.research-meta dt{color:var(--mut);font-size:var(--fs-xs);font-weight:var(--fw-2);white-space:nowrap}
+.research-meta dd{margin:0;color:var(--ink);font-size:var(--fs-sm);font-weight:var(--fw-3);
+text-align:right;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 .checks{margin:0;padding:0;list-style:none}
 .checks li{position:relative;padding:0 0 10px 20px;color:var(--ink-soft);font-size:var(--fs-sm);
 line-height:1.8}
@@ -310,6 +317,8 @@ tbody td,thead th{padding:var(--sp-3)}}
 @media(max-width:520px){
 .spec{grid-template-columns:1fr}
 .spec dd{padding-top:0;border-top:0}
+.research-meta{grid-template-columns:1fr}
+.research-meta div:nth-last-child(2){border-bottom:1px solid var(--line2)}
 .sf-cred{grid-template-columns:1fr;gap:0}
 .sf-cred dt{margin-top:10px}
 .sc{margin-left:0;flex-basis:100%}
@@ -547,11 +556,16 @@ _RESEARCH_MAIN = (
     + "<div class='sub2'>리서치 실행은 텔레그램에만 있습니다. 이 페이지는 결과를 "
     "<b>보여 주기만</b> 하며 분석을 시작시키지 않습니다.</div>"
     + """
-<div class='statstrip'>
-  <div class='st'><div class='l'>관심 주제</div><div class='v text' id='r-sight'>–</div></div>
-  <div class='st'><div class='l'>기준 시각</div><div class='v ts' id='r-time'>–</div></div>
-  <div class='st'><div class='l'>분석 뉴스</div><div class='v' id='r-news'>–</div></div>
-  <div class='st'><div class='l'>후보 종목</div><div class='v' id='r-cand'>–</div></div>
+<div class='histbox'>
+  <div class='histh'><span class='phico'>"""
+    + _icon(_I_CHART)
+    + """</span>연구 결과</div>
+  <dl class='brief research-meta'>
+    <div><dt>관심 주제</dt><dd id='r-sight'>–</dd></div>
+    <div><dt>기준 시각</dt><dd id='r-time'>–</dd></div>
+    <div><dt>분석 뉴스</dt><dd id='r-news'>–</dd></div>
+    <div><dt>후보 종목</dt><dd id='r-cand'>–</dd></div>
+  </dl>
 </div>
 
 <div class='histbox'>

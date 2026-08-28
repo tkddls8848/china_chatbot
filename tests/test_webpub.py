@@ -64,3 +64,12 @@ def test_pages_are_built_once_and_do_not_touch_the_filesystem(tmp_path, monkeypa
     first = client.get("/about").text
     assert first == client.get("/about").text
     assert first == webpub.ABOUT_HTML
+
+
+def test_research_metadata_uses_the_same_section_card_pattern():
+    """연구 결과 메타데이터도 요약·리스크와 같은 섹션형 카드로 표시한다."""
+    body = webpub.RESEARCH_HTML
+
+    assert "</span>연구 결과</div>" in body
+    assert "<dl class='brief research-meta'>" in body
+    assert "<div class='statstrip'>" not in body
