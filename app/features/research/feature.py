@@ -5,9 +5,10 @@ from core.config import (
     RESEARCH_STATE_FILE,
 )
 from features.base import CallbackSpec, CommandSpec, FeatureSpec, MenuSpec
-from llm import MarketViewManager, build_market_view_analyzer
+from llm import build_market_view_analyzer
 from research.handlers import cmd_research, handle_research_callback
 from research.news import collect_global_market_news_items
+from research.state import MarketViewManager
 
 
 def _install_services(app) -> None:

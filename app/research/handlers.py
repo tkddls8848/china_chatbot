@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 from core.config import RESEARCH_DISCOVERY_RESERVED_SLOTS, RESEARCH_MAX_CANDIDATES, TELEGRAM_MESSAGE_LIMIT
 from core.menu_status import set_menu_button_text
 from core.workers import burst_job, run_non_urgent, wait_for_urgent_idle
+from llm.market_view import MarketViewError
 from news.utils import chunk_message_items
 from research.candidates import build_research_candidate_universe
 from research.discovery import collect_extra_candidates
@@ -18,7 +19,7 @@ from research.results import (
     collect_actions,
     format_result_sections,
 )
-from llm.market_view import MarketViewError, MarketViewManager
+from research.state import MarketViewManager
 from stocks import StockDatabase
 from watchlist.events import record_watchlist_event
 

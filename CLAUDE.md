@@ -120,6 +120,18 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   영향이 없다. 수량을 늘릴 때만 무료 한도(하루 10,000)를 다시 계산한다.
   **깊이는 싸고 수량은 비싸다** — 야간을 시장당 1회 요약으로 바꾼 것이 이 규칙을
   그대로 적용한 결과다.
+- **종목·시장 감성을 읽는 경로는 네 갈래이고, 서로 캐시를 공유하지 않는다.**
+  같은 "감성"이라는 말이 네 군데서 각자 다른 저장소·집계·보존정책으로
+  쓰이므로, 새로 만지기 전에 어느 갈래인지부터 정한다.
+  | 소비자 | 저장소 | 단위·granularity | 보존 |
+  |---|---|---|---|
+  | `/view`(signal_scoring) | `PredictionLog`(JSONL append-only) | 종목별, up/down/neutral verdict 포함 | 무기한(읽을 때만 `VIEW_LOOKBACK_DAYS=3`로 필터) |
+  | 브리핑(briefing) | `NewsLog` | 종목별, count·평균만(verdict 없음) | `NEWS_LOG_RETENTION_DAYS=30`로 매 append마다 정리 |
+  | `/market`(market_sentiment) | `MarketDigestStore` | 시장(국가) 단위, 그날 헤드라인 배치 재요약 | `MARKET_DIGEST_RETENTION_DAYS=30` |
+  | `/research`(research) | 없음 — 캐시를 안 쓴다 | 실행마다 원문을 새로 수집해 LLM에 직접 투입 | 해당 없음 |
+  `PredictionLog`·`NewsLog`는 같은 기사 이벤트를 `news/delivery.py`·
+  `news/night.py`에서 나란히 기록한다(중복이 아니라 소비자가 달라서다 — 하나를
+  지우면 다른 소비자가 못 읽는다).
 - 일반 뉴스는 번역하지만 리서치 입력은 원문을 사용한다.
 - 리서치 후보는 관심종목, 원문 종목명 매칭, 중화권 섹터, 미국 스크리너,
   한국 등락률에서 만든다. 분석 action은 `add`, `remove`, `watch`만 허용한다.

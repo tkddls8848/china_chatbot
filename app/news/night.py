@@ -297,7 +297,9 @@ async def _log_highlights(
     """야간 주요 기사도 주간 번역과 같은 로그에 남긴다.
 
     남기지 않으면 /view·/market·signal_scoring이 야간 7시간을 통째로 보지
-    못한다.
+    못한다. `prediction_log`는 signal_scoring 소유의 선택 의존이다 — news가
+    이를 requires로 선언하지 않는 이유는 delivery.py의
+    `_confirm_and_log_global_article`과 같다(순환 의존 회피).
     """
     for highlight in result["highlights"]:
         item = items[highlight["index"]]

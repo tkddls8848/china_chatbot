@@ -45,6 +45,8 @@ async def _fetch_all(app: Application) -> None:
     registry: NewsSourceRegistry = app.bot_data["news_registry"]
     prediction_log: PredictionLog | None = app.bot_data.get("prediction_log")
     news_log: NewsLog | None = app.bot_data.get("news_log")
+    # news_prefilter 소유. `news`의 requires에 없는 선택 의존이다 — 꺼져 있으면
+    # None이고, 아래 호출부는 최신순 정렬로 그대로 fail-soft 동작한다.
     prefilter = app.bot_data.get("news_prefilter")
     watchlist = await wm.get_all()
     cycle_id = now().isoformat(timespec="seconds")

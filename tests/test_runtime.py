@@ -10,7 +10,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import bot
 from bot import _acquire_single_instance_lock
 from core import workers
-from llm.market_view import MarketViewAnalyzer, MarketViewManager
+from llm.market_view import MarketViewAnalyzer
+from research.state import MarketViewManager
 from watchlist.manager import WatchlistManager
 
 

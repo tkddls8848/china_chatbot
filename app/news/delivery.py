@@ -31,7 +31,13 @@ async def _confirm_and_log_global_article(
     news_log: NewsLog | None,
     prefilter=None,
 ) -> None:
-    """처리를 마친 기사를 확정한 뒤 원문 기반 감성 결과를 로그에 기록한다."""
+    """처리를 마친 기사를 확정한 뒤 원문 기반 감성 결과를 로그에 기록한다.
+
+    `prediction_log`(signal_scoring 소유)·`prefilter`(news_prefilter 소유)는
+    둘 다 선택 의존이다 — `news`의 `FeatureSpec.requires`에는 없다. 그 기능이
+    꺼져 있으면 `None`을 받아 조용히 건너뛴다(순환 의존 회피: signal_scoring이
+    이미 news를 requires하므로 반대 방향을 선언할 수 없다).
+    """
     spec = prepared.spec
     article = prepared.article
     translated = prepared.translated
