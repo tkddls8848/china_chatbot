@@ -1,6 +1,7 @@
 """종목 감성 뷰 명령 구현."""
 
 import html
+from types import SimpleNamespace
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -84,5 +85,14 @@ async def cmd_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
     lines.append(_view_footer())
     await message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def handle_view_callback(query, context, data: str) -> bool:
+    """관심종목 목록의 "📈 감성" 버튼(`view:<code>`) → `/view <code>`와 같은 경로."""
+    code = data.removeprefix("view:")
+    fake_update = SimpleNamespace(effective_message=query.message)
+    fake_context = SimpleNamespace(bot_data=context.bot_data, args=[code])
+    await cmd_view(fake_update, fake_context)
+    return True
 
 

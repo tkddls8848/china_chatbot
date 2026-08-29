@@ -214,6 +214,71 @@ def test_persistent_market_button_opens_the_markets_hub_not_the_admin_menu():
     assert {"nav:market:sentiment", "nav:market:anomaly", "nav:market:polymarket"} <= buttons
 
 
+def test_every_persistent_label_is_wired_in_handle_menu_text(monkeypatch):
+    """회귀(일반화): `MenuSpec.persistent_label`을 새로 추가하고 `handle_menu_text`의
+    `elif` 나열에 분기를 잊으면, 예전엔 조용히 '⚙️ 관리' 화면으로, 지금은 조용히
+    홈 화면으로 떨어진다 — 둘 다 눈에 안 띈다. 무거운 의존(watchlist_manager,
+    브리핑 발송 파이프라인 등)이 필요한 라벨은 그 진입점 함수만 스텁으로 바꿔
+    "제대로 된 분기로 갔는가"만 보고, 나머지는 실제 응답 텍스트가 catch-all
+    홈 응답과 다른지로 검증한다."""
+    import briefing.service as briefing_service
+    import watchlist.handlers as watchlist_handlers
+
+    called = {}
+
+    async def fake_cmd_menu(update, context):
+        called["watch"] = True
+
+    async def fake_cmd_briefing(update, context):
+        called["briefing"] = True
+
+    monkeypatch.setattr(watchlist_handlers, "cmd_menu", fake_cmd_menu)
+    monkeypatch.setattr(briefing_service, "cmd_briefing", fake_cmd_briefing)
+
+    class Message:
+        def __init__(self, text):
+            self.text = text
+            self.replies = []
+
+        async def reply_text(self, text, **kwargs):
+            self.replies.append((text, kwargs.get("reply_markup")))
+
+    registry = _registry()
+    _FALLBACK_TEXT = "<b>주식 뉴스 봇</b>\n원하는 기능을 선택하세요."
+    _STUBBED_ACTIONS = {"watch": "watch", "briefing": "briefing"}
+    labels = {
+        item.persistent_label: item.callback_data
+        for item in registry.menu_specs()
+        if item.persistent_label
+    }
+    assert labels, "no persistent labels registered — test itself is broken"
+
+    for label, callback_data in labels.items():
+        action = callback_data.removeprefix("nav:")
+        message = Message(label)
+        update = SimpleNamespace(effective_message=message)
+        context = SimpleNamespace(
+            user_data={},
+            bot_data={"feature_registry": registry},
+            application=None,
+        )
+
+        asyncio.run(handle_menu_text(update, context))
+
+        if action in _STUBBED_ACTIONS:
+            assert called.get(_STUBBED_ACTIONS[action]), (
+                f"{label} did not reach its stubbed command handler"
+            )
+            continue
+
+        assert message.replies, f"{label} produced no reply"
+        text, _markup = message.replies[-1]
+        assert text != _FALLBACK_TEXT, (
+            f"{label} fell through handle_menu_text's catch-all — "
+            "it needs its own elif branch"
+        )
+
+
 def test_bot_startup_pushes_latest_persistent_menu(monkeypatch):
     sent = []
 

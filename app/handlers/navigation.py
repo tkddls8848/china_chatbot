@@ -111,6 +111,7 @@ def system_menu() -> InlineKeyboardMarkup:
     """시스템 상태 아래에 붙는 하위 항목. `/system`의 인자를 버튼으로 옮긴 것이다."""
     return _keyboard([
         [("📋 기능 카탈로그", "nav:system:features"), ("🧮 뉴스 사전선별", "nav:system:prefilter")],
+        [("🧭 아노말리 게이트", "nav:system:anomaly")],
         *_back(),
     ])
 
@@ -181,12 +182,9 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action.startswith("market:polymarket:"):
         from features.market_sentiment.handlers import cmd_polymarket
         await cmd_polymarket(update, _context(context, [action.rsplit(":", 1)[1]]))
-    elif action in {"watch", "watch:list"}:
+    elif action == "watch":
         from watchlist.handlers import cmd_menu
         await cmd_menu(update, _context(context, []))
-    elif action == "watch:add":
-        from watchlist.handlers import handle_watchlist_callback
-        await handle_watchlist_callback(query, context, "add_stock")
     elif action == "research":
         await message.edit_text(
             "<b>리서치</b>",
@@ -204,9 +202,6 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action == "briefing":
         from briefing.service import cmd_briefing
         await cmd_briefing(update, _context(context, []))
-    elif action.startswith("briefing:"):
-        from briefing.service import cmd_briefing
-        await cmd_briefing(update, _context(context, [action.split(":", 1)[1]]))
     elif action == "system":
         from features.system_admin.handlers import cmd_system
         await cmd_system(update, _context(context, []))
