@@ -131,9 +131,10 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - 관심종목과 발송 이력도 현재 JSON 형식만 지원한다.
 - `/market`은 기사별 번역 대신 시장·일자별 헤드라인 다이제스트를 분석한다.
   완료된 과거 일자는 저장 결과를 재사용하고 오늘만 다시 계산한다.
-- **Polymarket 컨센서스는 수집만 켠 섀도 파일럿이다**(`POLYMARKET_ENABLED=True`,
-  `POLYMARKET_PANEL_ENABLED=False` — 매일 스냅숏을 쌓지만 패널은 아직 그리지 않는다).
-  `market_sentiment`의 외부 소스이지 별도 기능 키가 아니다. 값은 거시 위험선호
+- **Polymarket 컨센서스는 2026-08-29에 승격했다**(`POLYMARKET_ENABLED=True`,
+  `POLYMARKET_PANEL_ENABLED=True` — 백필 6개 게이트와 라이브 가동률 7일 중 6일을
+  모두 통과해 `/market` 하단에 패널을 그린다). `market_sentiment`의 외부
+  소스이지 별도 기능 키가 아니다. 값은 거시 위험선호
   확률변화(pp)라 국가별 -1~+1 감성 점수와 축이 다르다 — 합산하거나 순위·리서치
   입력·브리핑 payload에 넣지 않고 `/market` 하단 별도 패널에만 그린다. 방향은
   `polymarket_rules.py`의 명시적 allowlist로만 정하고 LLM에 묻지 않는다.

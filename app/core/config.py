@@ -416,7 +416,7 @@ POLYMARKET_BASE_URL = "https://gamma-api.polymarket.com"
 # 과거 시세는 Gamma가 아니라 CLOB에 있다. 인증은 마찬가지로 없다.
 POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
 POLYMARKET_ENABLED = True
-POLYMARKET_PANEL_ENABLED = False
+POLYMARKET_PANEL_ENABLED = True
 # Gamma가 이 서버 출구 IP의 지역을 막을 때만 채운다(docs/server-ops.md 8-4).
 # 비어 있으면(기본) 직접 호출한다 — polymarket_proxy.py가 이 값 하나로
 # 세션에 프록시를 물릴지 말지를 정한다.

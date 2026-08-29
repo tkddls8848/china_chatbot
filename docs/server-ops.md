@@ -253,9 +253,9 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 
 ## 8. Polymarket 컨센서스 파일럿
 
-**수집만 켠 섀도 파일럿이다**(`POLYMARKET_ENABLED=True`,
-`POLYMARKET_PANEL_ENABLED=False`). 즉 스냅숏은 매일 쌓지만 `/market` 하단 패널은
-아직 그리지 않는다. `market_sentiment`의 외부 소스이지 별도 기능 키가 아니다.
+**2026-08-29에 승격했다**(`POLYMARKET_ENABLED=True`, `POLYMARKET_PANEL_ENABLED=True`).
+백필 6개 게이트와 라이브 가동률(최근 7일 중 6일)을 모두 통과해 `/market` 하단에
+패널을 그린다. `market_sentiment`의 외부 소스이지 별도 기능 키가 아니다.
 
 ### 무엇으로 쓸 수 있나
 
@@ -386,6 +386,30 @@ cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
   `config.py`의 `POLYMARKET_PANEL_ENABLED`를 `True`로 올린다(커밋). 그 뒤
   `/market`을 한 번 호출해 하단 패널이 붙는지, 위 순위·캡션이 그대로인지
   눈으로 확인한다.
+
+**최종 판정과 승격 (2026-08-29).** 라이브 가동률이 최근 7일 중 6일로 통과했다.
+그런데 그 시점 `/system polymarket`은 백필 쪽 두 게이트(성공 스냅숏 23/24,
+유효 daily delta 23/24)를 미달로 보였다 — 서버의 `polymarket_backfill.json`을
+열어 보니 8/22 이후 7일치가 통째로 비어 있었다(직전 백필 실행이 왜 최근 구간을
+못 채웠는지는 그 실행의 로그가 없어 알 수 없다 — `이력 조회 실패`가 0이었다면
+이 파일 자체가 그 실행분이 아니라 더 오래된 실행분이었을 가능성이 크다).
+백필을 그 자리에서 다시 돌리니(`./venv/bin/python app/polymarket_backfill.py`)
+31일치가 정상적으로 채워지며 6개 게이트 전부 통과했다:
+
+| 축 | 값 | 기준 | 판정 |
+|---|---:|---:|---|
+| 백필 스냅숏 일수 | 30 | 24 | 통과 |
+| 백필 유효 daily delta | 30 | 24 | 통과 |
+| 공통 이벤트 3개 이상인 날 비율 | 1.00 | 0.80 | 통과 |
+| 독립 theme | 4 | 3 | 통과 |
+| 최대 theme 기여도 | 0.416 | 0.50 이하 | 통과 |
+| median spread | 0.01 | 0.05 이하 | 통과 — 단 조회 시점 호가다 |
+| 최근 7일 스냅숏(가동률) | 6 | 6 | 통과 |
+
+두 축 모두 통과해 `POLYMARKET_PANEL_ENABLED`를 `True`로 올리고 커밋했다.
+**교훈**: `/system polymarket`이 백필 미달을 보이면 바로 8-5로 가기 전에 백필을
+한 번 다시 돌려 본다 — 이번처럼 실제 게이트 미달이 아니라 오래되거나 일부만
+채워진 백필 파일이 원인일 수 있다.
 
 게이트 임계값(`POLYMARKET_MIN_VOLUME` 등)과 `POLYMARKET_ENABLED`·
 `POLYMARKET_PANEL_ENABLED`는 전부 `config.py`의 상수다 — 바꾸려면 코드를
