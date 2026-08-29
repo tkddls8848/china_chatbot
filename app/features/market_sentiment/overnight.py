@@ -144,6 +144,8 @@ async def capture_window(
 ) -> bool:
     store = app.bot_data.get("overnight_tone_store")
     analyzer = app.bot_data.get("overnight_tone_analyzer")
+    # 이름은 "market_digest"지만 다이제스트(/market)와 같은 Cloudflare 무료
+    # 할당량을 공유하는 락이라 여기서도 빌려 쓴다(feature.py 설치부 참고).
     semaphore = app.bot_data.get("market_digest_semaphore")
     if store is None or analyzer is None or semaphore is None:
         return False

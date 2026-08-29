@@ -40,6 +40,8 @@ def _install_market_digest_services(app) -> None:
     app.bot_data["market_digest_analyzer"] = build_market_digest_analyzer()
     # 다이제스트는 /market 한 번에 수십 번 호출될 수 있다. 번역 파이프라인과
     # 같은 무료 할당량을 쓰므로 동시 호출을 1로 묶어 순서를 예측 가능하게 둔다.
+    # 이름은 "market_digest"지만 아노말리(overnight.py의 capture_window)도
+    # 같은 Cloudflare 무료 할당량을 쓰는 오버나이트 톤 분석에서 이 락을 빌린다.
     app.bot_data["market_digest_semaphore"] = asyncio.Semaphore(1)
 
 

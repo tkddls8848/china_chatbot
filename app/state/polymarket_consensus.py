@@ -263,7 +263,7 @@ class PolymarketConsensusStore:
         """승격 게이트를 계산한다(docs/server-ops.md 8-3).
 
         하나라도 실패하면 패널을 켜지 않는다. 사람이 JSON을 열어 세는 대신
-        `/system polymarket`이 이 값을 그대로 보여 준다.
+        `/polymarket gate`가 이 값을 그대로 보여 준다.
         """
         current_day = today()
         oldest = current_day - timedelta(days=max(1, window_days) - 1)

@@ -349,11 +349,15 @@ NEWS_SOURCE_MARKETS = {
     "gnews_kr": "KR",
     "mk-stock": "KR",
 }
+# market_sentiment 세 화면(감성·아노말리·폴리마켓)이 기본 조회 일수와 대상
+# 시장 집합으로 공유한다 — 접두사가 "CHART"라 /market 전용처럼 보이지만
+# 아니다(cmd_market·cmd_anomaly·cmd_polymarket 전부 참조).
 MARKET_CHART_LOOKBACK_DAYS = 7
+MARKET_CHART_MARKETS = frozenset({"CN", "HK", "US", "KR"})
+# 아래 셋은 그 이름대로 /market(cmd_market)의 일별 감성 다이제스트 전용이다.
 MARKET_CHART_MIN_ARTICLES = 6
 MARKET_CHART_MIN_DAYS = 3
 MARKET_CHART_BACKFILL_DAYS_PER_REQUEST = 7
-MARKET_CHART_MARKETS = frozenset({"CN", "HK", "US", "KR"})
 
 # 일별 감성 다이제스트는 하루치 헤드라인을 한 번에 분석한다.
 MARKET_DIGEST_FILE = DATA_DIR / "market_sentiment" / "daily_digest.json"
@@ -403,11 +407,13 @@ MARKET_ANOMALY_INDEX_TICKERS = {
 }
 
 
-# ── Polymarket 거시 위험선호 컨센서스(섀도 파일럿) ────
+# ── Polymarket 거시 위험선호 컨센서스(2026-08-29 승격, `/polymarket` 독립 명령) ──
 # Gamma API는 인증이 필요 없고 LLM을 쓰지 않으므로 추가 Neurons는 0/일이다.
-# 값은 국가별 뉴스 감성 점수에 절대 합산하지 않고 `/market` 하단 별도 패널에만
-# 그린다. 수집과 표시를 분리해 두는 이유는 30일 섀도 파일럿 때문이다 —
-# 수집만 켜 두고(ENABLED) 승격 게이트를 통과할 때까지 패널은 끈다(PANEL).
+# 값은 국가별 뉴스 감성 점수에 절대 합산하지 않고 `/polymarket` 독립 차트로만
+# 그린다(승격 전에는 `/market` 하단 패널이었다 — 지금은 아니다). ENABLED(수집)와
+# PANEL_ENABLED(표시)를 분리해 둔 것은 승격 전 섀도 파일럿 단계의 흔적이며,
+# 지금은 철수할 때(docs/server-ops.md 8-5)만 PANEL_ENABLED를 먼저 끄는
+# 용도로 남는다 — 둘 다 True인 것이 정상 상태다.
 POLYMARKET_CONSENSUS_FILE = DATA_DIR / "market_sentiment" / "polymarket_consensus.json"
 # 백필(`app/polymarket_backfill.py`)이 쓰는 별도 파일. 라이브 스냅숏과 섞지
 # 않는다 — 백필 값에는 과거 호가가 없고 수량 게이트가 조회 시점 값으로

@@ -35,8 +35,8 @@ def _trend_series(points: list[dict]) -> tuple[list[datetime], list[float]]:
     return [day for day, _ in parsed], [value for _, value in parsed]
 
 
-def _draw_consensus_panel(axis, consensus: list[dict]) -> None:
-    """Draw the Polymarket macro risk-appetite panel on its own axis.
+def _draw_polymarket_series(axis, consensus: list[dict]) -> None:
+    """Draw the Polymarket macro risk-appetite bars on the given axis.
 
     This is a separate reference line with its own unit (percentage points of
     probability), never merged into the -1..+1 news sentiment scores or the
@@ -142,7 +142,7 @@ def render_polymarket_chart(consensus: list[dict], days: int) -> BytesIO:
     fig, axis = plt.subplots(figsize=(10, 5))
     fig.patch.set_facecolor("#f8fafc")
     axis.set_facecolor("#f8fafc")
-    _draw_consensus_panel(axis, consensus)
+    _draw_polymarket_series(axis, consensus)
     axis.set_title(f"Polymarket macro risk appetite — {days}d, 24h probability change")
     fig.tight_layout()
 
