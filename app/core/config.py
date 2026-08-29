@@ -377,9 +377,10 @@ MARKET_DIGEST_TIMEOUT = 60
 MARKET_DIGEST_COUNT_TOLERANCE_RATIO = 0.2
 
 # ── 전일 움직임 ↔ 당일 개장 전 센티먼트 아노말리 ─────────
-# 구현과 승격을 분리한다. 백필 G0·G6·G7을 확인하기 전에는 기존 /market 화면을
-# 유지하고, true일 때만 세션 기반 수집 job과 새 화면을 사용한다.
-MARKET_ANOMALY_ENABLED = False
+# /market을 대체하지 않는다 — `/anomaly` 명령·메뉴로 따로 뜬다(2026-08-29).
+# G0·G6·G7 게이트는 아직 통과 전이라(표본도 기준의 20% 수준) 화면에는 미검증
+# 표시(a=검증대기)가 그대로 남는다. 검증 전 파일럿 노출을 감수하기로 한 결정이다.
+MARKET_ANOMALY_ENABLED = True
 # G5 라이브 수집 기간에만 명시적으로 켠다(뉴스·LLM 할당량 사용). 끌 때는
 # 이 리터럴을 false로 바꾸고 커밋한다.
 MARKET_ANOMALY_COLLECTION_ENABLED = True

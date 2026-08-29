@@ -19,7 +19,7 @@ from core.config import (
     POLYMARKET_TIMEOUT,
 )
 from features.base import CommandSpec, FeatureSpec, MenuSpec
-from features.market_sentiment.handlers import cmd_market
+from features.market_sentiment.handlers import cmd_anomaly, cmd_market
 from features.market_sentiment.overnight import capture_completed_overnight_windows
 from features.market_sentiment.polymarket import PolymarketClient
 from features.market_sentiment.polymarket_proxy import build_polymarket_session
@@ -121,9 +121,11 @@ FEATURE = FeatureSpec(
     requires=frozenset({"news"}),
     commands=(
         CommandSpec("market", "국가별 뉴스 감성", cmd_market, usage="[일수]"),
+        CommandSpec("anomaly", "시장 서술 이상(파일럿)", cmd_anomaly, usage="[일수]"),
     ),
     menus=(
         MenuSpec("📊 국가별 감성", "nav:market", 0, "📊 감성", 1),
+        MenuSpec("🧭 시장 이상", "nav:anomaly", 0, "🧭 이상", 1),
     ),
     install_services=_install_services,
     install_jobs=_install_jobs,

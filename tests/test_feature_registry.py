@@ -140,7 +140,10 @@ def test_registry_resolves_menu_ownership_and_persistent_labels():
     assert registry.menu_owner("nav:market") == "market_sentiment"
     assert registry.menu_owner("nav:market:30") == "market_sentiment"
     assert registry.menu_owner("nav:marketplace") is None
+    assert registry.menu_owner("nav:anomaly") == "market_sentiment"
+    assert registry.menu_owner("nav:anomaly:14") == "market_sentiment"
     assert registry.persistent_callback("📊 감성") == "nav:market"
+    assert registry.persistent_callback("🧭 이상") == "nav:anomaly"
     assert registry.persistent_callback("없는 메뉴") is None
 
 
@@ -197,7 +200,7 @@ def test_persistent_menu_matches_current_primary_workflows():
 
     assert rows == [
         ["🏠 홈"],
-        ["⭐ 관심종목", "📊 감성"],
+        ["⭐ 관심종목", "📊 감성", "🧭 이상"],
         ["🔎 리서치", "📰 브리핑"],
         ["⚙️ 관리"],
     ]

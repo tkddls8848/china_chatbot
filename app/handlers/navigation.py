@@ -55,6 +55,13 @@ def market_menu() -> InlineKeyboardMarkup:
     ])
 
 
+def anomaly_menu() -> InlineKeyboardMarkup:
+    return _keyboard([
+        [("7일", "nav:anomaly:7"), ("14일", "nav:anomaly:14"), ("30일", "nav:anomaly:30")],
+        *_back(),
+    ])
+
+
 def research_menu() -> InlineKeyboardMarkup:
     return _keyboard([
         [("주제 보기", "nav:research:show"), ("분석 실행", "nav:research:run")],
@@ -114,6 +121,15 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action.startswith("market:"):
         from features.market_sentiment.handlers import cmd_market
         await cmd_market(update, _context(context, [action.split(":", 1)[1]]))
+    elif action == "anomaly":
+        await message.edit_text(
+            "<b>시장 서술 이상(파일럿)</b>\n조회 기간을 선택하세요.",
+            parse_mode="HTML",
+            reply_markup=anomaly_menu(),
+        )
+    elif action.startswith("anomaly:"):
+        from features.market_sentiment.handlers import cmd_anomaly
+        await cmd_anomaly(update, _context(context, [action.split(":", 1)[1]]))
     elif action in {"watch", "watch:list"}:
         from watchlist.handlers import cmd_menu
         await cmd_menu(update, _context(context, []))

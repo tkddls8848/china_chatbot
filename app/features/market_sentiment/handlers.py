@@ -198,6 +198,28 @@ async def _cmd_market_anomaly(message, context, days: int) -> None:
     )
 
 
+async def cmd_anomaly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """시장 서술 이상(파일럿) 3패널 화면. `/market`과 자리를 분리한 별도 명령이다."""
+    message = update.effective_message
+    if message is None:
+        return
+    if not MARKET_ANOMALY_ENABLED:
+        await message.reply_text("시장 아노말리 화면이 아직 비활성화되어 있습니다.")
+        return
+    args = context.args or []
+    days = MARKET_CHART_LOOKBACK_DAYS
+    if args:
+        try:
+            days = int(args[0])
+        except ValueError:
+            await message.reply_text("사용법: /anomaly [1-30일]")
+            return
+    if not 1 <= days <= 30:
+        await message.reply_text("조회 기간은 1~30일로 지정해 주세요.")
+        return
+    await _cmd_market_anomaly(message, context, days)
+
+
 @burst_job("시장 컨센서스 분석")
 async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send country/market news sentiment ranking and trend chart."""
@@ -214,10 +236,6 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
     if not 1 <= days <= 30:
         await message.reply_text("조회 기간은 1~30일로 지정해 주세요.")
-        return
-
-    if MARKET_ANOMALY_ENABLED:
-        await _cmd_market_anomaly(message, context, days)
         return
 
     store: MarketDigestStore | None = context.bot_data.get("market_digest_store")
