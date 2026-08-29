@@ -312,3 +312,38 @@ def test_menu_button_routes_to_the_polymarket_report(monkeypatch):
 
     assert handled is True
     assert seen.get("called") is True
+
+
+def test_persistent_button_routes_to_the_polymarket_report(monkeypatch):
+    """하단 "🎲 폴리마켓" 버튼도 인라인과 같은 경로를 타야 한다.
+
+    예전에는 하단 버튼 경로가 market·watch·research·briefing만 알고 나머지를
+    관리 화면으로 흘려보내, 폴리마켓 버튼이 시스템 관리 창을 열었다.
+    """
+    from features import ALL_FEATURES, build_feature_registry
+    from handlers import navigation
+
+    seen = {}
+
+    async def fake_cmd_polymarket(update, context):
+        seen["called"] = True
+
+    monkeypatch.setattr(market_handlers, "cmd_polymarket", fake_cmd_polymarket)
+    message = _Message()
+    message.text = "🎲 폴리마켓"
+    update = SimpleNamespace(effective_message=message, callback_query=None)
+    context = SimpleNamespace(
+        args=[],
+        bot_data={
+            "feature_registry": build_feature_registry(
+                feature.key for feature in ALL_FEATURES
+            )
+        },
+        user_data={},
+        application=None,
+    )
+
+    asyncio.run(navigation.handle_menu_text(update, context))
+
+    assert seen.get("called") is True
+    assert message.texts == []
