@@ -140,6 +140,10 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   순위·리서치 입력·브리핑 payload에 넣지 않는다. 방향은 `polymarket_rules.py`의
   명시적 allowlist로만 정하고 LLM에 묻지 않는다. 승격 게이트 진단은
   `/polymarket gate`. 자세한 규약은 `docs/server-ops.md`.
+  `/polymarket`은 최대 90일까지 조회할 수 있다(`POLYMARKET_RETENTION_DAYS=91`).
+  이 값은 라이브 스토어의 보관 기간일 뿐, 승격 게이트 평가 창은 여전히
+  `PROMOTION_WINDOW_DAYS=30`으로 고정이다 — `app/polymarket_backfill.py`가
+  게이트 임계값을 그 30일 창에 맞춰 정했으므로 둘을 같은 상수로 묶지 않는다.
 - **승격 판정은 30일을 기다리지 않는다.** `app/polymarket_backfill.py`가 CLOB
   과거 시세로 지난 31일 스냅숏을 소급 작성해 같은 게이트를 돌린다. 결과는
   `polymarket_backfill.json`에 따로 쓰고 라이브 스냅숏과 섞지 않는다 — 백필에는

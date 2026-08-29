@@ -218,10 +218,10 @@ async def cmd_polymarket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             days = int(args[0])
         except ValueError:
-            await message.reply_text("사용법: /polymarket [1-30일|gate]")
+            await message.reply_text("사용법: /polymarket [1-90일|gate]")
             return
-    if not 1 <= days <= 30:
-        await message.reply_text("조회 기간은 1~30일로 지정해 주세요.")
+    if not 1 <= days <= 90:
+        await message.reply_text("조회 기간은 1~90일로 지정해 주세요.")
         return
     consensus = await _polymarket_series(context, days)
     if not consensus:

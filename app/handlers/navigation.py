@@ -90,7 +90,11 @@ def polymarket_menu() -> InlineKeyboardMarkup:
             ("14일", "nav:market:polymarket:14"),
             ("30일", "nav:market:polymarket:30"),
         ],
-        [("게이트 상태", "nav:market:polymarket:gate")],
+        [
+            ("60일", "nav:market:polymarket:60"),
+            ("90일", "nav:market:polymarket:90"),
+            ("게이트 상태", "nav:market:polymarket:gate"),
+        ],
         *_back(),
     ])
 

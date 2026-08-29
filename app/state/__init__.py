@@ -2,7 +2,11 @@ from state.market_digest import MarketDigestStore, digest_key, market_history_ga
 from state.news_log import NewsLog
 from state.night_queue import NightNewsQueue
 from state.overnight_tone import OvernightToneStore
-from state.polymarket_consensus import PolymarketConsensusStore, align_daily_change
+from state.polymarket_consensus import (
+    PROMOTION_WINDOW_DAYS,
+    PolymarketConsensusStore,
+    align_daily_change,
+)
 from state.prediction_log import PredictionLog, aggregate_stock_views
 from state.sent_tracker import SentNewsTracker
 
@@ -11,6 +15,7 @@ __all__ = [
     "NewsLog",
     "NightNewsQueue",
     "OvernightToneStore",
+    "PROMOTION_WINDOW_DAYS",
     "PolymarketConsensusStore",
     "PredictionLog",
     "SentNewsTracker",

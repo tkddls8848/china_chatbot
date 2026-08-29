@@ -38,7 +38,7 @@ from features.market_sentiment.polymarket_history import (
     run_backfill,
 )
 from features.market_sentiment.polymarket_proxy import build_polymarket_session
-from state import PolymarketConsensusStore
+from state import PROMOTION_WINDOW_DAYS, PolymarketConsensusStore
 
 _LABELS = {
     "snapshot_days": "성공 스냅숏(일)",
@@ -48,7 +48,11 @@ _LABELS = {
     "top_theme_contribution": "최대 theme 기여도",
     "median_spread": "median spread",
 }
-_WINDOW_DAYS = POLYMARKET_RETENTION_DAYS - 1
+# 승격 게이트의 평가 창(PROMOTION_WINDOW_DAYS)에 고정한다. POLYMARKET_RETENTION_DAYS는
+# 라이브 스토어가 얼마나 오래 보관하는지(차트용, /polymarket 기간 옵션)를 정할 뿐이고
+# 게이트 임계값(_MIN_SNAPSHOT_DAYS=24 등)은 30일 창을 전제로 정했다 — 둘을 묶으면
+# 보존 기간을 늘릴 때마다 게이트 판정창까지 조용히 늘어난다.
+_WINDOW_DAYS = PROMOTION_WINDOW_DAYS
 
 
 async def _store_snapshots(snapshots) -> int:

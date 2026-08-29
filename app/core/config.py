@@ -433,8 +433,12 @@ POLYMARKET_MIN_LIQUIDITY = 1000.0
 POLYMARKET_MAX_SPREAD = 0.05
 # 만기가 너무 먼 계약은 하루 단위로 거의 움직이지 않아 신호를 희석한다.
 POLYMARKET_MAX_HORIZON_DAYS = 365
-# 30일 파일럿의 일별 변화를 계산하려면 하루 전 스냅숏이 남아 있어야 한다.
-POLYMARKET_RETENTION_DAYS = 31
+# /polymarket 차트의 최장 조회 기간(90일)에 하루 전 스냅숏 몫(+1)을 더한다.
+# 승격 게이트 평가 창(PROMOTION_WINDOW_DAYS=30)과는 별개다 — 게이트 임계값은
+# 30일 창을 전제로 정해 놓았으므로(app/polymarket_backfill.py 참고) 이 값을
+# 늘려도 게이트 판정은 그대로 30일만 본다. 이 값은 순전히 라이브 스토어가
+# 얼마나 오래 보관해 `/polymarket`이 더 긴 기간을 그릴 수 있게 하느냐이다.
+POLYMARKET_RETENTION_DAYS = 91
 
 
 NEWS_MARKET_BACKFILL_QUERIES = {

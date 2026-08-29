@@ -242,9 +242,19 @@ def test_polymarket_gate_keyword_still_reaches_the_diagnostic_report(monkeypatch
 
 
 def test_polymarket_rejects_an_out_of_range_day_count(monkeypatch):
-    message, _captured = _run_polymarket_chart(monkeypatch, args=("40",))
+    message, _captured = _run_polymarket_chart(monkeypatch, args=("100",))
 
-    assert any("1~30일" in text for text in message.replies)
+    assert any("1~90일" in text for text in message.replies)
+
+
+def test_polymarket_accepts_up_to_ninety_days(monkeypatch):
+    """`/market`·`/anomaly`와 달리 폴리마켓은 30일 넘게도 조회할 수 있다."""
+    message, captured = _run_polymarket_chart(
+        monkeypatch, store=_StoreStub(_consensus(90)), args=("90",)
+    )
+
+    assert captured["func"] is commands.render_polymarket_chart
+    assert "최근 90일" in message.photo["caption"]
 
 
 # ── 스냅숏 job 격리 ───────────────────────────────────
