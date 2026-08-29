@@ -48,16 +48,49 @@ def _back() -> list[list[tuple[str, str]]]:
     return [[("🏠 처음", "nav:home")]]
 
 
+def markets_hub_menu() -> InlineKeyboardMarkup:
+    """`📊 시장` 진입점 — 감성·이상·폴리마켓 세 화면 중 하나를 고른다.
+
+    셋을 각자 하단 고정메뉴 버튼으로 두면 첫 화면이 매번 늘어난다. 그래서
+    한 단계 더 들어가는 대신(depth를 높여서) 첫 화면 버튼 수를 줄인다.
+    """
+    return _keyboard([
+        [("📊 국가별 감성", "nav:market:sentiment"), ("🧭 시장 이상", "nav:market:anomaly")],
+        [("🎲 폴리마켓", "nav:market:polymarket")],
+        *_back(),
+    ])
+
+
 def market_menu() -> InlineKeyboardMarkup:
     return _keyboard([
-        [("7일", "nav:market:7"), ("14일", "nav:market:14"), ("30일", "nav:market:30")],
+        [
+            ("7일", "nav:market:sentiment:7"),
+            ("14일", "nav:market:sentiment:14"),
+            ("30일", "nav:market:sentiment:30"),
+        ],
         *_back(),
     ])
 
 
 def anomaly_menu() -> InlineKeyboardMarkup:
     return _keyboard([
-        [("7일", "nav:anomaly:7"), ("14일", "nav:anomaly:14"), ("30일", "nav:anomaly:30")],
+        [
+            ("7일", "nav:market:anomaly:7"),
+            ("14일", "nav:market:anomaly:14"),
+            ("30일", "nav:market:anomaly:30"),
+        ],
+        *_back(),
+    ])
+
+
+def polymarket_menu() -> InlineKeyboardMarkup:
+    return _keyboard([
+        [
+            ("7일", "nav:market:polymarket:7"),
+            ("14일", "nav:market:polymarket:14"),
+            ("30일", "nav:market:polymarket:30"),
+        ],
+        [("게이트 상태", "nav:market:polymarket:gate")],
         *_back(),
     ])
 
@@ -113,25 +146,37 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
     elif action == "market":
         await message.edit_text(
+            "<b>시장 화면</b>\n무엇을 볼까요?",
+            parse_mode="HTML",
+            reply_markup=markets_hub_menu(),
+        )
+    elif action == "market:sentiment":
+        await message.edit_text(
             "<b>국가별 뉴스 감성</b>\n조회 기간을 선택하세요.",
             parse_mode="HTML",
             reply_markup=market_menu(),
         )
-    elif action.startswith("market:"):
+    elif action.startswith("market:sentiment:"):
         from features.market_sentiment.handlers import cmd_market
-        await cmd_market(update, _context(context, [action.split(":", 1)[1]]))
-    elif action == "anomaly":
+        await cmd_market(update, _context(context, [action.rsplit(":", 1)[1]]))
+    elif action == "market:anomaly":
         await message.edit_text(
             "<b>시장 서술 이상(파일럿)</b>\n조회 기간을 선택하세요.",
             parse_mode="HTML",
             reply_markup=anomaly_menu(),
         )
-    elif action.startswith("anomaly:"):
+    elif action.startswith("market:anomaly:"):
         from features.market_sentiment.handlers import cmd_anomaly
-        await cmd_anomaly(update, _context(context, [action.split(":", 1)[1]]))
-    elif action == "polymarket":
+        await cmd_anomaly(update, _context(context, [action.rsplit(":", 1)[1]]))
+    elif action == "market:polymarket":
+        await message.edit_text(
+            "<b>Polymarket 거시 위험선호</b>\n조회 기간을 선택하세요.",
+            parse_mode="HTML",
+            reply_markup=polymarket_menu(),
+        )
+    elif action.startswith("market:polymarket:"):
         from features.market_sentiment.handlers import cmd_polymarket
-        await cmd_polymarket(update, _context(context, []))
+        await cmd_polymarket(update, _context(context, [action.rsplit(":", 1)[1]]))
     elif action in {"watch", "watch:list"}:
         from watchlist.handlers import cmd_menu
         await cmd_menu(update, _context(context, []))
@@ -199,9 +244,9 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         action = callback_data.removeprefix("nav:")
         if action == "market":
             await message.reply_text(
-                "<b>국가별 뉴스 감성</b>\n조회 기간을 선택하세요.",
+                "<b>시장 화면</b>\n무엇을 볼까요?",
                 parse_mode="HTML",
-                reply_markup=market_menu(),
+                reply_markup=markets_hub_menu(),
             )
         elif action == "watch":
             from watchlist.handlers import cmd_menu
@@ -215,15 +260,6 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         elif action == "briefing":
             from briefing.service import cmd_briefing
             await cmd_briefing(update, _context(context, []))
-        elif action == "anomaly":
-            await message.reply_text(
-                "<b>시장 서술 이상(파일럿)</b>\n조회 기간을 선택하세요.",
-                parse_mode="HTML",
-                reply_markup=anomaly_menu(),
-            )
-        elif action == "polymarket":
-            from features.market_sentiment.handlers import cmd_polymarket
-            await cmd_polymarket(update, _context(context, []))
         elif action == "system":
             await message.reply_text("<b>관리</b>", parse_mode="HTML", reply_markup=_keyboard([
                 [("시스템 상태", "nav:system"), ("종목 DB 갱신", "nav:stockdb")], *_back()

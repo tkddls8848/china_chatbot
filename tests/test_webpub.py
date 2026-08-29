@@ -14,7 +14,6 @@ def test_publish_market_and_serve_it(tmp_path, monkeypatch):
     webpub_export.publish_market(
         b"png-bytes",
         {"KR": {"avg_sentiment": 0.2, "count": 12, "daily": []}},
-        None,
         7,
     )
 

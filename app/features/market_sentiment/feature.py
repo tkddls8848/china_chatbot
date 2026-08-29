@@ -122,13 +122,15 @@ FEATURE = FeatureSpec(
     commands=(
         CommandSpec("market", "국가별 뉴스 감성", cmd_market, usage="[일수]"),
         CommandSpec("anomaly", "시장 서술 이상(파일럿)", cmd_anomaly, usage="[일수]"),
-        CommandSpec("polymarket", "폴리마켓 컨센서스 파일럿", cmd_polymarket),
+        CommandSpec(
+            "polymarket", "폴리마켓 거시 위험선호", cmd_polymarket, usage="[일수|gate]"
+        ),
     ),
-    menus=(
-        MenuSpec("📊 국가별 감성", "nav:market", 0, "📊 감성", 1),
-        MenuSpec("🧭 시장 이상", "nav:anomaly", 0, "🧭 이상", 1),
-        MenuSpec("🎲 폴리마켓", "nav:polymarket", 0, "🎲 폴리마켓", 1),
-    ),
+    # 세 화면(감성·이상·폴리마켓) 모두 이 메뉴 하나 밑에 묶는다 — 각자
+    # 하단 고정메뉴 버튼을 가지면 첫 화면이 매번 늘어난다. nav:market이
+    # 먼저 세 화면 중 하나를 고르는 허브를 보여주고(handlers/navigation.py의
+    # markets_hub_menu), 고른 뒤에야 그 화면의 기간 선택으로 들어간다.
+    menus=(MenuSpec("📊 시장", "nav:market", 0, "📊 시장", 1),),
     install_services=_install_services,
     install_jobs=_install_jobs,
     data_files=(

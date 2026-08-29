@@ -35,6 +35,7 @@ from features.market_sentiment.chart import (
     market_label,
     render_anomaly_chart,
     render_market_chart,
+    render_polymarket_chart,
 )
 from features.market_sentiment.polymarket_history import BACKFILL_CAVEATS
 from news import backfill_market_digests
@@ -71,13 +72,11 @@ def _spread_backfill_days(days: list, limit: int) -> list:
     return [days[index] for index in sorted(indexes)]
 
 
-async def _consensus_panel_series(context, days: int) -> list[dict] | None:
-    """하단 패널에 그릴 24시간 거시 위험선호 변화. 자격 미달이면 None.
+async def _polymarket_series(context, days: int) -> list[dict] | None:
+    """`/polymarket`에 그릴 24시간 거시 위험선호 변화. 자격 미달이면 None.
 
-    이 함수가 None을 돌려주면 `/market`은 예전 그대로의 2패널 차트를 만든다.
-    섀도 기간에는 `POLYMARKET_PANEL_ENABLED=false`라 항상 그 경로를 탄다.
-    수집이 끊겼거나 표본이 얇을 때도 마찬가지다 — 외부 참고선 하나 때문에
-    기존 감성 차트가 흔들리면 안 된다.
+    `POLYMARKET_PANEL_ENABLED=false`거나 수집이 끊겼거나 표본이 얇으면 그린다고
+    믿을 수 없으므로 빈 결과 대신 None으로 "지금은 못 그린다"를 알린다.
     """
     if not POLYMARKET_PANEL_ENABLED:
         return None
@@ -90,7 +89,7 @@ async def _consensus_panel_series(context, days: int) -> list[dict] | None:
             return None
         latest = date.fromisoformat(str(changes[-1]["date"]))
     except Exception:
-        logger.warning("[POLYMARKET] 컨센서스 조회 실패, 패널 없이 진행합니다.", exc_info=True)
+        logger.warning("[POLYMARKET] 컨센서스 조회 실패.", exc_info=True)
         return None
     if latest < today() - timedelta(days=_PANEL_MAX_STALE_DAYS):
         return None
@@ -180,11 +179,8 @@ def _format_polymarket_report(
     return "\n".join(lines)
 
 
-async def cmd_polymarket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Polymarket 컨센서스 파일럿의 가동률·승격 게이트를 보여 준다."""
-    message = update.effective_message
-    if message is None:
-        return
+async def _cmd_polymarket_gate(message, context) -> None:
+    """Polymarket 컨센서스 파일럿의 가동률·승격 게이트 진단(`/polymarket gate`)."""
     store = context.bot_data.get("polymarket_store")
     backfill_store = _backfill_store()
     if store is None and backfill_store is None:
@@ -201,6 +197,52 @@ async def cmd_polymarket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             POLYMARKET_PANEL_ENABLED,
         ),
         parse_mode="HTML",
+    )
+
+
+async def cmd_polymarket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Polymarket 거시 위험선호 차트. `gate` 인자를 주면 승격 게이트 진단을 본다.
+
+    `/market`과 같은 과정(일수 인자 → 차트 이미지)으로 동작한다 — 더 이상
+    `/market` 차트 하단에 곁다리로 붙지 않는다.
+    """
+    message = update.effective_message
+    if message is None:
+        return
+    args = context.args or []
+    if args and args[0].lower() in {"gate", "status"}:
+        await _cmd_polymarket_gate(message, context)
+        return
+    days = MARKET_CHART_LOOKBACK_DAYS
+    if args:
+        try:
+            days = int(args[0])
+        except ValueError:
+            await message.reply_text("사용법: /polymarket [1-30일|gate]")
+            return
+    if not 1 <= days <= 30:
+        await message.reply_text("조회 기간은 1~30일로 지정해 주세요.")
+        return
+    consensus = await _polymarket_series(context, days)
+    if not consensus:
+        await message.reply_text(
+            "차트를 그릴 만큼 데이터가 없습니다. 수집이 막 시작됐거나 최근 며칠"
+            " 스냅숏이 비어 있을 수 있습니다.\n"
+            "/polymarket gate에서 가동률·백필 상태를 확인해 보세요."
+        )
+        return
+    image = await run_non_urgent(render_polymarket_chart, consensus, days)
+    latest = consensus[-1]
+    caption = (
+        f"Polymarket 거시 위험선호 — 최근 {days}일\n"
+        f"최근 변화 {latest['change_pp']:+.2f}pp ({latest['date']})\n"
+        "국가별 뉴스 감성 점수와는 축이 달라 순위·리서치에 합산하지 않습니다."
+    )
+    await message.reply_photo(
+        photo=image,
+        caption=caption,
+        read_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,
+        write_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,
     )
 
 
@@ -449,15 +491,12 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             status,
             "◑ 차트 생성 중",
         )
-        consensus = await _consensus_panel_series(context, days)
-        image = await run_non_urgent(
-            render_market_chart, ready_markets, days, consensus
-        )
+        image = await run_non_urgent(render_market_chart, ready_markets, days)
         try:
             from webpub_export import publish_market
 
             await run_non_urgent(
-                publish_market, image.getvalue(), ready_markets, consensus, days
+                publish_market, image.getvalue(), ready_markets, days
             )
         except Exception:
             # 공개용 사본 실패가 텔레그램의 본래 차트 전송을 막으면 안 된다.
@@ -476,20 +515,12 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         ]
         if day_counts:
             sample_note = f"\n하루 평균 표본 {sum(day_counts) / len(day_counts):.0f}건"
-        # 하단 패널은 국가별 점수와 축이 다른 외부 참고선이다. 순위·점수에
-        # 섞이지 않았다는 사실을 캡션에서도 분명히 해 둔다.
-        consensus_note = (
-            "\n하단 패널은 Polymarket 거시 위험선호 확률변화(pp)로, 위 점수·순위와 무관합니다."
-            if consensus
-            else ""
-        )
         try:
             await message.reply_photo(
                 photo=image,
                 caption=(
                     f"국가·증시별 뉴스 감성 — 최근 {days}일\n{ranking}{sample_note}\n\n"
                     "점수는 하루치 헤드라인을 종합한 분위기 지표(-1~+1)이며 투자 조언이 아닙니다."
-                    f"{consensus_note}"
                 ),
                 read_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,
                 write_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,

@@ -163,10 +163,10 @@ class _Message:
         self.markups.append(kwargs.get("reply_markup"))
 
 
-def _run_polymarket(bot_data):
+def _run_polymarket(bot_data, args=("gate",)):
     message = _Message()
     update = SimpleNamespace(effective_message=message)
-    context = SimpleNamespace(args=[], bot_data=bot_data)
+    context = SimpleNamespace(args=list(args), bot_data=bot_data)
     asyncio.run(market_handlers.cmd_polymarket(update, context))
     return message.texts[-1]
 
@@ -287,28 +287,79 @@ def test_polymarket_is_not_offered_under_system_anymore():
     assert "nav:system:polymarket" not in buttons
 
 
-def test_menu_button_routes_to_the_polymarket_report(monkeypatch):
-    """버튼은 `/polymarket`과 같은 경로를 타야 한다."""
-    from handlers import navigation
+class _EditableMessage:
+    def __init__(self):
+        self.edits = []
 
-    seen = {}
+    async def edit_text(self, text, **kwargs):
+        self.edits.append((text, kwargs.get("reply_markup")))
 
-    async def fake_cmd_polymarket(update, context):
-        seen["called"] = True
 
-    monkeypatch.setattr(market_handlers, "cmd_polymarket", fake_cmd_polymarket)
-    query = SimpleNamespace(message=_Message())
-    update = SimpleNamespace(callback_query=query)
-    context = SimpleNamespace(
+def _callback_context():
+    return SimpleNamespace(
         args=[],
         bot_data={"feature_registry": SimpleNamespace(menu_owner=lambda _data: None)},
         user_data={},
         application=None,
     )
 
+
+def test_market_hub_button_shows_the_polymarket_day_menu():
+    """`📊 시장` 허브에서 폴리마켓을 고르면 기간 선택 화면이 뜬다."""
+    from handlers import navigation
+
+    message = _EditableMessage()
+    update = SimpleNamespace(callback_query=SimpleNamespace(message=message))
+
     handled = asyncio.run(
-        navigation.handle_menu_callback(update, context, "nav:polymarket")
+        navigation.handle_menu_callback(update, _callback_context(), "nav:market:polymarket")
     )
 
     assert handled is True
-    assert seen.get("called") is True
+    text, markup = message.edits[-1]
+    assert "Polymarket" in text
+    buttons = {button.callback_data for row in markup.inline_keyboard for button in row}
+    assert "nav:market:polymarket:7" in buttons
+    assert "nav:market:polymarket:gate" in buttons
+
+
+def test_polymarket_day_button_routes_to_cmd_polymarket(monkeypatch):
+    """`nav:market:polymarket:7` 버튼은 `/polymarket 7`과 같은 경로를 타야 한다."""
+    from handlers import navigation
+
+    seen = {}
+
+    async def fake_cmd_polymarket(update, context):
+        seen["args"] = context.args
+
+    monkeypatch.setattr(market_handlers, "cmd_polymarket", fake_cmd_polymarket)
+    query = SimpleNamespace(message=_Message())
+    update = SimpleNamespace(callback_query=query)
+
+    handled = asyncio.run(
+        navigation.handle_menu_callback(update, _callback_context(), "nav:market:polymarket:7")
+    )
+
+    assert handled is True
+    assert seen.get("args") == ["7"]
+
+
+def test_polymarket_gate_button_routes_to_cmd_polymarket(monkeypatch):
+    """`nav:market:polymarket:gate` 버튼은 `/polymarket gate`와 같은 경로를 타야 한다."""
+    from handlers import navigation
+
+    seen = {}
+
+    async def fake_cmd_polymarket(update, context):
+        seen["args"] = context.args
+
+    monkeypatch.setattr(market_handlers, "cmd_polymarket", fake_cmd_polymarket)
+    query = SimpleNamespace(message=_Message())
+    update = SimpleNamespace(callback_query=query)
+
+    handled = asyncio.run(
+        navigation.handle_menu_callback(update, _callback_context(), "nav:market:polymarket:gate")
+    )
+
+    assert handled is True
+    assert seen.get("args") == ["gate"]

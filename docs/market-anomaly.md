@@ -37,6 +37,18 @@ payload(`markets`·`consensus`·`lookback_days`)와 `app/webpub.py`의 시장 �
   그 파일이 없다. `/system anomaly`가 백필과 라이브를 한 화면에 그리려면 **서버에서
   한 번 다시 돌린다** — Polymarket 쪽에서 같은 이유로 정한 규칙(`docs/server-ops.md`
   8-2)이 여기에도 그대로 적용된다.
+- **서버 백필을 2026-08-29에 시작했다.** 첫 배치(80건 상한)로 52창을 채웠다
+  (표본: CN 10 · HK 17 · KR 5 · US 20 — 나머지는 "표본 부족"으로 스킵). 한 번에
+  80건까지만 채우도록 설계돼 있어(`BACKFILL_MAX_CALLS_PER_RUN`) **서버 crontab에
+  매일 03:15 KST 실행을 추가했다**(`crontab -l`로 확인 — 이 저장소가 관리하는
+  파일이 아니라 서버 상태이므로 git에는 안 남는다):
+  ```
+  15 3 * * * cd /home/ubuntu/stock_chatbot && ./venv/bin/python3 app/market_anomaly_backfill.py >> /home/ubuntu/stock_chatbot/data/market_sentiment/anomaly_backfill_cron.log 2>&1
+  ```
+  로그는 `data/market_sentiment/anomaly_backfill_cron.log`에 쌓인다. 시장당 120표본에
+  도달하고 `--rescore`·`--audit`·`--report`까지 마치면 **이 crontab 줄을 지운다**
+  (`crontab -e`) — 일회성 백필이 매일 도는 채로 남으면 다 채운 뒤에도 이미 있는
+  창을 매번 훑으며(대부분 조회만 하고 끝나지만) 불필요하게 도는 job이 된다.
 - 첫 실행 뒤 품질 미달 창도 시도 표본으로 저장하도록 보완했으므로 다음 실행부터
   G7의 `dense_ratio` 분모가 탈락 창을 포함한다.
 - **G1 최소 표본 120개에 모든 시장이 크게 미달한다.** 시장별로 가장 많은 US도

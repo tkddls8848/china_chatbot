@@ -182,9 +182,10 @@ def test_home_text_refreshes_persistent_menu_before_inline_home():
     assert message.replies[1][1].inline_keyboard
 
 
-def test_persistent_polymarket_and_anomaly_buttons_do_not_fall_back_to_admin_menu():
+def test_persistent_market_button_opens_the_markets_hub_not_the_admin_menu():
     """회귀: 이름 없는 persistent 버튼은 예전 코드에서 조용히 '⚙️ 관리' 화면으로
-    떨어졌다. 새 버튼(폴리마켓·아노말리)이 그 분기를 다시 밟으면 안 된다."""
+    떨어졌다. 감성·이상·폴리마켓을 묶은 '📊 시장' 허브 버튼이 그 분기를 다시
+    밟으면 안 된다."""
 
     class Message:
         def __init__(self, text):
@@ -195,20 +196,22 @@ def test_persistent_polymarket_and_anomaly_buttons_do_not_fall_back_to_admin_men
             self.replies.append((text, kwargs.get("reply_markup")))
 
     registry = _registry()
-    for label in ("🎲 폴리마켓", "🧭 이상"):
-        message = Message(label)
-        update = SimpleNamespace(effective_message=message)
-        context = SimpleNamespace(
-            user_data={},
-            bot_data={"feature_registry": registry},
-            application=None,
-        )
+    message = Message("📊 시장")
+    update = SimpleNamespace(effective_message=message)
+    context = SimpleNamespace(
+        user_data={},
+        bot_data={"feature_registry": registry},
+        application=None,
+    )
 
-        asyncio.run(handle_menu_text(update, context))
+    asyncio.run(handle_menu_text(update, context))
 
-        assert message.replies, f"{label} produced no reply"
-        text, _markup = message.replies[-1]
-        assert "<b>관리</b>" not in text, f"{label} fell back to the admin menu"
+    assert message.replies, "📊 시장 produced no reply"
+    text, markup = message.replies[-1]
+    assert "<b>관리</b>" not in text
+    assert "<b>시장 화면</b>" in text
+    buttons = {button.callback_data for row in markup.inline_keyboard for button in row}
+    assert {"nav:market:sentiment", "nav:market:anomaly", "nav:market:polymarket"} <= buttons
 
 
 def test_bot_startup_pushes_latest_persistent_menu(monkeypatch):

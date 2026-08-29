@@ -67,13 +67,12 @@ def _draw_consensus_panel(axis, consensus: list[dict]) -> None:
 def render_market_chart(
     markets: dict[str, dict],
     lookback_days: int,
-    consensus: list[dict] | None = None,
 ) -> BytesIO:
     """Return a PNG with latest market mood ranking and daily sentiment trends.
 
-    ``consensus`` adds an optional bottom panel.  When it is omitted the figure
-    is exactly the two-panel chart it has always been — the Polymarket pilot
-    must not change what ``/market`` renders while it is still in shadow mode.
+    Always the same two-panel chart. The Polymarket macro risk-appetite line
+    used to be an optional bottom panel here; it now renders as its own chart
+    via ``render_polymarket_chart`` under a separate command/menu.
     """
     # Telegram handlers run outside the process main thread.  A GUI backend
     # attempts to create a window there, so force Matplotlib's file-only backend
@@ -89,18 +88,7 @@ def render_market_chart(
     values = [item["avg_sentiment"] for _, item in ordered]
     colors = ["#16a34a" if value > 0.1 else "#dc2626" if value < -0.1 else "#64748b" for value in values]
 
-    if consensus:
-        fig = plt.figure(figsize=(12, 7.5))
-        grid = fig.add_gridspec(
-            2, 2, height_ratios=[1.5, 1.0], width_ratios=[0.9, 1.4]
-        )
-        ranking_ax = fig.add_subplot(grid[0, 0])
-        trend_ax = fig.add_subplot(grid[0, 1])
-        consensus_ax = fig.add_subplot(grid[1, :])
-        consensus_ax.set_facecolor("#f8fafc")
-    else:
-        fig, (ranking_ax, trend_ax) = plt.subplots(1, 2, figsize=(12, 5), gridspec_kw={"width_ratios": [0.9, 1.4]})
-        consensus_ax = None
+    fig, (ranking_ax, trend_ax) = plt.subplots(1, 2, figsize=(12, 5), gridspec_kw={"width_ratios": [0.9, 1.4]})
     fig.patch.set_facecolor("#f8fafc")
     ranking_ax.set_facecolor("#f8fafc")
     trend_ax.set_facecolor("#f8fafc")
@@ -130,12 +118,36 @@ def render_market_chart(
     trend_ax.tick_params(axis="x", rotation=45)
     trend_ax.legend(loc="best", frameon=False)
     trend_ax.grid(axis="y", alpha=0.2)
-    if consensus_ax is not None:
-        _draw_consensus_panel(consensus_ax, consensus)
     fig.tight_layout()
 
     image = BytesIO()
     image.name = "market_sentiment.png"
+    fig.savefig(image, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    image.seek(0)
+    return image
+
+
+def render_polymarket_chart(consensus: list[dict], days: int) -> BytesIO:
+    """Standalone Polymarket macro risk-appetite chart for `/polymarket`.
+
+    Used to be an optional bottom panel bolted onto `/market`; it is now its
+    own command/menu with the same day-range selection as `/market`.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axis = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor("#f8fafc")
+    axis.set_facecolor("#f8fafc")
+    _draw_consensus_panel(axis, consensus)
+    axis.set_title(f"Polymarket macro risk appetite — {days}d, 24h probability change")
+    fig.tight_layout()
+
+    image = BytesIO()
+    image.name = "polymarket_consensus.png"
     fig.savefig(image, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
     image.seek(0)

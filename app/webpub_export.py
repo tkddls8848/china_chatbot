@@ -42,7 +42,6 @@ def _update_meta(key: str, generated_at: str) -> None:
 def publish_market(
     image: bytes,
     markets: dict[str, dict[str, Any]],
-    consensus: list[dict[str, Any]] | None,
     lookback_days: int,
 ) -> None:
     """렌더된 차트와 그 수치를 함께 저장한다."""
@@ -54,7 +53,6 @@ def publish_market(
             "generated_at": generated_at,
             "lookback_days": lookback_days,
             "markets": markets,
-            "polymarket_consensus": consensus or [],
         },
         indent=2,
     )

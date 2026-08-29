@@ -1,19 +1,19 @@
-"""하단 패널·핸들러 회귀 검증(4·5단계).
+"""폴리마켓 차트·핸들러 회귀 검증(4·5단계, 2026-08-29 독립 명령으로 분리).
 
-핵심은 "패널이 없어도 `/market`이 예전 그대로"다. 섀도 기간에는 패널이 꺼져
-있고, 켠 뒤에도 수집이 끊기거나 표본이 얇을 수 있다. 그 어느 경우에도 기존
-감성 차트와 순위 캡션이 달라지면 안 된다.
+`/market`은 폴리마켓을 전혀 모른다 — 하단 패널이었던 시절과 달리 지금은
+`/polymarket`이 같은 데이터로 완전히 별도의 차트를 그린다. 핵심은 둘이 서로
+영향을 주지 않는다는 것: `/market`은 폴리마켓 수집이 꺼져 있든 얇든 항상 같은
+2패널 차트이고, `/polymarket`은 데이터가 부족하면 차트 대신 안내 메시지를
+낸다.
 """
 
 import asyncio
 from datetime import date, timedelta
 from types import SimpleNamespace
 
-import pytest
-
 from features.market_sentiment import handlers as commands
 from features.market_sentiment import snapshot as snapshot_job
-from features.market_sentiment.chart import render_market_chart
+from features.market_sentiment.chart import render_market_chart, render_polymarket_chart
 from features.market_sentiment.polymarket import PolymarketError
 
 
@@ -50,40 +50,22 @@ def _consensus(days, *, last_day=TODAY):
 
 # ── 차트 ──────────────────────────────────────────────
 
-def test_chart_without_consensus_keeps_the_two_panel_layout():
+def test_market_chart_takes_no_polymarket_argument():
+    """`/market`은 더 이상 폴리마켓을 알지 못한다 — 시그니처에도 없다."""
     image = render_market_chart(_ready_series(("CN", "US")), 7)
 
     assert image.getbuffer().nbytes > 0
     assert image.name == "market_sentiment.png"
 
 
-def test_explicit_none_consensus_renders_the_same_layout():
-    """호출부가 None을 넘겨도 예전 서명과 같은 그림이어야 한다."""
-    with_default = render_market_chart(_ready_series(("CN", "US")), 7)
-    with_none = render_market_chart(_ready_series(("CN", "US")), 7, None)
+def test_polymarket_chart_renders_its_own_figure():
+    image = render_polymarket_chart(_consensus(7), 7)
 
-    assert with_none.getbuffer().nbytes == pytest.approx(
-        with_default.getbuffer().nbytes, rel=0.02
-    )
+    assert image.getbuffer().nbytes > 0
+    assert image.name == "polymarket_consensus.png"
 
 
-def test_empty_consensus_list_does_not_add_a_panel():
-    baseline = render_market_chart(_ready_series(("CN", "US")), 7)
-    empty = render_market_chart(_ready_series(("CN", "US")), 7, [])
-
-    assert empty.getbuffer().nbytes == pytest.approx(
-        baseline.getbuffer().nbytes, rel=0.02
-    )
-
-
-def test_consensus_adds_a_taller_figure_with_its_own_panel():
-    baseline = render_market_chart(_ready_series(("CN", "US")), 7)
-    with_panel = render_market_chart(_ready_series(("CN", "US")), 7, _consensus(5))
-
-    assert with_panel.getbuffer().nbytes > baseline.getbuffer().nbytes
-
-
-# ── 패널 자격 판정 ────────────────────────────────────
+# ── 자격 판정(`_polymarket_series`) ────────────────────
 
 class _StoreStub:
     def __init__(self, changes=None, error=None):
@@ -96,46 +78,46 @@ class _StoreStub:
         return self._changes
 
 
-def _panel(monkeypatch, *, enabled=True, store=None, days=7):
+def _series(monkeypatch, *, enabled=True, store=None, days=7):
     monkeypatch.setattr(commands, "POLYMARKET_PANEL_ENABLED", enabled)
     monkeypatch.setattr(commands, "today", lambda: TODAY)
     context = SimpleNamespace(
         bot_data={} if store is None else {"polymarket_store": store}
     )
-    return asyncio.run(commands._consensus_panel_series(context, days))
+    return asyncio.run(commands._polymarket_series(context, days))
 
 
-def test_panel_is_hidden_while_the_pilot_is_in_shadow_mode(monkeypatch):
-    assert _panel(monkeypatch, enabled=False, store=_StoreStub(_consensus(7))) is None
+def test_series_is_hidden_while_the_pilot_is_in_shadow_mode(monkeypatch):
+    assert _series(monkeypatch, enabled=False, store=_StoreStub(_consensus(7))) is None
 
 
-def test_panel_is_hidden_when_collection_is_off(monkeypatch):
-    assert _panel(monkeypatch, store=None) is None
+def test_series_is_hidden_when_collection_is_off(monkeypatch):
+    assert _series(monkeypatch, store=None) is None
 
 
-def test_panel_needs_more_than_two_points(monkeypatch):
-    assert _panel(monkeypatch, store=_StoreStub(_consensus(2))) is None
-    assert _panel(monkeypatch, store=_StoreStub(_consensus(3))) is not None
+def test_series_needs_more_than_two_points(monkeypatch):
+    assert _series(monkeypatch, store=_StoreStub(_consensus(2))) is None
+    assert _series(monkeypatch, store=_StoreStub(_consensus(3))) is not None
 
 
 def test_yesterdays_latest_point_is_still_fresh(monkeypatch):
     """스냅숏은 08:35에 찍히므로 오전에는 최신값이 어제치다."""
     series = _consensus(5, last_day=TODAY - timedelta(days=1))
 
-    assert _panel(monkeypatch, store=_StoreStub(series)) is not None
+    assert _series(monkeypatch, store=_StoreStub(series)) is not None
 
 
 def test_stale_series_is_dropped_instead_of_shown_as_current(monkeypatch):
     series = _consensus(5, last_day=TODAY - timedelta(days=4))
 
-    assert _panel(monkeypatch, store=_StoreStub(series)) is None
+    assert _series(monkeypatch, store=_StoreStub(series)) is None
 
 
-def test_store_failure_falls_back_to_no_panel(monkeypatch):
-    assert _panel(monkeypatch, store=_StoreStub(error=RuntimeError("disk"))) is None
+def test_store_failure_falls_back_to_no_series(monkeypatch):
+    assert _series(monkeypatch, store=_StoreStub(error=RuntimeError("disk"))) is None
 
 
-# ── /market 회귀 ──────────────────────────────────────
+# ── /market 회귀: 폴리마켓을 완전히 모른다 ──────────────
 
 class _Status:
     async def edit_text(self, text):
@@ -146,14 +128,18 @@ class _Status:
 
 
 class _Message:
-    async def reply_text(self, text):
+    def __init__(self):
+        self.replies = []
+
+    async def reply_text(self, text, **kwargs):
+        self.replies.append(text)
         return _Status()
 
     async def reply_photo(self, **kwargs):
         self.photo = kwargs
 
 
-def _run_market(monkeypatch, bot_data, *, panel_enabled):
+def _run_market(monkeypatch, bot_data=None):
     class DigestStore:
         async def series(self, markets, days):
             return _ready_series(("CN", "US"))
@@ -164,68 +150,101 @@ def _run_market(monkeypatch, bot_data, *, panel_enabled):
     captured = {}
 
     async def fake_run_non_urgent(func, *args):
+        captured["func"] = func
         captured["args"] = args
         return b"chart"
 
     monkeypatch.setattr(commands, "market_history_gaps", lambda *a, **k: {})
     monkeypatch.setattr(commands, "run_non_urgent", fake_run_non_urgent)
-    monkeypatch.setattr(commands, "POLYMARKET_PANEL_ENABLED", panel_enabled)
     monkeypatch.setattr(commands, "today", lambda: TODAY)
 
     message = _Message()
     update = SimpleNamespace(effective_message=message, callback_query=None)
     context = SimpleNamespace(
         args=["7"],
-        bot_data={"market_digest_store": DigestStore(), **bot_data},
+        bot_data={"market_digest_store": DigestStore(), **(bot_data or {})},
     )
     asyncio.run(commands.cmd_market(update, context))
     return message, captured
 
 
-def test_market_command_is_unchanged_while_the_panel_is_off(monkeypatch):
+def test_market_command_never_touches_the_polymarket_store(monkeypatch):
+    """`polymarket_store`가 있어도, 얇거나 깨져 있어도 `/market`은 신경 쓰지 않는다."""
     message, captured = _run_market(
-        monkeypatch,
-        {"polymarket_store": _StoreStub(_consensus(7))},
-        panel_enabled=False,
+        monkeypatch, {"polymarket_store": _StoreStub(_consensus(7))}
     )
 
-    assert captured["args"][2] is None
+    markets, days = captured["args"]
+    assert captured["func"] is commands.render_market_chart
+    assert set(markets) == {"CN", "US"}
+    assert days == 7
     caption = message.photo["caption"]
     assert caption.startswith("국가·증시별 뉴스 감성 — 최근 7일")
     assert "Polymarket" not in caption
+    assert "폴리마켓" not in caption
 
 
-def test_market_command_survives_a_missing_baseline(monkeypatch):
-    message, captured = _run_market(monkeypatch, {}, panel_enabled=True)
-
-    assert captured["args"][2] is None
-    assert "Polymarket" not in message.photo["caption"]
-
-
-def test_market_command_survives_a_broken_consensus_store(monkeypatch):
-    message, captured = _run_market(
-        monkeypatch,
-        {"polymarket_store": _StoreStub(error=RuntimeError("disk"))},
-        panel_enabled=True,
+def test_market_command_survives_a_broken_polymarket_store(monkeypatch):
+    message, _captured = _run_market(
+        monkeypatch, {"polymarket_store": _StoreStub(error=RuntimeError("disk"))}
     )
 
-    assert captured["args"][2] is None
     assert message.photo["caption"].startswith("국가·증시별 뉴스 감성")
 
 
-def test_ranking_caption_never_absorbs_the_consensus_value(monkeypatch):
-    """외부 확률은 별도 패널에만 그린다. 국가별 점수·순위에 섞이면 안 된다."""
-    message, captured = _run_market(
-        monkeypatch,
-        {"polymarket_store": _StoreStub(_consensus(7))},
-        panel_enabled=True,
+# ── `/polymarket` 차트 ──────────────────────────────────
+
+def _run_polymarket_chart(monkeypatch, *, store=None, args=("7",), panel_enabled=True):
+    captured = {}
+
+    async def fake_run_non_urgent(func, *fn_args):
+        captured["func"] = func
+        captured["args"] = fn_args
+        return b"chart"
+
+    monkeypatch.setattr(commands, "run_non_urgent", fake_run_non_urgent)
+    monkeypatch.setattr(commands, "POLYMARKET_PANEL_ENABLED", panel_enabled)
+    monkeypatch.setattr(commands, "today", lambda: TODAY)
+
+    message = _Message()
+    update = SimpleNamespace(effective_message=message)
+    context = SimpleNamespace(
+        args=list(args),
+        bot_data={} if store is None else {"polymarket_store": store},
+    )
+    asyncio.run(commands.cmd_polymarket(update, context))
+    return message, captured
+
+
+def test_polymarket_chart_renders_when_data_is_sufficient(monkeypatch):
+    message, captured = _run_polymarket_chart(
+        monkeypatch, store=_StoreStub(_consensus(7))
     )
 
-    assert captured["args"][2] is not None
-    caption = message.photo["caption"]
-    assert "China mainland +0.10 (40)" in caption
-    assert "United States +0.10 (40)" in caption
-    assert "위 점수·순위와 무관합니다" in caption
+    assert captured["func"] is commands.render_polymarket_chart
+    assert "최근 7일" in message.photo["caption"]
+    assert "pp" in message.photo["caption"]
+
+
+def test_polymarket_chart_explains_insufficient_data_instead_of_erroring(monkeypatch):
+    message, _captured = _run_polymarket_chart(monkeypatch, store=None)
+
+    assert not hasattr(message, "photo")
+    assert any("데이터가 없습니다" in text for text in message.replies)
+
+
+def test_polymarket_gate_keyword_still_reaches_the_diagnostic_report(monkeypatch):
+    monkeypatch.setattr(commands, "_backfill_store", lambda: None)
+
+    message, _captured = _run_polymarket_chart(monkeypatch, store=None, args=("gate",))
+
+    assert any("POLYMARKET_ENABLED" in text for text in message.replies)
+
+
+def test_polymarket_rejects_an_out_of_range_day_count(monkeypatch):
+    message, _captured = _run_polymarket_chart(monkeypatch, args=("40",))
+
+    assert any("1~30일" in text for text in message.replies)
 
 
 # ── 스냅숏 job 격리 ───────────────────────────────────

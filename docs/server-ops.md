@@ -254,8 +254,16 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 ## 8. Polymarket 컨센서스 파일럿
 
 **2026-08-29에 승격했다**(`POLYMARKET_ENABLED=True`, `POLYMARKET_PANEL_ENABLED=True`).
-백필 6개 게이트와 라이브 가동률(최근 7일 중 6일)을 모두 통과해 `/market` 하단에
-패널을 그린다. `market_sentiment`의 외부 소스이지 별도 기능 키가 아니다.
+백필 6개 게이트와 라이브 가동률(최근 7일 중 6일)을 모두 통과했다.
+`market_sentiment`의 외부 소스이지 별도 기능 키가 아니다.
+
+**같은 날 안에 `/market` 하단 패널에서 독립 명령 `/polymarket`(메뉴 "🎲
+폴리마켓")으로 뺐다.** 승격 직후엔 하단 패널이었지만, 감성·이상·폴리마켓 세
+화면을 한 메뉴 트리에 욱여넣으면 첫 화면이 계속 늘어난다는 지적에 따라
+`/market`은 자체 2패널 차트만 그리고, 폴리마켓은 `/polymarket`이 같은 방식
+(기간 선택 → 차트 이미지)으로 독립적으로 그린다. 하단 절의 "표시 위치는
+`/market` 하나만" 규약은 이 날짜부로 더 이상 유효하지 않다 — 지금은
+"표시 위치는 `/polymarket` 하나만"이다.
 
 ### 무엇으로 쓸 수 있나
 
@@ -275,8 +283,8 @@ Gamma API는 인증이 필요 없고 LLM 비용도 0이다. 문제는 커버리�
 
 설계상 지킨 것(회귀 테스트가 붙어 있으니 바꿀 때 함께 본다):
 
-- 표시 위치는 `/market` **하나만**. 하단 별도 축에 `24시간 거시 위험선호
-  확률변화(pp)`를 그린다.
+- 표시 위치는 `/polymarket` **하나만**(2026-08-29부터 — 이전엔 `/market` 하단
+  패널이었다). `24시간 거시 위험선호 확률변화(pp)`를 독립 차트로 그린다.
 - 국가별 -1~+1 점수·기사 수·순위에 **합산하지 않는다.** CN/HK/US/KR 선으로
   복제하지도 않는다.
 - `/research` 입력과 브리핑 payload에 넣지 않는다 → **추가 Neurons 0/일**.
@@ -295,7 +303,7 @@ Gamma API는 인증이 필요 없고 LLM 비용도 0이다. 문제는 커버리�
 | 08:35 JST 스냅숏 job | `app/features/market_sentiment/snapshot.py` |
 | 스냅숏 저장·일별 정렬·게이트 계산 | `app/state/polymarket_consensus.py` |
 | 과거 시세 백필(일회성 도구) | `polymarket_history.py`, `app/polymarket_backfill.py` |
-| 하단 패널 | `app/features/market_sentiment/chart.py` |
+| `/polymarket` 차트·게이트 리포트 | `app/features/market_sentiment/handlers.py`, `chart.py`의 `render_polymarket_chart` |
 
 ### 8-1. 착수 전 읽기 스모크
 
