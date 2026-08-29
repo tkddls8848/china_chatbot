@@ -182,6 +182,35 @@ def test_home_text_refreshes_persistent_menu_before_inline_home():
     assert message.replies[1][1].inline_keyboard
 
 
+def test_persistent_polymarket_and_anomaly_buttons_do_not_fall_back_to_admin_menu():
+    """회귀: 이름 없는 persistent 버튼은 예전 코드에서 조용히 '⚙️ 관리' 화면으로
+    떨어졌다. 새 버튼(폴리마켓·아노말리)이 그 분기를 다시 밟으면 안 된다."""
+
+    class Message:
+        def __init__(self, text):
+            self.text = text
+            self.replies = []
+
+        async def reply_text(self, text, **kwargs):
+            self.replies.append((text, kwargs.get("reply_markup")))
+
+    registry = _registry()
+    for label in ("🎲 폴리마켓", "🧭 이상"):
+        message = Message(label)
+        update = SimpleNamespace(effective_message=message)
+        context = SimpleNamespace(
+            user_data={},
+            bot_data={"feature_registry": registry},
+            application=None,
+        )
+
+        asyncio.run(handle_menu_text(update, context))
+
+        assert message.replies, f"{label} produced no reply"
+        text, _markup = message.replies[-1]
+        assert "<b>관리</b>" not in text, f"{label} fell back to the admin menu"
+
+
 def test_bot_startup_pushes_latest_persistent_menu(monkeypatch):
     sent = []
 

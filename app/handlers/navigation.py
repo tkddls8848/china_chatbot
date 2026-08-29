@@ -215,10 +215,28 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         elif action == "briefing":
             from briefing.service import cmd_briefing
             await cmd_briefing(update, _context(context, []))
-        else:
+        elif action == "anomaly":
+            await message.reply_text(
+                "<b>시장 서술 이상(파일럿)</b>\n조회 기간을 선택하세요.",
+                parse_mode="HTML",
+                reply_markup=anomaly_menu(),
+            )
+        elif action == "polymarket":
+            from features.market_sentiment.handlers import cmd_polymarket
+            await cmd_polymarket(update, _context(context, []))
+        elif action == "system":
             await message.reply_text("<b>관리</b>", parse_mode="HTML", reply_markup=_keyboard([
                 [("시스템 상태", "nav:system"), ("종목 DB 갱신", "nav:stockdb")], *_back()
             ]))
+        else:
+            # 알 수 없는 persistent 버튼 — 새 메뉴를 추가할 때 이 분기를 잊으면
+            # 예전에는 조용히 "⚙️ 관리" 화면으로 잘못 떨어졌다. 그 대신 홈으로
+            # 보내 틀린 화면이 아니라 눈에 띄는 결과가 나오게 한다.
+            await message.reply_text(
+                "<b>주식 뉴스 봇</b>\n원하는 기능을 선택하세요.",
+                parse_mode="HTML",
+                reply_markup=main_menu(registry),
+            )
         return
 
     if context.user_data.get("add_market"):
