@@ -333,7 +333,7 @@ job이 도중에 막히면(가동률 게이트가 이미 값을 쌓아 온 신�
 않는다.**
 
 같은 날 **서버에서** 백필을 한 번 돌린다. 로컬에서 돌려도 판정은 같지만, 서버
-파일이어야 `/system polymarket`이 두 축을 한 화면에 그린다.
+파일이어야 `/polymarket`이 두 축을 한 화면에 그린다.
 
 ```bash
 cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
@@ -346,8 +346,9 @@ cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
 
 ### 8-3. 승격 게이트
 
-`/system polymarket`(또는 시스템 상태 화면의 **🎲 폴리마켓** 버튼)이 두 축을
-한 화면에 그린다. 백필과 라이브가 같은 코드로 계산한다.
+`/polymarket`(하단 고정메뉴의 **🎲 폴리마켓** 버튼, `/system` 하위가 아니라
+독립 명령·메뉴다 — 2026-08-29)이 두 축을 한 화면에 그린다. 백필과 라이브가
+같은 코드로 계산한다.
 
 | 게이트 | 기준 | 백필로 판정되나 |
 |---|---|---|
@@ -388,7 +389,8 @@ cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
   눈으로 확인한다.
 
 **최종 판정과 승격 (2026-08-29).** 라이브 가동률이 최근 7일 중 6일로 통과했다.
-그런데 그 시점 `/system polymarket`은 백필 쪽 두 게이트(성공 스냅숏 23/24,
+그런데 그 시점 `/system polymarket`(같은 날 안에 `/polymarket` 독립 명령으로
+옮겼다 — 아래 참고)은 백필 쪽 두 게이트(성공 스냅숏 23/24,
 유효 daily delta 23/24)를 미달로 보였다 — 서버의 `polymarket_backfill.json`을
 열어 보니 8/22 이후 7일치가 통째로 비어 있었다(직전 백필 실행이 왜 최근 구간을
 못 채웠는지는 그 실행의 로그가 없어 알 수 없다 — `이력 조회 실패`가 0이었다면
@@ -407,9 +409,16 @@ cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
 | 최근 7일 스냅숏(가동률) | 6 | 6 | 통과 |
 
 두 축 모두 통과해 `POLYMARKET_PANEL_ENABLED`를 `True`로 올리고 커밋했다.
-**교훈**: `/system polymarket`이 백필 미달을 보이면 바로 8-5로 가기 전에 백필을
-한 번 다시 돌려 본다 — 이번처럼 실제 게이트 미달이 아니라 오래되거나 일부만
-채워진 백필 파일이 원인일 수 있다.
+**교훈**: 이 리포트가 백필 미달을 보이면 바로 8-5로 가기 전에 백필을 한 번
+다시 돌려 본다 — 이번처럼 실제 게이트 미달이 아니라 오래되거나 일부만 채워진
+백필 파일이 원인일 수 있다.
+
+**같은 날 안에 메뉴 위치도 바뀌었다.** `/system polymarket`이 `/system` 하위
+버튼("🎲 폴리마켓")으로 묻혀 있던 것을 독립 명령·메뉴 `/polymarket`(하단
+고정메뉴 "🎲 폴리마켓")으로 뺐다 — 진단 화면이 관리자 전용 `/system` 안에
+숨어 있을 이유가 없었다. 리포트 내용(`_format_polymarket_report` 등)은
+`app/features/system_admin/handlers.py`에서 `app/features/market_sentiment/handlers.py`로
+옮겼고, `/system polymarket`은 더 이상 없다.
 
 게이트 임계값(`POLYMARKET_MIN_VOLUME` 등)과 `POLYMARKET_ENABLED`·
 `POLYMARKET_PANEL_ENABLED`는 전부 `config.py`의 상수다 — 바꾸려면 코드를

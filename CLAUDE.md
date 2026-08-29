@@ -138,7 +138,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   확률변화(pp)라 국가별 -1~+1 감성 점수와 축이 다르다 — 합산하거나 순위·리서치
   입력·브리핑 payload에 넣지 않고 `/market` 하단 별도 패널에만 그린다. 방향은
   `polymarket_rules.py`의 명시적 allowlist로만 정하고 LLM에 묻지 않는다.
-  판정 근거는 `/system polymarket`이 계산한다. 자세한 규약은 `docs/server-ops.md`.
+  판정 근거는 `/polymarket`이 계산한다. 자세한 규약은 `docs/server-ops.md`.
 - **승격 판정은 30일을 기다리지 않는다.** `app/polymarket_backfill.py`가 CLOB
   과거 시세로 지난 31일 스냅숏을 소급 작성해 같은 게이트를 돌린다. 결과는
   `polymarket_backfill.json`에 따로 쓰고 라이브 스냅숏과 섞지 않는다 — 백필에는
@@ -148,7 +148,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - **수집과 백필은 같이 돌린다.** 승격 조건은 백필 게이트 전부 통과 **그리고**
   최근 7일 중 6일 스냅숏이다. 서로를 대신하지 못한다 — 백필은 지표의 실질을
   하루에 판정하지만 job이 매일 도는지는 모르고, 라이브는 그 반대다.
-  `/system polymarket`이 두 축을 한 화면에 그린다.
+  `/polymarket`이 두 축을 한 화면에 그린다.
 - **공개 웹은 봇과 다른 프로세스이고 `GET`만 가진다.** 봇이 산출물을 갱신할 때
   `webpub_export`가 `data/webpub/`에 구워 두고(`market.json`·`market_chart.png`·
   `research.json`·`meta.json`), `webpub.py`는 그 파일을 그대로 내보낸다. 요청 때

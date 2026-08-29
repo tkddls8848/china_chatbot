@@ -319,8 +319,9 @@ Google News 결과는 재현 가능한 전수 표본이 아니다. 따라서 `qu
 승격 조건에 넣으면 임계값을 맞히는 쪽으로 손대게 되고, 그 순간 이 화면은 관측 보고가
 아니라 검증되지 않은 신호가 된다.
 
-`/system anomaly`가 G0~G7을 시장별 한 줄로 그린다. `/system prefilter`·
-`/system polymarket`과 같은 자리, 같은 역할이다.
+`/system anomaly`가 G0~G7을 시장별 한 줄로 그린다. `/system prefilter`와 같은
+자리, 같은 역할이다(`/polymarket`은 2026-08-29부터 `/system` 하위가 아니라
+독립 명령·메뉴로 옮겼다 — `docs/server-ops.md` 8-3).
 
 **이 검증이 답하지 못하는 것**(구현 시 상수로 남긴다):
 

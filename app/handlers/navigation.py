@@ -73,8 +73,7 @@ def research_menu() -> InlineKeyboardMarkup:
 def system_menu() -> InlineKeyboardMarkup:
     """시스템 상태 아래에 붙는 하위 항목. `/system`의 인자를 버튼으로 옮긴 것이다."""
     return _keyboard([
-        [("📋 기능 카탈로그", "nav:system:features"), ("🎲 폴리마켓", "nav:system:polymarket")],
-        [("🧮 뉴스 사전선별", "nav:system:prefilter")],
+        [("📋 기능 카탈로그", "nav:system:features"), ("🧮 뉴스 사전선별", "nav:system:prefilter")],
         *_back(),
     ])
 
@@ -130,6 +129,9 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action.startswith("anomaly:"):
         from features.market_sentiment.handlers import cmd_anomaly
         await cmd_anomaly(update, _context(context, [action.split(":", 1)[1]]))
+    elif action == "polymarket":
+        from features.market_sentiment.handlers import cmd_polymarket
+        await cmd_polymarket(update, _context(context, []))
     elif action in {"watch", "watch:list"}:
         from watchlist.handlers import cmd_menu
         await cmd_menu(update, _context(context, []))
