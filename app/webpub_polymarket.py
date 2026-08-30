@@ -245,7 +245,8 @@ class PolymarketRepository:
         }
 
     def detail(self, event_id: str) -> dict[str, Any] | None:
-        manifest = self.load()
+        # 반환값은 쓰지 않지만 호출은 필요하다 — load()가 _events_by_id를 갱신한다.
+        self.load()
         event = self._events_by_id.get(event_id)
         if event is None:
             return None
