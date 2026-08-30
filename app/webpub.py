@@ -9,14 +9,16 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from webpub_pages import ABOUT_HTML, INDEX_HTML, RESEARCH_HTML
+from webpub_pages import ABOUT_HTML, INDEX_HTML, POLYMARKET_HTML, RESEARCH_HTML
+from webpub_polymarket import PolymarketRepository, make_etag
 
 WEBPUB_DIR = Path(__file__).resolve().parent.parent / "data" / "webpub"
+POLYMARKET_REPOSITORY = PolymarketRepository(WEBPUB_DIR / "polymarket")
 
 
 def _read_json(name: str) -> dict[str, Any]:
@@ -42,6 +44,10 @@ def build_app() -> FastAPI:
     def about_page() -> str:
         return ABOUT_HTML
 
+    @app.api_route("/polymarket", methods=["GET", "HEAD"], response_class=HTMLResponse)
+    def polymarket_page() -> str:
+        return POLYMARKET_HTML
+
     @app.get("/api/market")
     def market() -> dict[str, Any]:
         return _read_json("market.json")
@@ -53,6 +59,101 @@ def build_app() -> FastAPI:
     @app.get("/api/meta")
     def meta() -> dict[str, Any]:
         return _read_json("meta.json")
+
+    def polymarket_json(
+        request: Request,
+        payload: dict[str, Any],
+        route: str,
+        query: dict[str, Any] | None = None,
+    ) -> Response:
+        generation_id = str(payload.get("generation_id") or "none")
+        etag = make_etag(generation_id, route, query or {})
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        return JSONResponse(payload, headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+    def require_manifest() -> None:
+        if not POLYMARKET_REPOSITORY.load():
+            raise HTTPException(status_code=503, detail="Polymarket 현재 generation이 없습니다.")
+
+    @app.api_route("/api/polymarket/summary", methods=["GET", "HEAD"])
+    def polymarket_summary(request: Request, include_flagged: bool = False) -> Response:
+        require_manifest()
+        return polymarket_json(
+            request,
+            POLYMARKET_REPOSITORY.summary(include_flagged=include_flagged),
+            "summary",
+            {"include_flagged": include_flagged},
+        )
+
+    @app.api_route("/api/polymarket/categories", methods=["GET", "HEAD"])
+    def polymarket_categories(request: Request) -> Response:
+        require_manifest()
+        return polymarket_json(
+            request, POLYMARKET_REPOSITORY.categories(), "categories"
+        )
+
+    @app.api_route("/api/polymarket/health", methods=["GET", "HEAD"])
+    def polymarket_health(request: Request) -> Response:
+        payload = POLYMARKET_REPOSITORY.health()
+        return polymarket_json(request, payload, "health")
+
+    @app.api_route("/api/polymarket/events", methods=["GET", "HEAD"])
+    def polymarket_events(
+        request: Request,
+        category: Literal[
+            "politics", "geopolitics", "economy_finance", "crypto",
+            "technology_ai", "business", "sports", "culture",
+            "science_health", "weather_climate", "law_regulation", "other",
+        ] | None = None,
+        tag: str | None = None,
+        region: str | None = None,
+        event_type: Literal[
+            "binary", "exclusive_multi", "independent_multi", "unknown_multi"
+        ] | None = None,
+        status: Literal[
+            "ok", "low_liquidity", "no_liquidity", "liquidity_missing", "unavailable"
+        ] | None = None,
+        q: str | None = Query(default=None, max_length=200),
+        sort: Literal["volume24hr", "liquidity", "leader_probability", "end_date", "title"] = "volume24hr",
+        order: Literal["asc", "desc"] = "desc",
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=25, ge=1, le=100),
+    ) -> Response:
+        require_manifest()
+        known_query = {
+            "category": category,
+            "tag": tag,
+            "region": region,
+            "event_type": event_type,
+            "status": status,
+            "q": q,
+            "sort": sort,
+            "order": order,
+            "page": page,
+            "page_size": page_size,
+        }
+        payload = POLYMARKET_REPOSITORY.events(
+            category=category,
+            tag=tag,
+            region=region,
+            event_type=event_type,
+            status=status,
+            query=q,
+            sort=sort,
+            order=order,
+            page=page,
+            page_size=page_size,
+        )
+        return polymarket_json(request, payload, "events", known_query)
+
+    @app.api_route("/api/polymarket/events/{event_id}", methods=["GET", "HEAD"])
+    def polymarket_event_detail(event_id: str, request: Request) -> Response:
+        require_manifest()
+        payload = POLYMARKET_REPOSITORY.detail(event_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="이 event가 현재 generation에 없습니다.")
+        return polymarket_json(request, payload, "event_detail", {"event_id": event_id})
 
     @app.get("/market_chart.png")
     def market_chart() -> FileResponse:

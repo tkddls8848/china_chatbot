@@ -80,7 +80,7 @@ logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 DATA_DIR          = BASE_DIR / "data"
 SENT_IDS_FILE     = DATA_DIR / "news" / "sent_ids.json"
 NEWS_LOG_FILE     = DATA_DIR / "news" / "news_log.json"
-NEWS_NIGHT_QUEUE_FILE = DATA_DIR / "news" / "night_queue.json"
+NEWS_REPORT_QUEUE_FILE = DATA_DIR / "news" / "news_report_queue.json"
 WATCHLIST_FILE    = DATA_DIR / "watchlist" / "watchlist.json"
 WATCHLIST_EVENTS_FILE = DATA_DIR / "watchlist" / "watchlist_events.json"
 STOCK_DB_FILE     = DATA_DIR / "instruments" / "stock_db.json"
@@ -200,26 +200,24 @@ NEWS_SOURCE_ARTICLE_LIMIT = 250
 # scan_limit(=NEWS_GLOBAL_LIMIT × 20)까지 태우는 쪽이 훨씬 비싸다.
 NEWS_TRANSLATION_QUALITY_REJECT_LIMIT = 3
 
-# ── 야간 뉴스 다이제스트 ──────────────────────────────
-# JST 00~07시에는 기사별 번역을 하지 않는다. 원문만 큐에 모아 두었다가 07시에
-# 시장별로 한 번씩만 LLM을 불러 묶음 요약을 보낸다. 7시간을 기사별로 번역하면
-# 소스 6곳 × 시간당 5건 = 210 호출인데, 읽는 사람은 자고 있어 아침에 한 번에
-# 읽는다 — 같은 내용을 시장 수(최대 4회) 호출로 줄인다.
-NEWS_NIGHT_DIGEST_ENABLED = True
-NEWS_NIGHT_START_HOUR = 0
-NEWS_NIGHT_END_HOUR = 7
-NEWS_NIGHT_DIGEST_PROMPT_FILE = PROMPT_DIR / "night_digest_ko.txt"
-NEWS_NIGHT_DIGEST_TIMEOUT = 180
-NEWS_NIGHT_DIGEST_NUM_PREDICT = 2048
-# 큐에 담는 상한. 야간 수집은 Neurons를 쓰지 않으므로 소스당 상한을 번역
-# 상한보다 넉넉히 잡아 아침 요약이 고를 폭을 남긴다.
-NEWS_NIGHT_QUEUE_PER_SOURCE_LIMIT = 12
-NEWS_NIGHT_QUEUE_MAX_ITEMS = 600
-# 시장 하나의 요약에 넣을 헤드라인 수와, 그중 개별 항목으로 뽑아 보여줄 건수.
+# ── 3시간 시장상황 보고서 ────────────────────────────
+# 매시간 원문만 수집하고 UTC +9 00·03·06…시에 시장별로 한 번씩 LLM을 불러
+# 지난 구간의 공통 테마·상충 신호·다음 관찰 포인트를 보고한다. 기사별 번역은
+# 예약 실행하지 않는다 — 호출량은 기사 수가 아니라 보고서당 시장 수에 비례한다.
+NEWS_COLLECTION_INTERVAL_MINUTES = 60
+NEWS_REPORT_INTERVAL_HOURS = 3
+NEWS_REPORT_PROMPT_FILE = PROMPT_DIR / "news_report_ko.txt"
+NEWS_REPORT_TIMEOUT = 180
+NEWS_REPORT_NUM_PREDICT = 2048
+# 큐에 담는 상한. 수집은 Neurons를 쓰지 않으므로 한 시간의 번역 상한보다
+# 넉넉히 잡아 3시간 보고서가 반복되는 테마를 판단할 폭을 남긴다.
+NEWS_REPORT_QUEUE_PER_SOURCE_LIMIT = 12
+NEWS_REPORT_QUEUE_MAX_ITEMS = 600
+# 시장 하나의 보고서에 넣을 헤드라인 수와, 근거로 뽑아 보여줄 건수.
 # 헤드라인 120건이면 입력이 약 6,000토큰이라 출력 2,048을 더해도 컨텍스트
 # 32,768의 25% 선이다. 올릴 때는 이 계산을 다시 한다.
-NEWS_NIGHT_DIGEST_MAX_HEADLINES = 120
-NEWS_NIGHT_DIGEST_MAX_HIGHLIGHTS = 8
+NEWS_REPORT_MAX_HEADLINES = 120
+NEWS_REPORT_MAX_HIGHLIGHTS = 8
 
 # ── 번역 전 로컬 뉴스 사건 메모리·사전선별 ───────────
 # shadow는 점수·후보·LLM 결과만 축적하고 현재 최신순 번역 순서를 바꾸지 않는다.
@@ -245,7 +243,7 @@ NEWS_PREFILTER_TRANSLATED_EVENT_COOLDOWN_HOURS = 24
 # Terraform 기본 bundle(micro_3_0: 2 vCPU, vCPU당 baseline 10%)에서 평시 봇
 # 프로세스는 전체 vCPU 용량의 9%만 쓰는 것을 목표로 한다. 매 보정 주기마다
 # 직전 주기의 필수 foreground CPU를 먼저 빼고 남은 몫만 보정에 배정한다.
-# 리서치·야간 다이제스트·시장 컨센서스는 burst_phase로 이 제한에서 제외하며,
+# 리서치·3시간 시장상황 보고서·시장 컨센서스는 burst_phase로 이 제한에서 제외하며,
 # 그 구간에는 보정을 멈춰 모아 둔 버스트 크레딧을 사용자 작업에 우선 쓴다.
 NEWS_PREFILTER_LIGHTSAIL_VCPUS = 2
 NEWS_PREFILTER_TARGET_CPU_UTILIZATION = 0.09
@@ -273,12 +271,6 @@ NEWS_SENTIMENT_ENABLED = True
 NEWS_NEGATIVE_ALERT_THRESHOLD = -0.6
 # /view 감성 뷰 집계에 사용할 최근 신호 일수.
 VIEW_LOOKBACK_DAYS = 3
-# 뉴스 주기. 짧게 돌려 조금씩 보내는 대신 텀을 늘려 한 번에 많이 묶는다.
-# 60분이다 — 20분 주기는 같은 사건을 하루 72번 훑으면서 번역 슬롯을
-# 최신순으로 채워, 읽히지 않는 번역에 Neurons를 태웠다. 주기를 늘리면 한
-# 주기가 보는 후보 폭이 3배가 되어 같은 번역 건수로 더 나은 기사를 고른다.
-# 이 값을 되돌릴 때는 NEWS_SOURCE_COOLDOWN_MINUTES도 함께 본다.
-SCHEDULER_INTERVAL_MINUTES = 60
 # ── 시황 리서치(/research) ────────────────────────────
 RESEARCH_ANALYSIS_PROMPT_FILE = PROMPT_DIR / "market_research_ko.txt"
 RESEARCH_ANALYSIS_TIMEOUT = 600
@@ -407,44 +399,22 @@ MARKET_ANOMALY_INDEX_TICKERS = {
 }
 
 
-# ── Polymarket 거시 위험선호 컨센서스(2026-08-29 승격, `/polymarket` 독립 명령) ──
-# Gamma API는 인증이 필요 없고 LLM을 쓰지 않으므로 추가 Neurons는 0/일이다.
-# 값은 국가별 뉴스 감성 점수에 절대 합산하지 않고 `/polymarket` 독립 차트로만
-# 그린다(승격 전에는 `/market` 하단 패널이었다 — 지금은 아니다). ENABLED(수집)와
-# PANEL_ENABLED(표시)를 분리해 둔 것은 승격 전 섀도 파일럿 단계의 흔적이며,
-# 지금은 철수할 때(docs/server-ops.md 8-5)만 PANEL_ENABLED를 먼저 끄는
-# 용도로 남는다 — 둘 다 True인 것이 정상 상태다.
-POLYMARKET_CONSENSUS_FILE = DATA_DIR / "market_sentiment" / "polymarket_consensus.json"
-# 백필(`app/polymarket_backfill.py`)이 쓰는 별도 파일. 라이브 스냅숏과 섞지
-# 않는다 — 백필 값에는 과거 호가가 없고 수량 게이트가 조회 시점 값으로
-# 적용돼 있어, 같은 파일에 넣으면 라이브 판정의 근거가 오염된다.
-POLYMARKET_BACKFILL_FILE = DATA_DIR / "market_sentiment" / "polymarket_backfill.json"
+# ── 현재 Polymarket 전체 웹 대시보드 ───────────────────────────────────────
+# 텔레그램·봇 scheduler와 독립된 systemd one-shot이 현재 열린 event를 읽는다.
+# G0(2026-08-30)에서 /events/keyset이 limit=500 요청을 100으로 잘라 221 page를
+# 반환했으므로, timer는 2시간으로 두어 공개 API 요청을 3,000회/일 아래로 유지한다.
 POLYMARKET_BASE_URL = "https://gamma-api.polymarket.com"
-# 과거 시세는 Gamma가 아니라 CLOB에 있다. 인증은 마찬가지로 없다.
-POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
-POLYMARKET_ENABLED = True
-POLYMARKET_PANEL_ENABLED = True
-# Gamma가 이 서버 출구 IP의 지역을 막을 때만 채운다(docs/server-ops.md 8-4).
-# 비어 있으면(기본) 직접 호출한다 — polymarket_proxy.py가 이 값 하나로
-# 세션에 프록시를 물릴지 말지를 정한다.
 POLYMARKET_PROXY_URL = os.environ.get("POLYMARKET_PROXY_URL", "").strip()
 POLYMARKET_TIMEOUT = 20
-# 선택 게이트. 유동성이 얕은 계약은 하루 변화가 호가 한 번에 흔들려 컨센서스가
-# 아니라 잡음이 된다. 실측 기준(volume 10,000 · liquidity 1,000)을 쓴다.
-# 아래 네 값은 파일럿 도중 바꾸지 않는다 — 바꾸면 앞뒤 기간의 표본이 달라져
-# 30일을 한 창으로 볼 수 없다(docs/server-ops.md 8-2). 그래서 env가 아니다.
-POLYMARKET_MIN_VOLUME = 10000.0
-POLYMARKET_MIN_LIQUIDITY = 1000.0
-# 승격 게이트의 "median spread 5%p 이하"와 같은 기준을 수집 단계에서도 쓴다.
-POLYMARKET_MAX_SPREAD = 0.05
-# 만기가 너무 먼 계약은 하루 단위로 거의 움직이지 않아 신호를 희석한다.
-POLYMARKET_MAX_HORIZON_DAYS = 365
-# /polymarket 차트의 최장 조회 기간(90일)에 하루 전 스냅숏 몫(+1)을 더한다.
-# 승격 게이트 평가 창(PROMOTION_WINDOW_DAYS=30)과는 별개다 — 게이트 임계값은
-# 30일 창을 전제로 정해 놓았으므로(app/polymarket_backfill.py 참고) 이 값을
-# 늘려도 게이트 판정은 그대로 30일만 본다. 이 값은 순전히 라이브 스토어가
-# 얼마나 오래 보관해 `/polymarket`이 더 긴 기간을 그릴 수 있게 하느냐이다.
-POLYMARKET_RETENTION_DAYS = 91
+POLYMARKET_WEB_DIR = DATA_DIR / "webpub" / "polymarket"
+POLYMARKET_WEB_LOW_LIQUIDITY = float(
+    os.environ.get("POLYMARKET_WEB_LOW_LIQUIDITY", "1000")
+)
+POLYMARKET_WEB_FALLBACK_INTERVAL_SECONDS = 2 * 60 * 60
+POLYMARKET_WEB_MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+POLYMARKET_WEB_MAX_SHARD_BYTES = 16 * 1024 * 1024
+POLYMARKET_WEB_MAX_DAILY_CPU_SECONDS = 900.0
+POLYMARKET_WEB_MAX_DAILY_REQUESTS = 3000
 
 
 NEWS_MARKET_BACKFILL_QUERIES = {

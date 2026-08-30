@@ -1,9 +1,9 @@
 """종목 감성 뷰 명령 구현."""
 
 import html
-from types import SimpleNamespace
+from typing import Any, Mapping
 
-from telegram import Update
+from telegram import Message, Update
 from telegram.ext import ContextTypes
 
 from core.config import VIEW_LOOKBACK_DAYS
@@ -25,27 +25,24 @@ def _view_footer() -> str:
     )
 
 
-async def cmd_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """뉴스 감성 신호 집계로 종목별 상승/중립/하락 참고 뷰를 표시한다.
-
-    규칙 기반(평균 감성 임계값)이며 LLM을 추가로 호출하지 않는다.
-    """
-    message = update.effective_message
-    if message is None:
-        return
-    prediction_log: PredictionLog | None = context.bot_data.get("prediction_log")
+async def _send_stock_sentiment_view(
+    message: Message,
+    bot_data: Mapping[str, Any],
+    args: list[str],
+) -> None:
+    """명령과 인라인 버튼이 공유하는 종목 감성 응답 경계."""
+    prediction_log: PredictionLog | None = bot_data.get("prediction_log")
     if prediction_log is None:
         await message.reply_text("감성 신호 기록이 비활성화되어 있습니다.")
         return
 
-    watchlist = await context.bot_data["watchlist_manager"].get_all()
+    watchlist = await bot_data["watchlist_manager"].get_all()
     entries = await prediction_log.snapshot(VIEW_LOOKBACK_DAYS)
-    args = context.args or []
 
     # /view 종목코드 — 단일 종목 상세(관심종목이 아니어도 조회 가능)
     if args:
         code = normalize_stock_code(args[0])
-        stock_db: StockDatabase = context.bot_data["stock_db"]
+        stock_db: StockDatabase = bot_data["stock_db"]
         name = watchlist.get(code) or stock_db.get_display_name(code) or code
         view = aggregate_stock_views(entries, {code: name}).get(code)
         if view is None:
@@ -87,12 +84,25 @@ async def cmd_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
+async def cmd_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """뉴스 감성 신호 집계로 종목별 상승/중립/하락 참고 뷰를 표시한다.
+
+    규칙 기반(평균 감성 임계값)이며 LLM을 추가로 호출하지 않는다.
+    """
+    message = update.effective_message
+    if message is None:
+        return
+    await _send_stock_sentiment_view(
+        message,
+        context.bot_data,
+        list(context.args or []),
+    )
+
+
 async def handle_view_callback(query, context, data: str) -> bool:
     """관심종목 목록의 "📈 감성" 버튼(`view:<code>`) → `/view <code>`와 같은 경로."""
     code = data.removeprefix("view:")
-    fake_update = SimpleNamespace(effective_message=query.message)
-    fake_context = SimpleNamespace(bot_data=context.bot_data, args=[code])
-    await cmd_view(fake_update, fake_context)
+    await _send_stock_sentiment_view(query.message, context.bot_data, [code])
     return True
 
 

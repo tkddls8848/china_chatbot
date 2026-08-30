@@ -14,6 +14,7 @@ Environment=WEBPUB_PORT=8788
 ExecStart=/home/ubuntu/stock_chatbot/venv/bin/python webpub.py
 Restart=always
 RestartSec=10
+MemoryMax=192M
 
 [Install]
 WantedBy=multi-user.target

@@ -2,7 +2,13 @@
 
 from types import SimpleNamespace
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+    Update,
+)
 from telegram.ext import ContextTypes
 
 
@@ -49,14 +55,9 @@ def _back() -> list[list[tuple[str, str]]]:
 
 
 def markets_hub_menu() -> InlineKeyboardMarkup:
-    """`📊 시장` 진입점 — 감성·이상·폴리마켓 세 화면 중 하나를 고른다.
-
-    셋을 각자 하단 고정메뉴 버튼으로 두면 첫 화면이 매번 늘어난다. 그래서
-    한 단계 더 들어가는 대신(depth를 높여서) 첫 화면 버튼 수를 줄인다.
-    """
+    """`📊 시장` 진입점 — 감성과 이상 화면 중 하나를 고른다."""
     return _keyboard([
         [("📊 국가별 감성", "nav:market:sentiment"), ("🧭 시장 이상", "nav:market:anomaly")],
-        [("🎲 폴리마켓", "nav:market:polymarket")],
         *_back(),
     ])
 
@@ -78,22 +79,6 @@ def anomaly_menu() -> InlineKeyboardMarkup:
             ("7일", "nav:market:anomaly:7"),
             ("14일", "nav:market:anomaly:14"),
             ("30일", "nav:market:anomaly:30"),
-        ],
-        *_back(),
-    ])
-
-
-def polymarket_menu() -> InlineKeyboardMarkup:
-    return _keyboard([
-        [
-            ("7일", "nav:market:polymarket:7"),
-            ("14일", "nav:market:polymarket:14"),
-            ("30일", "nav:market:polymarket:30"),
-        ],
-        [
-            ("60일", "nav:market:polymarket:60"),
-            ("90일", "nav:market:polymarket:90"),
-            ("게이트 상태", "nav:market:polymarket:gate"),
         ],
         *_back(),
     ])
@@ -127,6 +112,46 @@ def _context(context: ContextTypes.DEFAULT_TYPE, args: list[str]):
     )
 
 
+async def _dispatch_primary_menu_action(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    action: str,
+    message: Message,
+    *,
+    edit_message: bool,
+) -> bool:
+    """인라인·하단 고정 메뉴가 공유하는 최상위 기능 진입점.
+
+    `system`은 인라인에서 상태를 실행하고 하단 메뉴에서는 관리 허브를 열어
+    동작이 다르므로 각 호출부가 명시적으로 처리한다.
+    """
+    if action == "market":
+        send = message.edit_text if edit_message else message.reply_text
+        await send(
+            "<b>시장 화면</b>\n무엇을 볼까요?",
+            parse_mode="HTML",
+            reply_markup=markets_hub_menu(),
+        )
+        return True
+    if action == "watch":
+        from watchlist.handlers import cmd_menu
+        await cmd_menu(update, _context(context, []))
+        return True
+    if action == "research":
+        send = message.edit_text if edit_message else message.reply_text
+        await send(
+            "<b>리서치</b>",
+            parse_mode="HTML",
+            reply_markup=research_menu(),
+        )
+        return True
+    if action == "briefing":
+        from briefing.service import cmd_briefing
+        await cmd_briefing(update, _context(context, []))
+        return True
+    return False
+
+
 async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str) -> bool:
     if not data.startswith("nav:"):
         return False
@@ -149,13 +174,16 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode="HTML",
             reply_markup=main_menu(registry),
         )
-    elif action == "market":
-        await message.edit_text(
-            "<b>시장 화면</b>\n무엇을 볼까요?",
-            parse_mode="HTML",
-            reply_markup=markets_hub_menu(),
-        )
-    elif action == "market:sentiment":
+        return True
+    if await _dispatch_primary_menu_action(
+        update,
+        context,
+        action,
+        message,
+        edit_message=True,
+    ):
+        return True
+    if action == "market:sentiment":
         await message.edit_text(
             "<b>국가별 뉴스 감성</b>\n조회 기간을 선택하세요.",
             parse_mode="HTML",
@@ -173,24 +201,6 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action.startswith("market:anomaly:"):
         from features.market_sentiment.handlers import cmd_anomaly
         await cmd_anomaly(update, _context(context, [action.rsplit(":", 1)[1]]))
-    elif action == "market:polymarket":
-        await message.edit_text(
-            "<b>Polymarket 거시 위험선호</b>\n조회 기간을 선택하세요.",
-            parse_mode="HTML",
-            reply_markup=polymarket_menu(),
-        )
-    elif action.startswith("market:polymarket:"):
-        from features.market_sentiment.handlers import cmd_polymarket
-        await cmd_polymarket(update, _context(context, [action.rsplit(":", 1)[1]]))
-    elif action == "watch":
-        from watchlist.handlers import cmd_menu
-        await cmd_menu(update, _context(context, []))
-    elif action == "research":
-        await message.edit_text(
-            "<b>리서치</b>",
-            parse_mode="HTML",
-            reply_markup=research_menu(),
-        )
     elif action.startswith("research:"):
         command = action.split(":", 1)[1]
         if command == "set":
@@ -199,9 +209,6 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             from research.handlers import cmd_research
             await cmd_research(update, _context(context, [command]))
-    elif action == "briefing":
-        from briefing.service import cmd_briefing
-        await cmd_briefing(update, _context(context, []))
     elif action == "system":
         from features.system_admin.handlers import cmd_system
         await cmd_system(update, _context(context, []))
@@ -241,25 +248,15 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await message.reply_text("이 기능은 현재 비활성화되어 있습니다.")
             return
         action = callback_data.removeprefix("nav:")
-        if action == "market":
-            await message.reply_text(
-                "<b>시장 화면</b>\n무엇을 볼까요?",
-                parse_mode="HTML",
-                reply_markup=markets_hub_menu(),
-            )
-        elif action == "watch":
-            from watchlist.handlers import cmd_menu
-            await cmd_menu(update, _context(context, []))
-        elif action == "research":
-            await message.reply_text(
-                "<b>리서치</b>",
-                parse_mode="HTML",
-                reply_markup=research_menu(),
-            )
-        elif action == "briefing":
-            from briefing.service import cmd_briefing
-            await cmd_briefing(update, _context(context, []))
-        elif action == "system":
+        if await _dispatch_primary_menu_action(
+            update,
+            context,
+            action,
+            message,
+            edit_message=False,
+        ):
+            return
+        if action == "system":
             await message.reply_text("<b>관리</b>", parse_mode="HTML", reply_markup=_keyboard([
                 [("시스템 상태", "nav:system"), ("종목 DB 갱신", "nav:stockdb")], *_back()
             ]))

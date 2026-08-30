@@ -1,4 +1,4 @@
-"""야간 수집과 아침 야간 다이제스트."""
+"""매시간 원문 수집과 3시간 시장상황 보고서."""
 
 import asyncio
 import json
@@ -7,17 +7,17 @@ from datetime import datetime
 import pytest
 
 from core.clock import JST
-from llm.night_digest import NightDigestAnalyzer, NightDigestError
-from news.night import (
-    collect_night_source,
+from features.news import feature as news_feature
+from llm.news_report import NewsReportAnalyzer, NewsReportError
+from news.report import (
+    collect_report_source,
     format_market_section,
     group_by_market,
-    is_night_window,
-    send_night_digest,
+    send_news_report,
 )
 from news.registry import SourceSpec
 from news.sources import GlobalArticle
-from state import NightNewsQueue, SentNewsTracker
+from state import NewsReportQueue, SentNewsTracker
 
 
 class _RecordingBot:
@@ -94,8 +94,16 @@ class _App:
         self.bot_data = bot_data
 
 
+class _RecordingScheduler:
+    def __init__(self):
+        self.jobs = []
+
+    def add_job(self, func, **kwargs):
+        self.jobs.append((func, kwargs))
+
+
 def _analyzer(tmp_path, payload=None, error=None, max_highlights=8):
-    return NightDigestAnalyzer(
+    return NewsReportAnalyzer(
         backend=_FakeBackend(payload, error),
         prompt_file=_prompt_file(),
         num_predict=2048,
@@ -104,14 +112,14 @@ def _analyzer(tmp_path, payload=None, error=None, max_highlights=8):
 
 
 def _prompt_file():
-    from core.config import NEWS_NIGHT_DIGEST_PROMPT_FILE
+    from core.config import NEWS_REPORT_PROMPT_FILE
 
-    return NEWS_NIGHT_DIGEST_PROMPT_FILE
+    return NEWS_REPORT_PROMPT_FILE
 
 
 def _queue(tmp_path, per_source_limit=12, max_items=600):
-    return NightNewsQueue(
-        tmp_path / "night_queue.json",
+    return NewsReportQueue(
+        tmp_path / "news_report_queue.json",
         per_source_limit=per_source_limit,
         max_items=max_items,
     )
@@ -132,7 +140,7 @@ def _item(index, *, market="US", event_id=""):
     }
 
 
-def _payload(analysis="야간 흐름 요약이다.", indexes=(0,)):
+def _payload(analysis="현재 시장상황 요약이다.", indexes=(0,)):
     return {
         "analysis": analysis,
         "highlights": [
@@ -146,16 +154,6 @@ def _payload(analysis="야간 흐름 요약이다.", indexes=(0,)):
             for index in indexes
         ],
     }
-
-
-# ── 야간 구간 판정 ────────────────────────────────────
-
-def test_night_window_covers_the_configured_hours():
-    assert is_night_window(datetime(2026, 8, 18, 3, 0, tzinfo=JST))
-    assert is_night_window(datetime(2026, 8, 18, 0, 0, tzinfo=JST))
-    # 종료 시각은 이미 주간이다. 그 주기가 야간 큐를 비운다.
-    assert not is_night_window(datetime(2026, 8, 18, 7, 0, tzinfo=JST))
-    assert not is_night_window(datetime(2026, 8, 18, 14, 0, tzinfo=JST))
 
 
 # ── 큐 ────────────────────────────────────────────────
@@ -231,8 +229,8 @@ def test_queue_overflow_does_not_leave_evicted_article_pending(tmp_path):
     )
 
     async def run():
-        await collect_night_source(first, _Registry(), tracker, queue, {})
-        await collect_night_source(second, _Registry(), tracker, queue, {})
+        await collect_report_source(first, _Registry(), tracker, queue, {})
+        await collect_report_source(second, _Registry(), tracker, queue, {})
 
     asyncio.run(run())
 
@@ -247,13 +245,13 @@ def test_queue_clear_empties_the_file(tmp_path):
 
     asyncio.run(queue.clear())
 
-    assert json.loads((tmp_path / "night_queue.json").read_text(encoding="utf-8"))["items"] == []
+    assert json.loads((tmp_path / "news_report_queue.json").read_text(encoding="utf-8"))["items"] == []
 
 
-# ── 야간 수집 ─────────────────────────────────────────
+# ── 매시간 원문 수집 ──────────────────────────────────
 
-def test_night_collection_reserves_and_queues_without_translating(tmp_path):
-    """야간 주기는 LLM을 부르지 않는다. 부르면 밤새 210회가 된다."""
+def test_report_collection_reserves_and_queues_without_translating(tmp_path):
+    """수집 주기는 LLM을 호출하지 않고 원문만 큐에 저장한다."""
     articles = [
         GlobalArticle(
             article_id=f"a-{index}",
@@ -276,7 +274,7 @@ def test_night_collection_reserves_and_queues_without_translating(tmp_path):
     queue = _queue(tmp_path)
 
     count = asyncio.run(
-        collect_night_source(spec, _Registry(), tracker, queue, {}, None, "cycle-0")
+        collect_report_source(spec, _Registry(), tracker, queue, {}, None, "cycle-0")
     )
 
     assert count == 3
@@ -286,8 +284,8 @@ def test_night_collection_reserves_and_queues_without_translating(tmp_path):
     assert {row["market"] for row in items} == {"US"}
 
 
-def test_night_collection_releases_articles_the_queue_did_not_take(tmp_path):
-    """큐가 받지 않은 기사를 예약한 채 두면 아침에도 영영 보이지 않는다."""
+def test_report_collection_releases_articles_the_queue_did_not_take(tmp_path):
+    """큐가 받지 않은 기사는 예약을 해제해 다음 주기에 다시 볼 수 있게 한다."""
     article = GlobalArticle(
         article_id="a-0",
         title="Fed holds rates",
@@ -305,7 +303,7 @@ def test_night_collection_releases_articles_the_queue_did_not_take(tmp_path):
     asyncio.run(queue.enqueue([{**_item(0), "article_id": "a-0", "event_id": ""}]))
 
     count = asyncio.run(
-        collect_night_source(spec, _Registry(), tracker, queue, {}, None, "cycle-0")
+        collect_report_source(spec, _Registry(), tracker, queue, {}, None, "cycle-0")
     )
 
     assert count == 0
@@ -317,9 +315,9 @@ def test_night_collection_releases_articles_the_queue_did_not_take(tmp_path):
 def test_analyzer_returns_analysis_and_highlights(tmp_path):
     analyzer = _analyzer(tmp_path, _payload())
 
-    result = analyzer.analyze("US", "00:00~07:00 JST", [{"index": 0, "title": "t"}])
+    result = analyzer.analyze("US", "00:00~03:00 UTC +9", [{"index": 0, "title": "t"}])
 
-    assert result["analysis"] == "야간 흐름 요약이다."
+    assert result["analysis"] == "현재 시장상황 요약이다."
     assert result["highlights"][0]["title"] == "한국어 제목 0"
 
 
@@ -327,14 +325,14 @@ def test_analyzer_rejects_an_index_that_was_not_sent(tmp_path):
     """없는 index를 받아들이면 엉뚱한 기사에 감성이 붙는다."""
     analyzer = _analyzer(tmp_path, _payload(indexes=(7,)))
 
-    with pytest.raises(NightDigestError):
+    with pytest.raises(NewsReportError):
         analyzer.analyze("US", "창", [{"index": 0, "title": "t"}])
 
 
 def test_analyzer_rejects_a_repeated_index(tmp_path):
     analyzer = _analyzer(tmp_path, _payload(indexes=(0, 0)))
 
-    with pytest.raises(NightDigestError):
+    with pytest.raises(NewsReportError):
         analyzer.analyze("US", "창", [{"index": 0, "title": "t"}])
 
 
@@ -357,7 +355,7 @@ def test_markets_are_grouped_in_display_order():
 
 
 def test_failed_market_still_shows_its_headlines():
-    """요약이 실패해도 그 시장의 야간 뉴스를 통째로 잃지 않는다."""
+    """분석이 실패해도 그 시장의 수집 뉴스를 통째로 잃지 않는다."""
     section = format_market_section("US", [_item(0)], None)
 
     assert "요약 생성 실패" in section
@@ -373,8 +371,8 @@ def _send_app(tmp_path, *, bot=None, analyzer=None):
     news_log, prediction_log = _RecordingLog(), _RecordingLog()
     app = _App(
         bot=bot or _RecordingBot(),
-        night_queue=queue,
-        night_digest_analyzer=analyzer or _analyzer(tmp_path, _payload()),
+        news_report_queue=queue,
+        news_report_analyzer=analyzer or _analyzer(tmp_path, _payload()),
         sent_tracker=tracker,
         news_log=news_log,
         prediction_log=prediction_log,
@@ -382,12 +380,14 @@ def _send_app(tmp_path, *, bot=None, analyzer=None):
     return app, queue, tracker, news_log, prediction_log
 
 
-def test_digest_sends_confirms_and_clears_the_queue(tmp_path):
+def test_report_sends_confirms_and_clears_the_queue(tmp_path):
     app, queue, tracker, news_log, prediction_log = _send_app(tmp_path)
 
-    asyncio.run(send_night_digest(app))
+    asyncio.run(send_news_report(app))
 
-    assert "야간 뉴스 다이제스트" in app.bot.messages[0]
+    assert "3시간 시장상황 보고서" in app.bot.messages[0]
+    assert "UTC +9" in app.bot.messages[0]
+    assert "JST" not in app.bot.messages[0]
     assert "한국어 제목 0" in app.bot.messages[0]
     # 큐에 있던 기사는 전부 확정된다 — release하면 주간 주기가 다시 번역한다.
     assert sorted(tracker.confirmed) == ["gnews_us-0", "gnews_us-1"]
@@ -397,10 +397,10 @@ def test_digest_sends_confirms_and_clears_the_queue(tmp_path):
     assert len(prediction_log.records) == 1
 
 
-def test_digest_keeps_the_queue_when_telegram_fails(tmp_path):
+def test_report_keeps_the_queue_when_telegram_fails(tmp_path):
     app, queue, tracker, _, _ = _send_app(tmp_path, bot=_RecordingBot(fail=True))
 
-    asyncio.run(send_night_digest(app))
+    asyncio.run(send_news_report(app))
 
     assert tracker.confirmed == []
     assert len(asyncio.run(queue.snapshot())[1]) == 2
@@ -410,9 +410,9 @@ def test_digest_keeps_the_queue_when_telegram_fails(tmp_path):
     strict=True,
     reason="partial Telegram success currently confirms and clears every queued article",
 )
-def test_digest_keeps_only_the_second_chunk_when_that_send_fails(tmp_path, monkeypatch):
+def test_report_keeps_only_the_second_chunk_when_that_send_fails(tmp_path, monkeypatch):
     """부분 성공이면 성공한 chunk만 확정하고 실패한 chunk만 재시도해야 한다."""
-    monkeypatch.setattr("news.night.NEWS_DIGEST_MESSAGE_MAX_CHARS", 240)
+    monkeypatch.setattr("news.report.NEWS_DIGEST_MESSAGE_MAX_CHARS", 240)
     queue = _queue(tmp_path)
     asyncio.run(queue.enqueue([_item(0, market="CN")]))
     asyncio.run(queue.enqueue([_item(1, market="US")]))
@@ -420,14 +420,14 @@ def test_digest_keeps_only_the_second_chunk_when_that_send_fails(tmp_path, monke
     bot = _FailOnCallBot(fail_on=2)
     app = _App(
         bot=bot,
-        night_queue=queue,
-        night_digest_analyzer=_analyzer(tmp_path, _payload()),
+        news_report_queue=queue,
+        news_report_analyzer=_analyzer(tmp_path, _payload()),
         sent_tracker=tracker,
         news_log=_RecordingLog(),
         prediction_log=_RecordingLog(),
     )
 
-    asyncio.run(send_night_digest(app))
+    asyncio.run(send_news_report(app))
 
     _, remaining = asyncio.run(queue.snapshot())
     assert bot.calls == 2
@@ -438,7 +438,7 @@ def test_digest_keeps_only_the_second_chunk_when_that_send_fails(tmp_path, monke
 
 @pytest.mark.xfail(
     strict=True,
-    reason="night highlights are logged before Telegram delivery succeeds",
+    reason="report highlights are logged before Telegram delivery succeeds",
 )
 def test_repeated_total_send_failure_does_not_duplicate_prediction_log(tmp_path):
     """전송되지 않은 신호는 재시도 횟수만큼 append되면 안 된다."""
@@ -447,8 +447,8 @@ def test_repeated_total_send_failure_does_not_duplicate_prediction_log(tmp_path)
         bot=_RecordingBot(fail=True),
     )
 
-    asyncio.run(send_night_digest(app))
-    asyncio.run(send_night_digest(app))
+    asyncio.run(send_news_report(app))
+    asyncio.run(send_news_report(app))
 
     assert tracker.confirmed == []
     assert len(asyncio.run(queue.snapshot())[1]) == 2
@@ -456,31 +456,31 @@ def test_repeated_total_send_failure_does_not_duplicate_prediction_log(tmp_path)
     assert news_log.records == []
 
 
-def test_digest_uses_one_llm_call_per_market(tmp_path):
-    """기사별 번역이면 밤새 수백 회다. 야간에는 시장당 한 번만 부른다."""
+def test_report_uses_one_llm_call_per_market(tmp_path):
+    """기사 수와 무관하게 보고서 한 번에 시장당 한 번만 호출한다."""
     analyzer = _analyzer(tmp_path, _payload())
     queue = _queue(tmp_path)
     asyncio.run(queue.enqueue([_item(0, market="US"), _item(1, market="US")]))
     asyncio.run(queue.enqueue([_item(2, market="CN")]))
     app = _App(
-        night_queue=queue,
-        night_digest_analyzer=analyzer,
+        news_report_queue=queue,
+        news_report_analyzer=analyzer,
         sent_tracker=_RecordingTracker(),
         news_log=None,
         prediction_log=None,
     )
 
-    asyncio.run(send_night_digest(app))
+    asyncio.run(send_news_report(app))
 
     assert len(analyzer._backend.calls) == 2
 
 
-def test_digest_survives_a_market_whose_summary_failed(tmp_path):
+def test_report_survives_a_market_whose_summary_failed(tmp_path):
     app, queue, tracker, _, _ = _send_app(
         tmp_path, analyzer=_analyzer(tmp_path, error=RuntimeError("cloudflare down"))
     )
 
-    asyncio.run(send_night_digest(app))
+    asyncio.run(send_news_report(app))
 
     assert "요약 생성 실패" in app.bot.messages[0]
     assert sorted(tracker.confirmed) == ["gnews_us-0", "gnews_us-1"]
@@ -488,11 +488,36 @@ def test_digest_survives_a_market_whose_summary_failed(tmp_path):
 
 def test_empty_queue_sends_nothing(tmp_path):
     app = _App(
-        night_queue=_queue(tmp_path),
-        night_digest_analyzer=_analyzer(tmp_path, _payload()),
+        news_report_queue=_queue(tmp_path),
+        news_report_analyzer=_analyzer(tmp_path, _payload()),
         sent_tracker=_RecordingTracker(),
     )
 
-    asyncio.run(send_night_digest(app))
+    asyncio.run(send_news_report(app))
 
     assert app.bot.messages == []
+
+
+def test_jobs_collect_hourly_and_report_every_three_hours_utc_plus_9():
+    scheduler = _RecordingScheduler()
+
+    news_feature._install_jobs(scheduler, object())
+
+    jobs = {kwargs["id"]: kwargs for _, kwargs in scheduler.jobs}
+    assert jobs["news_collection"]["trigger"] == "interval"
+    assert jobs["news_collection"]["minutes"] == 60
+    assert jobs["market_situation_report"]["trigger"] == "cron"
+    assert jobs["market_situation_report"]["hour"] == "*/3"
+    assert jobs["market_situation_report"]["minute"] == 0
+    assert jobs["market_situation_report"]["timezone"] is JST
+
+
+def test_report_prompt_requires_market_inference_instead_of_article_translation():
+    prompt = _prompt_file().read_text(encoding="utf-8")
+
+    assert "최근 3시간" in prompt
+    assert "현재 시장상황" in prompt
+    assert "다음 3시간" in prompt
+    assert "UTC +9" in prompt
+    assert "기사를 차례로 번역하거나 나열하지 않는다" in prompt
+    assert "야간" not in prompt

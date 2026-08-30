@@ -11,25 +11,12 @@ from core.config import (
     MARKET_ANOMALY_RETENTION_DAYS,
     MARKET_DIGEST_FILE,
     MARKET_DIGEST_RETENTION_DAYS,
-    POLYMARKET_BASE_URL,
-    POLYMARKET_CONSENSUS_FILE,
-    POLYMARKET_ENABLED,
-    POLYMARKET_PROXY_URL,
-    POLYMARKET_RETENTION_DAYS,
-    POLYMARKET_TIMEOUT,
 )
 from features.base import CommandSpec, FeatureSpec, MenuSpec
-from features.market_sentiment.handlers import cmd_anomaly, cmd_market, cmd_polymarket
+from features.market_sentiment.handlers import cmd_anomaly, cmd_market
 from features.market_sentiment.overnight import capture_completed_overnight_windows
-from features.market_sentiment.polymarket import PolymarketClient
-from features.market_sentiment.polymarket_proxy import build_polymarket_session
-from features.market_sentiment.snapshot import (
-    SNAPSHOT_HOUR_SPEC,
-    SNAPSHOT_MINUTE,
-    capture_polymarket_snapshot,
-)
 from llm import build_market_digest_analyzer, build_overnight_tone_analyzer
-from state import MarketDigestStore, OvernightToneStore, PolymarketConsensusStore
+from state import MarketDigestStore, OvernightToneStore
 
 
 def _install_market_digest_services(app) -> None:
@@ -55,44 +42,9 @@ def _install_market_anomaly_services(app) -> None:
     app.bot_data["overnight_tone_analyzer"] = build_overnight_tone_analyzer()
 
 
-def _install_polymarket_services(app) -> None:
-    if not POLYMARKET_ENABLED:
-        return
-    # 뉴스 감성과 별개 축인 외부 참고선이다. 새 기능 키를 만들지 않고
-    # 이 기능의 외부 소스로 붙인다.
-    app.bot_data["polymarket_store"] = PolymarketConsensusStore(
-        POLYMARKET_CONSENSUS_FILE,
-        POLYMARKET_RETENTION_DAYS,
-    )
-    app.bot_data["polymarket_client"] = PolymarketClient(
-        base_url=POLYMARKET_BASE_URL,
-        timeout=POLYMARKET_TIMEOUT,
-        session=build_polymarket_session(POLYMARKET_PROXY_URL),
-    )
-
-
 def _install_services(app) -> None:
     _install_market_digest_services(app)
     _install_market_anomaly_services(app)
-    _install_polymarket_services(app)
-
-
-def _install_polymarket_jobs(scheduler, app) -> None:
-    if not POLYMARKET_ENABLED:
-        return
-    scheduler.add_job(
-        capture_polymarket_snapshot,
-        trigger="cron",
-        hour=SNAPSHOT_HOUR_SPEC,
-        minute=SNAPSHOT_MINUTE,
-        # 스케줄러 기본 타임존은 호스트를 따라간다. 하루 변화를 재려면 두
-        # 스냅숏이 같은 시각이어야 하므로 여기서 JST로 고정한다.
-        timezone=JST,
-        args=[app],
-        id="polymarket_snapshot",
-        max_instances=1,
-        coalesce=True,
-    )
 
 
 def _install_market_anomaly_jobs(scheduler, app) -> None:
@@ -113,7 +65,6 @@ def _install_market_anomaly_jobs(scheduler, app) -> None:
 
 
 def _install_jobs(scheduler, app) -> None:
-    _install_polymarket_jobs(scheduler, app)
     _install_market_anomaly_jobs(scheduler, app)
 
 
@@ -124,20 +75,13 @@ FEATURE = FeatureSpec(
     commands=(
         CommandSpec("market", "국가별 뉴스 감성", cmd_market, usage="[일수]"),
         CommandSpec("anomaly", "시장 서술 이상(파일럿)", cmd_anomaly, usage="[일수]"),
-        CommandSpec(
-            "polymarket", "폴리마켓 거시 위험선호", cmd_polymarket, usage="[일수|gate]"
-        ),
     ),
-    # 세 화면(감성·이상·폴리마켓) 모두 이 메뉴 하나 밑에 묶는다 — 각자
-    # 하단 고정메뉴 버튼을 가지면 첫 화면이 매번 늘어난다. nav:market이
-    # 먼저 세 화면 중 하나를 고르는 허브를 보여주고(handlers/navigation.py의
-    # markets_hub_menu), 고른 뒤에야 그 화면의 기간 선택으로 들어간다.
+    # 감성과 이상 화면을 한 시장 메뉴 아래에 둔다.
     menus=(MenuSpec("📊 시장", "nav:market", 0, "📊 시장", 1),),
     install_services=_install_services,
     install_jobs=_install_jobs,
     data_files=(
         "data/market_sentiment/daily_digest.json",
         "data/market_sentiment/overnight_tone.json",
-        "data/market_sentiment/polymarket_consensus.json",
     ),
 )

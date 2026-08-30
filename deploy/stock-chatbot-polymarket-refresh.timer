@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh current Polymarket dashboard every two hours
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2h
+AccuracySec=1min
+Persistent=true
+Unit=stock-chatbot-polymarket-refresh.service
+
+[Install]
+WantedBy=timers.target

@@ -1,6 +1,9 @@
 """FeatureRegistry의 CallbackSpec 기반 콜백 디스패치 검증."""
 import asyncio
+from types import SimpleNamespace
 
+from core.config import VIEW_LOOKBACK_DAYS
+from features import ALL_FEATURES, build_feature_registry
 from features.base import CallbackSpec, FeatureSpec
 from features.registry import FeatureRegistry
 
@@ -78,3 +81,43 @@ def test_dispatch_returns_false_for_unknown_data():
     registry = _registry({"alpha", "beta", "gamma"}, handled)
     assert asyncio.run(registry.dispatch_callback(_Query(), None, "nav:home")) is False
     assert handled == []
+
+
+def test_signal_view_callback_uses_the_selected_stock_code():
+    class MessageStub:
+        def __init__(self):
+            self.replies = []
+
+        async def reply_text(self, text: str, **kwargs):
+            self.replies.append((text, kwargs))
+
+    class PredictionLogStub:
+        async def snapshot(self, _days):
+            return []
+
+    class WatchlistStub:
+        async def get_all(self):
+            return {"600519": "귀주모태주"}
+
+    message = MessageStub()
+    query = SimpleNamespace(message=message)
+    context = SimpleNamespace(
+        bot_data={
+            "prediction_log": PredictionLogStub(),
+            "watchlist_manager": WatchlistStub(),
+            "stock_db": SimpleNamespace(get_display_name=lambda _code: None),
+        }
+    )
+    registry = build_feature_registry(feature.key for feature in ALL_FEATURES)
+
+    handled = asyncio.run(
+        registry.dispatch_callback(query, context, "view:600519")
+    )
+
+    assert handled is True
+    assert message.replies == [
+        (
+            f"귀주모태주 (600519): 최근 {VIEW_LOOKBACK_DAYS}일 감성 신호가 없습니다.",
+            {},
+        )
+    ]

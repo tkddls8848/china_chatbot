@@ -1,9 +1,7 @@
-"""야간에 모은 기사 제목 묶음을 시장 단위로 한 번에 요약한다.
+"""3시간 동안 모은 기사 제목을 시장상황 보고서로 추론한다.
 
-기사별 번역(`llm/translator.py`)과 목적이 다르다. 번역은 한 건을 한 호출로
-옮기지만 이쪽은 한 시장의 야간 전체를 한 호출로 읽는다 — 읽는 사람이 자는
-7시간을 기사별로 번역하면 호출 수가 시간에 비례해 늘지만, 아침에 한 번 읽는
-내용은 그만큼 늘지 않기 때문이다.
+기사별 번역과 달리 한 시장의 공통 테마와 상충 신호를 한 호출로 분석한다.
+호출 수는 기사 수가 아니라 보고서에 포함된 시장 수에 비례한다.
 """
 
 import json
@@ -16,11 +14,11 @@ from llm.backends import LLMBackend
 logger = logging.getLogger(__name__)
 
 
-class NightDigestError(RuntimeError):
-    """Raised when a night digest cannot be produced for a market."""
+class NewsReportError(RuntimeError):
+    """Raised when a market report cannot be produced for a market."""
 
 
-class NightDigestAnalyzer:
+class NewsReportAnalyzer:
     def __init__(
         self,
         backend: LLMBackend,
@@ -42,9 +40,9 @@ class NightDigestAnalyzer:
         window: str,
         headlines: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """헤드라인 목록에서 야간 요약과 주요 기사를 만든다(블로킹)."""
+        """헤드라인 목록에서 시장상황과 근거 기사를 만든다(블로킹)."""
         if not headlines:
-            raise NightDigestError("no headlines to summarize")
+            raise NewsReportError("no headlines to analyze")
 
         payload = {"market": market, "window": window, "articles": headlines}
         try:
@@ -55,10 +53,10 @@ class NightDigestAnalyzer:
                 temperature=0.2,
             )
         except Exception as exc:
-            raise NightDigestError(str(exc)) from exc
+            raise NewsReportError(str(exc)) from exc
 
         if not raw.strip():
-            raise NightDigestError("empty night digest response content")
+            raise NewsReportError("empty news report response content")
         return self._parse(raw, valid_indexes={item["index"] for item in headlines})
 
     def _parse(self, raw: str, *, valid_indexes: set[int]) -> dict[str, Any]:
@@ -66,18 +64,18 @@ class NightDigestAnalyzer:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
             # 원문은 남기지 않는다. 길이만으로도 잘림 여부는 판단할 수 있다.
-            raise NightDigestError(
-                f"night digest JSON parse failed ({exc}); raw_chars={len(raw)}"
+            raise NewsReportError(
+                f"news report JSON parse failed ({exc}); raw_chars={len(raw)}"
             ) from exc
         if not isinstance(data, dict):
-            raise NightDigestError("night digest JSON must be an object")
+            raise NewsReportError("news report JSON must be an object")
 
         analysis = data.get("analysis")
         highlights = data.get("highlights")
         if not isinstance(analysis, str):
-            raise NightDigestError("night digest analysis must be a string")
+            raise NewsReportError("news report analysis must be a string")
         if not isinstance(highlights, list):
-            raise NightDigestError("night digest highlights must be a list")
+            raise NewsReportError("news report highlights must be a list")
 
         parsed: list[dict[str, Any]] = []
         seen: set[int] = set()
@@ -92,26 +90,26 @@ class NightDigestAnalyzer:
         seen: set[int],
     ) -> dict[str, Any]:
         if not isinstance(row, dict):
-            raise NightDigestError("night digest highlight must be an object")
+            raise NewsReportError("news report highlight must be an object")
         index = row.get("index")
         if not isinstance(index, int) or index not in valid_indexes:
-            raise NightDigestError(f"night digest highlight index is unknown: {index!r}")
+            raise NewsReportError(f"news report highlight index is unknown: {index!r}")
         if index in seen:
-            raise NightDigestError(f"night digest highlight index repeats: {index}")
+            raise NewsReportError(f"news report highlight index repeats: {index}")
         seen.add(index)
 
         title = row.get("title")
         if not isinstance(title, str) or not title.strip():
-            raise NightDigestError("night digest highlight missing title")
+            raise NewsReportError("news report highlight missing title")
         sentiment = row.get("sentiment")
         if not isinstance(sentiment, (int, float)) or not -1 <= sentiment <= 1:
-            raise NightDigestError("night digest highlight sentiment must be between -1 and 1")
+            raise NewsReportError("news report highlight sentiment must be between -1 and 1")
         impact = row.get("impact")
         if impact not in ("high", "medium", "low"):
-            raise NightDigestError("night digest highlight impact must be high, medium, or low")
+            raise NewsReportError("news report highlight impact must be high, medium, or low")
         codes = row.get("mentioned_stocks")
         if not isinstance(codes, list) or any(not isinstance(code, str) for code in codes):
-            raise NightDigestError("night digest highlight mentioned_stocks must be strings")
+            raise NewsReportError("news report highlight mentioned_stocks must be strings")
 
         return {
             "index": index,

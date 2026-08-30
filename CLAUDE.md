@@ -24,7 +24,7 @@ app/bot.py             조립, Telegram 앱, 스케줄러
 app/core/              설정, 런타임, 워커
 app/features/          기능 등록과 명령 핸들러
 app/handlers/          콜백 라우팅, 메뉴 구성, 인라인 네비게이션
-app/news/              소스, 수집 파이프라인, 야간 다이제스트, 감성
+app/news/              소스, 매시간 수집, 3시간 시장상황 보고서, 감성
 app/llm/               Cloudflare 백엔드와 분석기
 app/research/          뉴스 수집, 후보 발굴, 리서치 실행
 app/briefing/          브리핑 생성과 A주 거래일 캘린더
@@ -47,44 +47,19 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 
 ## 현재 동작 가정
 
-- 뉴스 주기마다 `NEWS_GLOBAL_SOURCES`와 RSS 소스를 모두 실행한다. 주기는 60분이다.
-  짧게 돌리면 번역 슬롯이 늘 최신순 상위로 채워져 같은 사건을 하루에 몇 번씩
-  번역한다 — 텀을 늘려 한 주기가 보는 후보 폭을 키우고 그 안에서 고른다.
-- **JST 00~07시에는 기사별 번역을 하지 않는다.** 그 시간의 주기는 원문만
-  `night_queue.json`에 모으고(`collect_night_articles`), 07시에 시장별로 한 번씩만
-  LLM을 불러 묶음 요약을 보낸다(`send_night_digest`). 자는 7시간을 기사별로
-  번역하면 소스 6곳 × 시간당 4건 = 168 호출인데 아침에 읽는 내용은 그만큼 늘지
-  않는다. 큐에 담긴 기사는 이미 예약(`reserve`)되어 있고 다이제스트를 보낸 뒤
-  확정하므로, 주간 주기가 같은 기사를 다시 번역하지 않는다. 아침 첫 주간 주기가
-  큐가 비어 있는지 먼저 확인한다 — 07시 job이 실패했거나 그때 봇이 꺼져 있었어도
-  야간 뉴스를 통째로 잃지 않는다.
-- **번역 건수와 송출 건수는 다르다.** 한 주기에 소스당 `NEWS_GLOBAL_LIMIT`건을
-  번역하고, 그중 `NEWS_DIGEST_SEND_LIMIT`건만 묶어 보낸다. 선별 기준은 impact가
-  1순위, 같으면 감성의 세기, 그래도 같으면 최신순이다(`select_digest_rows`).
-  **탈락분을 release하지 않는다** — release하면 다음 주기에 같은 기사를 다시
-  번역해 Neurons만 태운다. 확정하고 `news_log`·`prediction_log`에는 그대로 남겨
-  `/view`·`/market`·signal_scoring이 읽게 한다(`archive_unsent_articles`).
-- **기사 본문은 200자 내외이고 상한을 두 곳에서 지킨다.** `prompts/global_ko.txt`가
-  180~220자를 지시하고, `format_digest_article`이 표시 직전에
-  `NEWS_DIGEST_ARTICLE_MAX_CHARS`·`NEWS_DIGEST_TITLE_MAX_CHARS`로 다시 자른다.
-  프롬프트만 믿지 않는다 — 모델이 길게 답하는 주기가 섞이면 한 주기에 올라오는
-  총량이 예측 불가능해지고 채팅을 읽을 수 없다. 자르는 순서는 **절단 뒤
-  escape**다(뒤집으면 `&amp;`가 끊겨 메시지 전체가 파싱 오류로 거부된다).
-  본문은 상한 안의 **마지막 문장 끝**에서 자른다(`truncate_at_sentence`) —
-  글자로 끊으면 반 문장이 남아 무슨 말인지 알 수 없다. 경계가 상한의 절반도
-  안 되면 버리는 쪽이 많아지므로 그때만 글자 절단으로 돌아간다.
-  본문 길이를 되돌릴 때는 `TRANSLATION_NUM_PREDICT`도 함께 본다.
-- **번역 결과의 품질을 표시 전에 검사한다.** 봉투가 맞아도 모델이 원문을 그대로
-  돌려주거나 제목을 되풀이하는 주기가 있다. `TranslationService._check_quality`가
-  본문 길이·제목 반복·한글 비율을 보고 `TranslationQualityError`로 거른다.
-  형식 오류와 타입이 갈리는 이유는 처리가 달라서다 — 형식 오류는 release해
-  다시 시도하지만, 품질 미달은 같은 원문에 같은 응답이 다시 오므로 **확정**해
-  매 주기 같은 기사에 Neurons를 태우지 않는다. 한 소스가 한 주기에 헛도는
-  건수는 `NEWS_TRANSLATION_QUALITY_REJECT_LIMIT`에서 끊는다.
-- **하루 번역량은 "주간 주기 수 × `NEWS_GLOBAL_LIMIT`"과 소스 발행량 중 작은 쪽이다.**
-  20분 주기에서는 상한이 발행량보다 훨씬 커서 사실상 발행되는 대로 다 번역했다.
-  60분 주기에서는 상한(주간 17주기 × 소스 6곳 × 4건 = 408건)이 먼저 걸리므로,
-  **무엇을 고르는지가 비로소 의미를 갖는다.**
+- 뉴스 수집은 `NEWS_COLLECTION_INTERVAL_MINUTES=60` 간격으로 모든 활성 소스를
+  읽고 원문 제목만 `news_report_queue.json`에 저장한다(`collect_report_articles`).
+  예약 실행 경로에서는 기사별 번역을 호출하지 않는다.
+- **시장상황 보고서는 UTC +9 기준 00·03·06·09·12·15·18·21시에 전송한다.**
+  `send_news_report`가 지난 구간 기사를 시장별로 묶어 시장당 한 번 LLM을 호출한다.
+  프롬프트는 기사 번역·나열이 아니라 지배적 국면, 업종·종목 영향, 상충 근거,
+  달라진 점, 다음 3시간 관찰 포인트를 추론하도록 요구한다.
+- 큐에 담긴 기사는 `SentNewsTracker.reserve` 상태다. 보고서 전송이 전부 실패하면
+  큐와 예약을 유지해 다음 실행에서 재시도하고, 전송이 성립한 뒤에만 확정하고
+  큐를 비운다. 주요 근거는 `NewsLog`와 `PredictionLog`에 함께 기록한다.
+- 기사별 번역 파이프라인은 수동·레거시 코드로 남아 있지만 뉴스 스케줄러에는
+  연결되지 않는다. 예약 뉴스 비용은 기사 수가 아니라 3시간 보고서의 시장 수에
+  비례한다.
 - **읽는 폭은 `NEWS_SOURCE_ARTICLE_LIMIT`가 정한다.** 소스를 이 깊이까지만 읽으므로
   여기서 잘린 기사는 다음 주기에도 보이지 않는다. 주기가 3배로 길어져 한 주기가
   덮어야 할 시간도 3배다 — 이 값을 내리면 그만큼 사각지대가 생긴다.
@@ -115,11 +90,10 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   쓸 수 없다. 남기지 않는 후보는 주기별 `cycle` 집계 줄로 센다.
   적재는 **offset 뒤만 이어 읽는다** — 파일 전체를 dict에 담으면 보존 기간이
   찬 시점에 1GB 인스턴스가 감당하지 못한다(실측: 2일치 221k줄에서 602MB).
-- **Neurons 예산은 뉴스 번역이 대부분을 쓴다**(기사 1건 = 호출 1회). 리서치·브리핑·
-  `/market`·야간 다이제스트는 하루 15회 남짓이라 입력을 깊게 잡아도 총량에 거의
-  영향이 없다. 수량을 늘릴 때만 무료 한도(하루 10,000)를 다시 계산한다.
-  **깊이는 싸고 수량은 비싸다** — 야간을 시장당 1회 요약으로 바꾼 것이 이 규칙을
-  그대로 적용한 결과다.
+- **예약 뉴스의 Neurons 비용은 3시간 보고서에 등장한 시장 수에 비례한다.**
+  기사를 추가로 수집해도 기사별 LLM 호출은 늘지 않지만 입력 토큰은 늘어난다.
+  `NEWS_REPORT_MAX_HEADLINES`를 올릴 때 무료 한도(하루 10,000)와 컨텍스트 상한을
+  함께 계산한다.
 - **종목·시장 감성을 읽는 경로는 네 갈래이고, 서로 캐시를 공유하지 않는다.**
   같은 "감성"이라는 말이 네 군데서 각자 다른 저장소·집계·보존정책으로
   쓰이므로, 새로 만지기 전에 어느 갈래인지부터 정한다.
@@ -129,10 +103,9 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   | 브리핑(briefing) | `NewsLog` | 종목별, count·평균만(verdict 없음) | `NEWS_LOG_RETENTION_DAYS=30`로 매 append마다 정리 |
   | `/market`(market_sentiment) | `MarketDigestStore` | 시장(국가) 단위, 그날 헤드라인 배치 재요약 | `MARKET_DIGEST_RETENTION_DAYS=30` |
   | `/research`(research) | 없음 — 캐시를 안 쓴다 | 실행마다 원문을 새로 수집해 LLM에 직접 투입 | 해당 없음 |
-  `PredictionLog`·`NewsLog`는 같은 기사 이벤트를 `news/delivery.py`·
-  `news/night.py`에서 나란히 기록한다(중복이 아니라 소비자가 달라서다 — 하나를
-  지우면 다른 소비자가 못 읽는다).
-- 일반 뉴스는 번역하지만 리서치 입력은 원문을 사용한다.
+  `PredictionLog`·`NewsLog`는 보고서 근거 기사를 `news/report.py`에서 나란히
+  기록한다(중복이 아니라 소비자가 달라서다 — 하나를 지우면 다른 소비자가 못 읽는다).
+- 예약 뉴스 보고서와 리서치 입력은 모두 원문을 사용한다.
 - 리서치 후보는 관심종목, 원문 종목명 매칭, 중화권 섹터, 미국 스크리너,
   한국 등락률에서 만든다. 분석 action은 `add`, `remove`, `watch`만 허용한다.
 - 리서치 상태는 `history`, `sight`, `updated_at`, `last_result` 형식만 읽고 쓴다.
@@ -204,8 +177,8 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   뺀 잔여분만 보정(calibration)에 배정한다. 유휴 주기의 최대치는 10.8
   CPU-second(60초 × 2 × 9%)이고, 하루 보정 상한은 4.32 CPU-hour다. 각 2초
   조각마다 `wait_for_urgent_idle`·load average·남은 예산을 다시 확인한다.
-- **버스트 크레딧은 고가치 작업에 우선 배정한다.** 리서치, 야간 뉴스
-  다이제스트, 시장 컨센서스 분석·수집은 `burst_phase`로 표시한다. 이 구간에는
+- **버스트 크레딧은 고가치 작업에 우선 배정한다.** 리서치, 3시간 시장상황
+  보고서, 시장 컨센서스 분석·수집은 `burst_phase`로 표시한다. 이 구간에는
   프리필터 보정이 시작되지 않으며, 고가치 작업 자체는 평시 9% 제한을 받지
   않는다. Lightsail 크레딧 잔량을 API로 읽지 못해도 평시를 baseline 아래로
   유지해 충전하고 요청 시에는 저장된 크레딧을 쓸 수 있는 구조다.
@@ -226,7 +199,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   `backends.py`가 `truncated`로 실패시키고 `max_tokens`와 실제 output_tokens를
   로그에 남긴다. **재시도하지 않는다** — 같은 입력은 같은 길이에서 다시 끊기고
   Neurons만 두 배로 태운다. 회로 차단의 연속 실패로도 세지 않는다
-  (`caller_fault`) — 한 호출자의 출력 예약 문제로 뉴스 번역까지 멈추면 안 된다.
+  (`caller_fault`) — 한 호출자의 출력 예약 문제로 다른 LLM 작업까지 멈추면 안 된다.
 - **LLM에게 원문 URL을 받아 적게 하지 않는다.** URL은 파이썬 쪽에서 따라가다
   표시 직전에 붙인다(`news/utils.py`의 `<a href>`). 리서치 evidence도 모델은
   `news_items`의 id만 가리키고 서버가 되찾는다(`_news_payload`). Google News
@@ -253,7 +226,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   저장된 타임스탬프를 `now()`와 비교할 때는 `ensure_jst()`로 감싼다 — aware 전환
   이전에 쓴 `data/` 파일에는 오프셋이 없어 그냥 비교하면 TypeError로 죽는다.
   예외는 셋뿐이다: Cloudflare 할당량 리셋은 UTC 00시 기준이고
-  (`llm/backends.py`), 기사 시각은 소스 타임존을 `news/utils.py`가 JST로 변환하며,
+  (`llm/backends.py`), 기사 시각은 소스 타임존을 `news/utils.py`가 UTC +9로 변환하며,
   사전선별의 하루 CPU 예산도 Neurons와 같은 UTC 00시에 리셋한다
   (`features/news_prefilter/service.py`) — 두 예산의 경계를 맞춰 두면 한쪽이
   소진된 날을 다른 쪽 로그와 같은 일자로 읽을 수 있다.

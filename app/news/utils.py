@@ -180,7 +180,7 @@ def format_china_time_as_jst(
 
 def compact_jst_time(formatted_time: str) -> str:
     """날짜가 포함된 JST 문자열에서 기사 표시용 시간만 남긴다."""
-    # 전환 전에 큐·로그에 저장된 KST 표기도 UTC+9라 값 변환 없이 JST로
+    # 전환 전에 큐·로그에 저장된 KST 표기도 UTC +9라 값 변환 없이 JST로
     # 다시 표기할 수 있다. 기존 야간 큐를 비우지 않고 배포할 수 있게 받는다.
     match = re.search(r"(\d{1,2}:\d{2}(?::\d{2})?\s+(?:JST|KST))$", formatted_time)
     return match.group(1).replace("KST", "JST") if match else formatted_time

@@ -1,0 +1,18 @@
+[Unit]
+Description=Refresh current Polymarket dashboard generation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/stock_chatbot/app
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ubuntu/stock_chatbot/venv/bin/python polymarket_dashboard_refresh.py
+Nice=10
+CPUWeight=20
+MemoryMax=256M
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target
