@@ -35,44 +35,13 @@ def _trend_series(points: list[dict]) -> tuple[list[datetime], list[float]]:
     return [day for day, _ in parsed], [value for _, value in parsed]
 
 
-def _draw_polymarket_series(axis, consensus: list[dict]) -> None:
-    """Draw the Polymarket macro risk-appetite bars on the given axis.
-
-    This is a separate reference line with its own unit (percentage points of
-    probability), never merged into the -1..+1 news sentiment scores or the
-    country ranking.  It is drawn as discrete daily bars because gaps are real:
-    a missing snapshot leaves no bar rather than a line interpolated across it.
-    """
-    import matplotlib.dates as mdates
-
-    points = sorted(
-        (datetime.fromisoformat(str(point["date"])), float(point["change_pp"]))
-        for point in consensus
-    )
-    days = [day for day, _ in points]
-    values = [value for _, value in points]
-    colors = [
-        "#16a34a" if value > 0 else "#dc2626" if value < 0 else "#64748b"
-        for value in values
-    ]
-    axis.bar(days, values, color=colors, width=0.6)
-    axis.axhline(0, color="#94a3b8", linewidth=0.9)
-    axis.set_title("Polymarket macro risk appetite — 24h probability change")
-    axis.set_ylabel("pp")
-    axis.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
-    axis.tick_params(axis="x", rotation=45)
-    axis.grid(axis="y", alpha=0.2)
-
-
 def render_market_chart(
     markets: dict[str, dict],
     lookback_days: int,
 ) -> BytesIO:
     """Return a PNG with latest market mood ranking and daily sentiment trends.
 
-    Always the same two-panel chart. The Polymarket macro risk-appetite line
-    used to be an optional bottom panel here; it now renders as its own chart
-    via ``render_polymarket_chart`` under a separate command/menu.
+    Always the same two-panel chart.
     """
     # Telegram handlers run outside the process main thread.  A GUI backend
     # attempts to create a window there, so force Matplotlib's file-only backend
@@ -122,32 +91,6 @@ def render_market_chart(
 
     image = BytesIO()
     image.name = "market_sentiment.png"
-    fig.savefig(image, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
-    image.seek(0)
-    return image
-
-
-def render_polymarket_chart(consensus: list[dict], days: int) -> BytesIO:
-    """Standalone Polymarket macro risk-appetite chart for `/polymarket`.
-
-    Used to be an optional bottom panel bolted onto `/market`; it is now its
-    own command/menu with the same day-range selection as `/market`.
-    """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, axis = plt.subplots(figsize=(10, 5))
-    fig.patch.set_facecolor("#f8fafc")
-    axis.set_facecolor("#f8fafc")
-    _draw_polymarket_series(axis, consensus)
-    axis.set_title(f"Polymarket macro risk appetite — {days}d, 24h probability change")
-    fig.tight_layout()
-
-    image = BytesIO()
-    image.name = "polymarket_consensus.png"
     fig.savefig(image, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
     image.seek(0)

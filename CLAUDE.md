@@ -35,6 +35,9 @@ app/webadmin/          관리 웹 대시보드(터널 전용, 8787)
 app/webpub.py          읽기 전용 공개 웹(별도 프로세스, 8788)
 app/webpub_pages.py    공개 웹 화면(정적 HTML·CSS, 기동 시 1회 조립)
 app/webpub_export.py   공개 웹이 읽을 산출물 굽기
+app/webpub_polymarket.py  현재 generation을 읽는 webpub 전용 repository
+app/polymarket_dashboard/ Gamma 순회·정규화·generation 저장(봇과 무관)
+app/polymarket_dashboard_refresh.py  2시간마다 도는 독립 one-shot
 prompts/               모델 프롬프트
 deploy/                systemd 유닛·Caddy 설정 견본
 iac/terraform/         Lightsail 배포
@@ -116,29 +119,30 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
 - 관심종목과 발송 이력도 현재 JSON 형식만 지원한다.
 - `/market`은 기사별 번역 대신 시장·일자별 헤드라인 다이제스트를 분석한다.
   완료된 과거 일자는 저장 결과를 재사용하고 오늘만 다시 계산한다.
-- **Polymarket 컨센서스는 2026-08-29에 승격했다**(`POLYMARKET_ENABLED=True`,
-  `POLYMARKET_PANEL_ENABLED=True` — 백필 6개 게이트와 라이브 가동률 7일 중 6일을
-  모두 통과했다). `market_sentiment`의 외부 소스이지 별도 기능 키가 아니다.
-  **`/market` 차트의 일부가 아니라 `/polymarket`(메뉴 "🎲 폴리마켓")의 독립
-  차트다**(2026-08-29 분리 — 원래 `/market` 하단 패널이었다). 값은 거시
-  위험선호 확률변화(pp)라 국가별 -1~+1 감성 점수와 축이 다르다 — 합산하거나
-  순위·리서치 입력·브리핑 payload에 넣지 않는다. 방향은 `polymarket_rules.py`의
-  명시적 allowlist로만 정하고 LLM에 묻지 않는다. 승격 게이트 진단은
-  `/polymarket gate`. 자세한 규약은 `docs/server-ops.md`.
-  `/polymarket`은 최대 90일까지 조회할 수 있다(`POLYMARKET_RETENTION_DAYS=91`).
-  이 값은 라이브 스토어의 보관 기간일 뿐, 승격 게이트 평가 창은 여전히
-  `PROMOTION_WINDOW_DAYS=30`으로 고정이다 — `app/polymarket_backfill.py`가
-  게이트 임계값을 그 30일 창에 맞춰 정했으므로 둘을 같은 상수로 묶지 않는다.
-- **승격 판정은 30일을 기다리지 않는다.** `app/polymarket_backfill.py`가 CLOB
-  과거 시세로 지난 31일 스냅숏을 소급 작성해 같은 게이트를 돌린다. 결과는
-  `polymarket_backfill.json`에 따로 쓰고 라이브 스냅숏과 섞지 않는다 — 백필에는
-  과거 호가가 없고 수량 게이트가 조회 시점 값으로 적용돼 있다. 백필로 답할 수
-  없는 두 가지(median spread, job 가동률)는 `polymarket_history.py` 첫머리에
-  적어 두었고, 지운 채로 승격하지 않는다.
-- **수집과 백필은 같이 돌린다.** 승격 조건은 백필 게이트 전부 통과 **그리고**
-  최근 7일 중 6일 스냅숏이다. 서로를 대신하지 못한다 — 백필은 지표의 실질을
-  하루에 판정하지만 job이 매일 도는지는 모르고, 라이브는 그 반대다.
-  `/polymarket`이 두 축을 한 화면에 그린다.
+- **Polymarket은 텔레그램에서 철수했고 공개 웹의 독립 화면이다.** `/polymarket`
+  명령·메뉴, 08:35 스냅숏 job, 거시 위험선호 컨센서스, 90일 이력, 승격 게이트,
+  CLOB 백필은 전부 제거했다(2026-09-01). `market_sentiment`는 이제 감성과
+  이상 두 화면만 가진다. 되살리려면 git에서 꺼내는 별도 변경이며, 그것은
+  "지금 열린 것만 본다"는 제품 결정을 되돌리는 일이다.
+- **현재 대시보드는 봇과 완전히 분리된 systemd one-shot이 굽는다.**
+  `app/polymarket_dashboard_refresh.py`가 2시간마다 Gamma `/events/keyset`을
+  전수 순회해 `data/webpub/polymarket/`에 generation을 쓰고, `webpub.py`가
+  `/polymarket`과 `/api/polymarket/*`로 그 파일만 내보낸다. 봇 프로세스도
+  스케줄러도 이 경로를 모른다 — 봇이 죽어도 화면은 마지막 generation을 계속
+  보여 준다. 절차는 `docs/server-ops.md` 8절.
+- **`current.json`은 열린 event 전부를 한 파일에 담고 상한이 16 MiB다.**
+  이것은 임의의 숫자가 아니라 설계 판정 기준이다(`docs/polymarket-dashboard.md`
+  7-4). 넘으면 `write_generation`이 멈추고 current를 교체하지 않는다 —
+  상한을 올려 넘기지 않는다. webpub이 이 파일을 통째로 파이썬 객체로 올리고
+  `MemoryMax=192M`이 걸려 있어, 올리면 화면이 비는 대신 웹 프로세스가 OOM으로
+  죽는다. **compact에 필드를 추가하면 그 크기에 event 수(실측 21,872)가
+  곱해진다** — 20 B짜리 필드 하나가 0.42 MiB다. 목록·순위·필터·정렬이 읽지
+  않는 값은 detail로 내린다(detail은 byte-addressed라 한 행만 seek한다).
+  추가 전에 `tests/polymarket_manifest_size_probe.py`로 여유를 먼저 잰다.
+- **generation은 두 벌만 남긴다.** detail shard가 generation 하나에 116 MiB라
+  쌓이면 디스크가 상한보다 먼저 찬다. 직전 하나를 남기는 것은 이력이 아니라,
+  승격 순간에 이미 들어와 있던 요청이 자기가 읽던 shard를 계속 seek할 수 있게
+  하기 위한 것이다. 과거 조회는 만들지 않는다 — 화면은 "지금"만 본다.
 - **공개 웹은 봇과 다른 프로세스이고 `GET`만 가진다.** 봇이 산출물을 갱신할 때
   `webpub_export`가 `data/webpub/`에 구워 두고(`market.json`·`market_chart.png`·
   `research.json`·`meta.json`), `webpub.py`는 그 파일을 그대로 내보낸다. 요청 때
@@ -214,8 +218,7 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   나머지는 **계획서**이고 항목이 끝나면 지운다 — 완료 기록은 git 이력이 맡는다.
   현재 계획서는 셋이다: `docs/actor-potus.md`(세력 행동 추정, 미 대통령 게시물
   추적), `docs/market-anomaly.md`(시장 감성을 추세에서 이상 탐지로 바꾸기),
-  `docs/polymarket-thermometer.md`(폴리마켓을 거시 위험선호 한 축에서 분야별
-  컨센서스 온도계로 넓히기).
+  `docs/polymarket-dashboard.md`(폴리마켓 현재 전량을 공개 웹 대시보드로).
   **계획서를 새로 파는 것은 주제가 기존 계획서와 독립일 때뿐이고, 다 끝나면 파일째
   지운다.** 종류를 섞지 않는다: 절차서에 할 일을
   적으면 끝난 일이 남고, 계획서에 절차를 적으면 계획을 지울 때 절차까지 사라진다.

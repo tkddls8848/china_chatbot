@@ -184,8 +184,8 @@ def test_home_text_refreshes_persistent_menu_before_inline_home():
 
 def test_persistent_market_button_opens_the_markets_hub_not_the_admin_menu():
     """회귀: 이름 없는 persistent 버튼은 예전 코드에서 조용히 '⚙️ 관리' 화면으로
-    떨어졌다. 감성·이상·폴리마켓을 묶은 '📊 시장' 허브 버튼이 그 분기를 다시
-    밟으면 안 된다."""
+    떨어졌다. 감성·이상을 묶은 '📊 시장' 허브 버튼이 그 분기를 다시 밟으면
+    안 된다."""
 
     class Message:
         def __init__(self, text):
@@ -211,7 +211,9 @@ def test_persistent_market_button_opens_the_markets_hub_not_the_admin_menu():
     assert "<b>관리</b>" not in text
     assert "<b>시장 화면</b>" in text
     buttons = {button.callback_data for row in markup.inline_keyboard for button in row}
-    assert {"nav:market:sentiment", "nav:market:anomaly", "nav:market:polymarket"} <= buttons
+    assert {"nav:market:sentiment", "nav:market:anomaly"} <= buttons
+    # 폴리마켓은 공개 웹으로 철수했다. 텔레그램 허브로 되살아나면 안 된다.
+    assert not any("polymarket" in str(data) for data in buttons)
 
 
 def test_every_persistent_label_is_wired_in_handle_menu_text(monkeypatch):

@@ -36,6 +36,11 @@ from polymarket_dashboard.transport import build_session
 
 logger = logging.getLogger(__name__)
 
+# manifest에 남길 태그 수. 태그 필터는 event_count 상위 200개만 그리므로
+# (webpub_pages.py의 `slice(0,200)`) 그 아래는 아무도 읽지 않는다. 전부 담으면
+# 꼬리의 수만 개가 manifest 봉투를 1.7 MiB(실측) 불려 16 MiB 상한을 갉아먹는다.
+RAW_TAG_LIMIT = 200
+
 
 def _resource_usage() -> tuple[float | None, int | None]:
     try:
@@ -127,8 +132,9 @@ def refresh(*, root: Path = POLYMARKET_WEB_DIR) -> dict[str, Any]:
         "generation_id": generation_id,
         "generated_at": attempted_at,
         "source": "Polymarket Gamma /events/keyset",
-        "pagination_mode": "events_keyset",
-        "coverage_status": "complete",
+        # pagination_mode·coverage_status는 순회가 끝난 뒤 client.stats에서 받는다.
+        # 여기에 "complete"를 박아 두면 화면 상단이 순회 결과를 확인하지 않고
+        # "전수 순회 완료"를 쓴다.
         "taxonomy_version": TAXONOMY_VERSION,
         "named_category_target": NAMED_CATEGORY_TARGET,
     }
@@ -194,6 +200,8 @@ def refresh(*, root: Path = POLYMARKET_WEB_DIR) -> dict[str, Any]:
             accounting.setdefault(key, 0)
         manifest.update(
             {
+                "pagination_mode": client.stats.pagination_mode,
+                "coverage_status": client.stats.coverage_status,
                 "accounting": dict(accounting),
                 "walk": {
                     "page_count": client.stats.page_count,
@@ -214,7 +222,8 @@ def refresh(*, root: Path = POLYMARKET_WEB_DIR) -> dict[str, Any]:
                     for key, label in CATEGORY_LABELS.items()
                 ],
                 "raw_tags": [
-                    {"tag": tag, "event_count": count} for tag, count in raw_tags.most_common()
+                    {"tag": tag, "event_count": count}
+                    for tag, count in raw_tags.most_common(RAW_TAG_LIMIT)
                 ],
                 "named_category_ratio": named_count / open_count if open_count else 0.0,
             }

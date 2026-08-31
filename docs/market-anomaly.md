@@ -291,7 +291,7 @@ Google News 결과는 재현 가능한 전수 표본이 아니다. 따라서 `qu
 | 범위 | 시장 4곳 × 최근 180세션 ≈ **720창** |
 | 호출 | 본 백필 720회 + GDELT 감사 120회 + G6 재채점 30회 ≈ **7,600 Neurons** |
 | 한 번에 다 하지 않는다 | `BACKFILL_MAX_CALLS_PER_RUN`(80). 뉴스 번역이 하루 예산의 대부분을 쓰므로 며칠에 나눠 채운다 |
-| 실행기 | `app/market_anomaly_backfill.py` — `app/polymarket_backfill.py`와 같은 자리, 같은 역할 |
+| 실행기 | `app/market_anomaly_backfill.py` — `app/` 최상위의 독립 one-shot. 봇 스케줄러가 부르지 않는다 |
 
 **백필 결과는 라이브 파일과 섞지 않는다**(`anomaly_backfill.json` 별도). 그리고
 **백필이 답하지 못하는 것**을 코드 첫머리에 `BACKFILL_CAVEATS`로 적고, 지운 채로

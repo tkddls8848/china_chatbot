@@ -1,9 +1,8 @@
-"""세 화면(국가별 뉴스 감성·시장 서술 이상·Polymarket 거시 위험선호) 명령 구현.
+"""두 화면(국가별 뉴스 감성·시장 서술 이상) 명령 구현.
 
-`market_sentiment` 한 FeatureSpec 아래 `/market`·`/anomaly`·`/polymarket`
-세 명령이 공존한다(CLAUDE.md의 "새 기능 키를 만들지 않는다" 결정). 이 파일은
-그 순서 그대로 세 섹션으로 나뉜다 — 공용 상수·헬퍼 다음 `/market`,
-`/anomaly`, `/polymarket` 순.
+`market_sentiment` 한 FeatureSpec 아래 `/market`·`/anomaly` 두 명령이
+공존한다(CLAUDE.md의 "새 기능 키를 만들지 않는다" 결정). 이 파일은 그 순서
+그대로 두 섹션으로 나뉜다 — 공용 상수·헬퍼 다음 `/market`, `/anomaly` 순.
 
 `/market`은 기사별 감성을 매번 평균하지 않고 `MarketDigestStore`의 일별
 확정값을 읽는다. 확정된 날(`final=True`)은 다시 계산하지 않으므로 같은
@@ -11,13 +10,11 @@
 """
 
 import logging
-from datetime import date, timedelta
 from statistics import median
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from core.clock import today
 from core.config import (
     MARKET_ANOMALY_BACKFILL_FILE,
     MARKET_ANOMALY_ENABLED,
@@ -30,9 +27,6 @@ from core.config import (
     MARKET_DIGEST_MAX_CALLS_PER_REQUEST,
     MARKET_DIGEST_MIN_ARTICLES,
     NEWS_MARKET_BACKFILL_QUERIES,
-    POLYMARKET_BACKFILL_FILE,
-    POLYMARKET_PANEL_ENABLED,
-    POLYMARKET_RETENTION_DAYS,
 )
 from core.menu_status import set_menu_button_text
 from core.workers import burst_job, run_non_urgent
@@ -40,14 +34,11 @@ from features.market_sentiment.chart import (
     market_label,
     render_anomaly_chart,
     render_market_chart,
-    render_polymarket_chart,
 )
-from features.market_sentiment.polymarket_history import BACKFILL_CAVEATS
 from news import backfill_market_digests
 from state import (
     MarketDigestStore,
     OvernightToneStore,
-    PolymarketConsensusStore,
     market_history_gaps,
 )
 
@@ -380,186 +371,3 @@ async def cmd_anomaly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     await _cmd_market_anomaly(message, context, days)
 
-
-# ══════════════════════════════════════════════════════════════════
-# /polymarket — Polymarket 거시 위험선호
-# ══════════════════════════════════════════════════════════════════
-
-# 점 두 개짜리 그래프는 추세가 아니라 선분이다. 이보다 적으면 그리지 않는다.
-_POLYMARKET_MIN_POINTS = 3
-# 스냅숏은 08:35에 찍히므로 오전에는 최신값이 어제치다. 이틀 넘게 밀렸다면
-# 수집이 멈춘 것이므로 낡은 선을 최신인 양 그리지 않는다.
-_POLYMARKET_MAX_STALE_DAYS = 2
-
-# 게이트 리포트 항목별 한국어 라벨과 단위. 게이트 자체는 state 모듈이 계산한다.
-_POLYMARKET_CRITERIA_LABELS = {
-    "snapshot_days": ("성공 스냅숏", "일"),
-    "delta_days": ("유효 일별 변화", "일"),
-    "dense_day_ratio": ("공통 이벤트 3개 이상 비율", ""),
-    "theme_count": ("독립 theme", "개"),
-    "top_theme_contribution": ("최대 theme 기여도", ""),
-    "median_spread": ("median spread", ""),
-}
-
-
-async def _polymarket_series(context, days: int) -> list[dict] | None:
-    """`/polymarket`에 그릴 24시간 거시 위험선호 변화. 자격 미달이면 None.
-
-    `POLYMARKET_PANEL_ENABLED=false`거나 수집이 끊겼거나 표본이 얇으면 그린다고
-    믿을 수 없으므로 빈 결과 대신 None으로 "지금은 못 그린다"를 알린다.
-    """
-    if not POLYMARKET_PANEL_ENABLED:
-        return None
-    store = context.bot_data.get("polymarket_store")
-    if store is None:
-        return None
-    try:
-        changes = await store.daily_changes(days)
-        if len(changes) < _POLYMARKET_MIN_POINTS:
-            return None
-        latest = date.fromisoformat(str(changes[-1]["date"]))
-    except Exception:
-        logger.warning("[POLYMARKET] 컨센서스 조회 실패.", exc_info=True)
-        return None
-    if latest < today() - timedelta(days=_POLYMARKET_MAX_STALE_DAYS):
-        return None
-    return changes
-
-
-def _backfill_store() -> PolymarketConsensusStore | None:
-    """백필 결과 파일을 그때그때 읽는다. 없으면 None.
-
-    기동 시점에 붙잡아 두지 않는 이유는 백필이 봇과 무관하게, 봇이 도는 중에
-    돌기 때문이다. 파일도 라이브 스냅숏과 따로다 — 섞으면 라이브 판정의 근거가
-    오염된다. 보존 기간은 같으므로 오래된 백필은 저절로 얇아져 게이트를
-    통과하지 못한다.
-    """
-    if not POLYMARKET_BACKFILL_FILE.exists():
-        return None
-    return PolymarketConsensusStore(
-        POLYMARKET_BACKFILL_FILE,
-        retention_days=POLYMARKET_RETENTION_DAYS,
-    )
-
-
-def _format_polymarket_report(
-    uptime: dict | None,
-    backfill: dict | None,
-    panel_enabled: bool,
-) -> str:
-    """가동률(라이브)과 승격 게이트(백필)를 한 화면에 나란히 그린다.
-
-    둘은 서로를 대신하지 못한다. 백필은 게이트의 실질을 하루 만에 판정하지만
-    job이 매일 도는지는 모르고, 라이브는 그 반대다. 그래서 승격 조건도 둘 다
-    통과다.
-    """
-    lines = [
-        "<b>Polymarket 컨센서스 파일럿</b>",
-        f"패널 표시: {'켜짐' if panel_enabled else '꺼짐(수집만)'}",
-        "",
-        "<b>라이브 수집 — 가동률</b>",
-    ]
-    if uptime is None:
-        lines.append("  ⏸ 수집이 꺼져 있습니다(POLYMARKET_ENABLED).")
-    else:
-        mark = "✅" if uptime["passed"] else "❌"
-        lines.append(
-            f"  {mark} 최근 {uptime['window_days']}일 스냅숏: "
-            f"{uptime['value']}일 (기준 {uptime['threshold']}일)"
-        )
-        lines.append(f"  마지막 스냅숏: {uptime['last_date'] or '없음'}")
-
-    lines.extend(["", "<b>백필 판정 — 승격 게이트</b>"])
-    if backfill is None:
-        lines.append("  ⏸ 백필을 아직 돌리지 않았습니다(app/polymarket_backfill.py).")
-    else:
-        lines.append(f"  평가 창: 최근 {backfill['window_days']}일")
-        for key, item in backfill["criteria"].items():
-            label, unit = _POLYMARKET_CRITERIA_LABELS.get(key, (key, ""))
-            mark = "✅" if item["passed"] else "❌"
-            line = (
-                f"  {mark} {label}: {item['value']}{unit} "
-                f"(기준 {item['threshold']}{unit})"
-            )
-            caveat = BACKFILL_CAVEATS.get(key)
-            lines.append(f"{line}\n      ※ {caveat}" if caveat else line)
-
-    ready = bool(uptime and uptime["passed"] and backfill and backfill["passed"])
-    lines.extend(
-        [
-            "",
-            (
-                "두 축을 모두 만족합니다. POLYMARKET_PANEL_ENABLED=true로 승격할 수 있습니다."
-                if ready
-                else "아직 승격하지 않습니다. 백필이 미달이면 기다리지 말고 수집을 끕니다."
-            ),
-        ]
-    )
-    return "\n".join(lines)
-
-
-async def _cmd_polymarket_gate(message, context) -> None:
-    """Polymarket 컨센서스 파일럿의 가동률·승격 게이트 진단(`/polymarket gate`)."""
-    store = context.bot_data.get("polymarket_store")
-    backfill_store = _backfill_store()
-    if store is None and backfill_store is None:
-        await message.reply_text(
-            "Polymarket 수집이 꺼져 있고(POLYMARKET_ENABLED) 백필 결과도 없습니다.",
-        )
-        return
-    await message.reply_text(
-        _format_polymarket_report(
-            await store.uptime() if store is not None else None,
-            await backfill_store.promotion_report()
-            if backfill_store is not None
-            else None,
-            POLYMARKET_PANEL_ENABLED,
-        ),
-        parse_mode="HTML",
-    )
-
-
-async def cmd_polymarket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Polymarket 거시 위험선호 차트. `gate` 인자를 주면 승격 게이트 진단을 본다.
-
-    `/market`과 같은 과정(일수 인자 → 차트 이미지)으로 동작한다 — 더 이상
-    `/market` 차트 하단에 곁다리로 붙지 않는다.
-    """
-    message = update.effective_message
-    if message is None:
-        return
-    args = context.args or []
-    if args and args[0].lower() in {"gate", "status"}:
-        await _cmd_polymarket_gate(message, context)
-        return
-    days = MARKET_CHART_LOOKBACK_DAYS
-    if args:
-        try:
-            days = int(args[0])
-        except ValueError:
-            await message.reply_text("사용법: /polymarket [1-90일|gate]")
-            return
-    if not 1 <= days <= 90:
-        await message.reply_text("조회 기간은 1~90일로 지정해 주세요.")
-        return
-    consensus = await _polymarket_series(context, days)
-    if not consensus:
-        await message.reply_text(
-            "차트를 그릴 만큼 데이터가 없습니다. 수집이 막 시작됐거나 최근 며칠"
-            " 스냅숏이 비어 있을 수 있습니다.\n"
-            "/polymarket gate에서 가동률·백필 상태를 확인해 보세요."
-        )
-        return
-    image = await run_non_urgent(render_polymarket_chart, consensus, days)
-    latest = consensus[-1]
-    caption = (
-        f"Polymarket 거시 위험선호 — 최근 {days}일\n"
-        f"최근 변화 {latest['change_pp']:+.2f}pp ({latest['date']})\n"
-        "국가별 뉴스 감성 점수와는 축이 달라 순위·리서치에 합산하지 않습니다."
-    )
-    await message.reply_photo(
-        photo=image,
-        caption=caption,
-        read_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,
-        write_timeout=_CHART_UPLOAD_TIMEOUT_SECONDS,
-    )

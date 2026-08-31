@@ -62,22 +62,21 @@ $env:RUN_CLOUDFLARE_SMOKE='1'
 python -m pytest -q -m cloudflare_smoke
 ```
 
-Polymarket 읽기 스모크(Gamma 시장 목록과 CLOB 과거 시세)도 같은 방식으로
-제외되어 있습니다. 인증과 LLM을 쓰지 않으므로 Neurons를 소비하지 않지만, 운영
-서버는 출구 IP가 달라 로컬에서 열린다고 서버에서 열리는 것이 아닙니다. 수집을
-켜기 전에 서버에서 돌립니다.
+Polymarket 읽기 스모크도 같은 방식으로 제외되어 있습니다. Gamma
+`/events/keyset`이 이 출구 IP에서 읽히는지, 커서가 실제로 전진하는지를 봅니다.
+인증과 LLM을 쓰지 않아 Neurons를 소비하지 않지만, 운영 서버는 출구 IP가 달라
+로컬에서 열린다고 서버에서 열리는 것이 아닙니다. 새 인스턴스에서 한 번 돌립니다.
 
 ```bash
 RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
 ```
 
-승격 게이트는 30일을 기다리지 않고 과거 시세로 먼저 판정합니다. 읽기 전용이며
-`data/market_sentiment/polymarket_backfill.json`에만 씁니다(라이브 스냅숏은
-건드리지 않습니다). 백필로 답할 수 없는 항목은
-`app/features/market_sentiment/polymarket_history.py` 첫머리에 있습니다.
+폴리마켓 현재 대시보드는 봇과 별개인 systemd one-shot이 2시간마다 굽고, 공개
+웹이 그 산출물을 내보냅니다. 설치·상태·장애 절차는 `docs/server-ops.md` 8절에
+있습니다. compact manifest 크기는 다음으로 잽니다.
 
 ```powershell
-.\venv\Scripts\python.exe app\polymarket_backfill.py
+.\venv\Scripts\python.exe tests\polymarket_manifest_size_probe.py
 ```
 
 ## 주요 기능
@@ -101,7 +100,7 @@ RUN_POLYMARKET_SMOKE=1 python -m pytest -q -m polymarket_smoke
 | `/research show\|set\|run\|clear` | 리서치 후보 관리 |
 | `/briefing morning\|evening` | 브리핑 생성 |
 | `/stockdb build` | 종목 DB 갱신 |
-| `/system [features\|polymarket\|prefilter]` | 시스템 상태, 기능 카탈로그, 컨센서스 파일럿 상태, 뉴스 사전선별 섀도 비교 |
+| `/system [features\|prefilter\|anomaly]` | 시스템 상태, 기능 카탈로그, 뉴스 사전선별 섀도 비교, 시장 아노말리 |
 
 ## 관리 웹 (선택)
 

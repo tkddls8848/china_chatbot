@@ -251,286 +251,154 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 - AUC가 0.5 근처 → 올리지 않는다. 가중치를 손보기 전에 어떤 feature가 실제로
   살아 있는지 본다(실측: 종목 매칭은 원문 제목의 8.2%에서만 걸린다).
 
-## 8. Polymarket 컨센서스 파일럿
+## 8. Polymarket 현재 대시보드
 
-**2026-08-29에 승격했다**(`POLYMARKET_ENABLED=True`, `POLYMARKET_PANEL_ENABLED=True`).
-백필 6개 게이트와 라이브 가동률(최근 7일 중 6일)을 모두 통과했다.
-`market_sentiment`의 외부 소스이지 별도 기능 키가 아니다.
-
-**같은 날 안에 `/market` 하단 패널에서 독립 명령 `/polymarket`(메뉴 "🎲
-폴리마켓")으로 뺐다.** 승격 직후엔 하단 패널이었지만, 감성·이상·폴리마켓 세
-화면을 한 메뉴 트리에 욱여넣으면 첫 화면이 계속 늘어난다는 지적에 따라
-`/market`은 자체 2패널 차트만 그리고, 폴리마켓은 `/polymarket`이 같은 방식
-(기간 선택 → 차트 이미지)으로 독립적으로 그린다. 하단 절의 "표시 위치는
-`/market` 하나만" 규약은 이 날짜부로 더 이상 유효하지 않다 — 지금은
-"표시 위치는 `/polymarket` 하나만"이다.
-
-### 무엇으로 쓸 수 있나
-
-Gamma API는 인증이 필요 없고 LLM 비용도 0이다. 문제는 커버리지다. 실측
-(2026-08-10, `closed=false` · `volumeNum>=10,000` · `liquidityNum>=1,000`):
-
-| 지역 | 직접 주식·지수 | 거시 프록시 | 독립 이벤트 |
-|---|---:|---:|---:|
-| 중국 | **0** | 14 | 13 |
-| 홍콩 | **0** | 0 | 0 |
-| 한국 | **0** | 4 | 3 |
-| 미국 | 11 | — | 6 |
-
-홍콩은 유동성 상위가 당일 기온과 정치 마켓이었다. 한국은 북한 침공·Q3 GDP 구간·
-한국은행 동결 3건뿐이고 KOSPI나 개별종목 마켓은 없다. 따라서 이 값은 **개별종목
-감성이 아니라 글로벌 거시 위험선호의 외부 참고선**으로만 쓸 수 있다.
-
-설계상 지킨 것(회귀 테스트가 붙어 있으니 바꿀 때 함께 본다):
-
-- 표시 위치는 `/polymarket` **하나만**(2026-08-29부터 — 이전엔 `/market` 하단
-  패널이었다). `24시간 거시 위험선호 확률변화(pp)`를 독립 차트로 그린다.
-- 국가별 -1~+1 점수·기사 수·순위에 **합산하지 않는다.** CN/HK/US/KR 선으로
-  복제하지도 않는다.
-- `/research` 입력과 브리핑 payload에 넣지 않는다 → **추가 Neurons 0/일**.
-- 전일·당일에 **같은 conditionId**가 있는 계약만 비교한다. 만료 계약을 다른
-  slug로 잇지 않고, 빠진 날을 앞 값으로 채우지 않으며, 같은 날 두 번째 스냅숏은
-  저장하지 않는다(08:35 값과 오후 값을 섞으면 일간 변화가 아니다).
-- 집계는 계약 → 이벤트 중앙값 → theme 중앙값 → theme 평균으로 접는다. S&P
-  임계값 8개짜리 이벤트가 한반도 이벤트 하나보다 8배 세지지 않는다.
-- 방향은 `polymarket_rules.py`의 명시적 allowlist로만 정한다. **LLM에게 묻지
-  않는다.** GDP 구간·금리 결정처럼 국면 의존적인 질문은 제외한다.
+**봇과 완전히 분리된 경로다.** 텔레그램 `/polymarket`, 08:35 스냅숏 job, 거시
+위험선호 컨센서스, 90일 이력, 승격 게이트, CLOB 백필은 2026-09-01에 모두
+철수했다. 지금 있는 것은 systemd timer가 2시간마다 굽는 **현재 스냅숏 하나**와
+그것을 내보내는 공개 웹 화면뿐이다. 봇을 재기동해도, 봇이 죽어 있어도 이
+화면은 마지막 generation을 계속 보여 준다.
 
 | 자리 | 파일 |
 |---|---|
-| Gamma `/markets` 클라이언트·파서 | `app/features/market_sentiment/polymarket.py` |
-| 게이트·theme allowlist·polarity | `app/features/market_sentiment/polymarket_rules.py` |
-| 08:35 JST 스냅숏 job | `app/features/market_sentiment/snapshot.py` |
-| 스냅숏 저장·일별 정렬·게이트 계산 | `app/state/polymarket_consensus.py` |
-| 과거 시세 백필(일회성 도구) | `polymarket_history.py`, `app/polymarket_backfill.py` |
-| `/polymarket` 차트·게이트 리포트 | `app/features/market_sentiment/handlers.py`, `chart.py`의 `render_polymarket_chart` |
+| 순회·정규화·저장 | `app/polymarket_dashboard/` |
+| one-shot 진입점 | `app/polymarket_dashboard_refresh.py` |
+| 읽기 repository | `app/webpub_polymarket.py` |
+| 화면·API | `app/webpub.py`(`/polymarket`, `/api/polymarket/*`) |
+| systemd 유닛 | `deploy/stock-chatbot-polymarket-refresh.{service,timer}` |
+| 산출물 | `data/webpub/polymarket/`의 `current.json`·`status.json`·`generations/` |
+| 크기 실측 도구 | `tests/polymarket_manifest_size_probe.py` |
 
-### 8-1. 착수 전 읽기 스모크
+### 8-1. 설치
 
-운영 Lightsail은 출구 IP가 달라 **한국 PC에서 열렸다는 사실이 서버 접근을
-보장하지 않는다.** Gamma 시장 목록과 CLOB 과거 시세를 둘 다 확인한다(host가
-달라 한쪽만 열릴 수 있다). 부트스트랩은 실행 의존성만 깔므로 pytest를 먼저 받는다.
+**부트스트랩도 3절의 코드 갱신도 이 유닛을 설치하지 않는다.** 인스턴스를 새로
+만들거나 이 기능을 처음 켤 때 한 번 직접 설치한다(11-1의 웹 유닛과 같다).
+
+```bash
+sudo cp ~/stock_chatbot/deploy/stock-chatbot-polymarket-refresh.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now stock-chatbot-polymarket-refresh.timer
+systemctl list-timers | grep polymarket
+```
+
+`enable --now`는 `OnBootSec=3min`·`Persistent=true` 때문에 **즉시 한 번
+발화한다.** 전수 순회가 바로 돌기 시작하므로 놀라지 않아도 된다.
+
+기다리지 않고 지금 굽고 싶으면:
+
+```bash
+sudo systemctl start stock-chatbot-polymarket-refresh.service
+journalctl -u stock-chatbot-polymarket-refresh -n 40 --no-pager
+```
+
+`Type=oneshot`이라 `systemctl start`는 끝날 때까지 블록한다(219 page, 실측 20~60초).
+
+### 8-2. 상태 확인
+
+```bash
+curl -s localhost:8788/api/polymarket/health
+cat ~/stock_chatbot/data/webpub/polymarket/status.json
+ls ~/stock_chatbot/data/webpub/polymarket/generations/
+```
+
+| 보이는 것 | 뜻 |
+|---|---|
+| `status.json`이 아예 없다 | job이 한 번도 안 돌았다 — 8-1을 안 했다 |
+| `"available": false` | `current.json`이 없다. 한 번도 승격에 성공하지 못했다 |
+| `"last_result": "failed"` | `error` 필드가 원인을 말한다 → 8-4 |
+| `freshness.state`가 `delayed`·`stale` | timer가 멈췄거나 순회가 계속 실패한다 |
+| `generations/`가 3개 이상 | 정리가 실패하고 있다. 디스크를 본다 |
+
+화면이 "현재 Polymarket generation을 읽지 못했습니다"만 띄우면 `current.json`이
+없다는 뜻이고, **웹 프로세스를 재기동해도 고쳐지지 않는다** — webpub은 그 파일을
+읽기만 한다. 만드는 것은 이 job이다.
+
+### 8-3. 읽기 스모크 (새 인스턴스에서 한 번)
+
+출구 IP가 Gamma에 막히는지, 커서가 실제로 전진하는지를 서버에서 직접 본다.
+한국 PC에서 열렸다는 사실은 서버 접근을 보장하지 않는다.
 
 ```bash
 cd ~/stock_chatbot
-./venv/bin/pip install -r requirements-dev.txt
 RUN_POLYMARKET_SMOKE=1 ./venv/bin/python -m pytest -q -m polymarket_smoke
 ```
 
-막히면 **거기서 끝낸다.** 프록시로 우회하지 않는다 — 착수도 안 한 신호를 위해
-우회로를 만들어 둘 가치가 없다. 8-5의 철수를 밟는다.
+### 8-4. 장애 분기
 
-이 판단은 **착수 전 단계에만** 적용된다. 이미 며칠·몇 주 정상 수집하던 라이브
-job이 도중에 막히면(가동률 게이트가 이미 값을 쌓아 온 신호라는 뜻) 별개
-상황이다 — 8-4를 본다.
+먼저 `status.json`의 `error`를 읽는다. 아래 넷이 실제로 겪은 전부다.
 
-### 8-2. 수집과 백필은 같은 날 시작한다
-
-승격 조건은 두 축이고 **서로를 대신하지 못한다.**
-
-| 축 | 무엇을 답하나 | 누가 재나 | 걸리는 시간 |
-|---|---|---|---|
-| 게이트의 실질(theme 수·기여도·변화 밀도) | 이 지표가 쓸 만한가 | 백필 | 하루 |
-| job 가동률 | 매일 08:35에 실제로 찍히는가 | 라이브 수집 | 일주일 |
-
-백필을 기다렸다 수집을 켤 이유가 없다. 수집은 Neurons를 쓰지 않고 표시도 꺼져
-있어 켜 두는 비용이 사실상 없으며, 그동안 가동률 일주일이 저절로 쌓인다.
-
-`config.py`의 `POLYMARKET_ENABLED`를 `True`로 바꾸고 커밋·배포한다.
-`POLYMARKET_PANEL_ENABLED`는 `False` 그대로 둔다 — **수집하되 표시하지
-않는다.**
-
-같은 날 **서버에서** 백필을 한 번 돌린다. 로컬에서 돌려도 판정은 같지만, 서버
-파일이어야 `/polymarket`이 두 축을 한 화면에 그린다.
-
-```bash
-cd ~/stock_chatbot && ./venv/bin/python app/polymarket_backfill.py
-```
-
-결과는 `data/market_sentiment/polymarket_backfill.json`에만 쓴다. 라이브 스냅숏과
-섞지 않는다 — 백필에는 과거 호가가 없고 수량 게이트가 조회 시점 값으로 적용돼
-있다. 유동성 게이트가 31일 내내 "오늘의 유동성"으로 적용되는 낙관 편향이 특히
-크다. **통과가 아슬아슬하면 통과로 읽지 않는다.**
-
-### 8-3. 승격 게이트
-
-`/polymarket`(하단 고정메뉴의 **🎲 폴리마켓** 버튼, `/system` 하위가 아니라
-독립 명령·메뉴다 — 2026-08-29)이 두 축을 한 화면에 그린다. 백필과 라이브가
-같은 코드로 계산한다.
-
-| 게이트 | 기준 | 백필로 판정되나 |
-|---|---|---|
-| 성공 스냅숏 | 30일 중 24일 이상(80%) | 데이터 유무만. 가동률은 라이브 |
-| 유효 daily delta | 24일 이상 | 예 |
-| 공통 이벤트 3개 이상인 날 | 유효일의 80% 이상 | 예 |
-| 독립 theme | 3개 이상 | 예 |
-| 최대 theme 기여도 | 50% 이하 | 예 |
-| median spread | 5%p 이하 | 아니오(과거 호가가 없어 오늘 값만) |
-| 최근 7일 스냅숏(가동률) | 6일 이상 | 아니오 — 라이브 전용 |
-
-백필이 답하지 못하는 두 가지(median spread, job 가동률)는
-`polymarket_history.py` 첫머리에도 적어 두었다. **지운 채로 승격하지 않는다.**
-
-**현재 판정 (2026-08-26).** 백필은 전부 통과했고 **라이브 가동률만 미달**이다.
-
-| 축 | 값 | 기준 | 판정 |
-|---|---:|---:|---|
-| 백필 스냅숏 일수 | 26 | 24 | 통과 |
-| 백필 유효 daily delta | 26 | 24 | 통과 |
-| 공통 이벤트 3개 이상인 날 비율 | 1.00 | 0.80 | 통과 |
-| 독립 theme | 5 | 3 | 통과 |
-| 최대 theme 기여도 | 0.31 | 0.50 이하 | 통과 |
-| median spread | 0.01 | 0.05 이하 | 통과 — 단 조회 시점 호가다 |
-| **최근 7일 스냅숏(가동률)** | **4** | **6** | **미달** |
-
-가동률을 깎은 날은 8/21·8/22(원인 미상 — journal 보존 밖이다)와 8/25다. 8/25는
-8-4의 프록시 인스턴스를 삭제한 뒤에도 `.env`에 URL이 남아 08:35·09:35·10:35
-재시도가 전부 프록시 timeout으로 죽었다. `.env`에서 지운 뒤 8/26은 직접 호출로
-성공했다(`contracts=988`). 남은 일은 **8/26부터 7일 중 6일**을 채우는 것뿐이므로,
-그때까지 08:35~10:35 창을 덮는 재기동을 하지 않는다(4절).
-
-- 백필 미달 → **거기서 끝낸다.** 라이브를 30일 더 봐도 같은 항목이 통과할 근거는
-  없다. `config.py`의 `POLYMARKET_ENABLED`를 `False`로 되돌리고(커밋) 8-5로 간다.
-- 백필 통과 → 일주일 뒤 최근 7일 스냅숏이 6일 이상인지만 확인하고
-  `config.py`의 `POLYMARKET_PANEL_ENABLED`를 `True`로 올린다(커밋). 그 뒤
-  `/market`을 한 번 호출해 하단 패널이 붙는지, 위 순위·캡션이 그대로인지
-  눈으로 확인한다.
-
-**최종 판정과 승격 (2026-08-29).** 라이브 가동률이 최근 7일 중 6일로 통과했다.
-그런데 그 시점 `/system polymarket`(같은 날 안에 `/polymarket` 독립 명령으로
-옮겼다 — 아래 참고)은 백필 쪽 두 게이트(성공 스냅숏 23/24,
-유효 daily delta 23/24)를 미달로 보였다 — 서버의 `polymarket_backfill.json`을
-열어 보니 8/22 이후 7일치가 통째로 비어 있었다(직전 백필 실행이 왜 최근 구간을
-못 채웠는지는 그 실행의 로그가 없어 알 수 없다 — `이력 조회 실패`가 0이었다면
-이 파일 자체가 그 실행분이 아니라 더 오래된 실행분이었을 가능성이 크다).
-백필을 그 자리에서 다시 돌리니(`./venv/bin/python app/polymarket_backfill.py`)
-31일치가 정상적으로 채워지며 6개 게이트 전부 통과했다:
-
-| 축 | 값 | 기준 | 판정 |
-|---|---:|---:|---|
-| 백필 스냅숏 일수 | 30 | 24 | 통과 |
-| 백필 유효 daily delta | 30 | 24 | 통과 |
-| 공통 이벤트 3개 이상인 날 비율 | 1.00 | 0.80 | 통과 |
-| 독립 theme | 4 | 3 | 통과 |
-| 최대 theme 기여도 | 0.416 | 0.50 이하 | 통과 |
-| median spread | 0.01 | 0.05 이하 | 통과 — 단 조회 시점 호가다 |
-| 최근 7일 스냅숏(가동률) | 6 | 6 | 통과 |
-
-두 축 모두 통과해 `POLYMARKET_PANEL_ENABLED`를 `True`로 올리고 커밋했다.
-**교훈**: 이 리포트가 백필 미달을 보이면 바로 8-5로 가기 전에 백필을 한 번
-다시 돌려 본다 — 이번처럼 실제 게이트 미달이 아니라 오래되거나 일부만 채워진
-백필 파일이 원인일 수 있다.
-
-**같은 날 안에 메뉴 위치도 바뀌었다.** `/system polymarket`이 `/system` 하위
-버튼("🎲 폴리마켓")으로 묻혀 있던 것을 독립 명령·메뉴 `/polymarket`(하단
-고정메뉴 "🎲 폴리마켓")으로 뺐다 — 진단 화면이 관리자 전용 `/system` 안에
-숨어 있을 이유가 없었다. 리포트 내용(`_format_polymarket_report` 등)은
-`app/features/system_admin/handlers.py`에서 `app/features/market_sentiment/handlers.py`로
-옮겼고, `/system polymarket`은 더 이상 없다.
-
-게이트 임계값(`POLYMARKET_MIN_VOLUME` 등)과 `POLYMARKET_ENABLED`·
-`POLYMARKET_PANEL_ENABLED`는 전부 `config.py`의 상수다 — 바꾸려면 코드를
-고쳐야 하고 git에 남는다. 백필과 라이브 사이에 게이트 임계값을 바꾸지
-않는 이유는 바꾸면 두 표본이 달라져 백필 판정을 라이브에 얹을 수 없어서다.
-env로 남은 폴리마켓 키는 `POLYMARKET_PROXY_URL` 하나뿐이다(지역 차단용
-자격증명이 섞여 있어 git에 올릴 수 없다, 8-4).
-
-### 8-4. 라이브 수집이 지역 차단(451)에 막히면 — 프록시
-
-정상 수집 중이던 job이 어느 날부터 `HTTP 451`(법적 사유로 이용 불가)로
-연속 실패하는 경우다. `journalctl -u stock-chatbot | grep POLYMARKET`에서
-`result=bad_request status=451`이 매 재시도(08:35·09:35·10:35)마다 찍히고
-코드·설정 변경 없이 시작됐다면, Gamma가 이 서버 출구 IP의 지역을 막기
-시작했다는 뜻이다(8-1의 "착수도 안 한 신호" 판단과는 다른 상황).
-
-`PolymarketClient`·`PolymarketHistoryClient`는 원래 `session=`을 받으므로,
-막혔을 때만 프록시를 문 세션을 넘긴다. 평소엔 아무 세션도 넘기지 않아
-직접 호출 그대로다 — 이 경로 전체가 `POLYMARKET_PROXY_URL` 한 줄로
-켜지고 지워진다.
-
-| 자리 | 파일 |
-|---|---|
-| 프록시 세션 팩토리(요청 시에만 관여) | `app/features/market_sentiment/polymarket_proxy.py` |
+**(1) `PolymarketError: bad_request` + 로그에 `status=451`** — Gamma가 이 서버
+출구 IP의 지역을 막았다. 프록시를 문다.
 
 ```env
 # 비어 있으면(기본) 직접 호출한다. 지역 차단(451)이 뜰 때만 채운다.
 POLYMARKET_PROXY_URL=http://user:pass@proxy-host:port
 ```
 
-`.env`에 넣고 재기동한 뒤 다음 재시도 창(정시 35분)까지 기다려
-`journalctl`에서 `result=`가 더 이상 뜨지 않는지 확인한다. socks5 프록시를
-쓰려면 서버에 `pip install pysocks`가 먼저 있어야 한다(requests의 SOCKS
-지원 의존성이고 이 프로젝트가 기본으로 깔지 않는다).
+`.env`에 넣고 job을 다시 돌린다. 봇 재기동은 필요 없다 — 이 경로는 봇과 무관하다.
+socks5를 쓰려면 서버에 `pip install pysocks`가 먼저 있어야 한다(이 프로젝트가
+기본으로 깔지 않는다). 프록시 서버 자체가 연결 불능이거나 timeout이면 그
+프로세스는 직접 연결로 한 번 failover한다. **Gamma가 응답한 451은 프록시 장애가
+아니므로 이 전환을 일으키지 않는다** — 우회하면 막힌 IP로 되돌아가기 때문이다.
 
-프록시 서버 자체가 연결 불능이거나 경유 요청이 timeout이면 그 프로세스는
-직접 연결로 한 번 failover하고 이후 페이지도 직접 읽는다. Gamma가 응답한
-`HTTP 451`은 프록시 장애가 아니므로 이 전환을 일으키지 않는다. failover 로그가
-보이면 프록시를 복구하거나, 직접 연결이 계속 `200`인 서버라면 아래처럼 설정을
-지워 불필요한 timeout을 없앤다.
+떼어낼 때는 `.env`에서 지운다. **인스턴스 삭제와 `.env` 정리는 같은 날 한다** —
+2026-08-25에 인스턴스는 이미 없는데 URL이 남아 재시도가 전부 `ConnectTimeout`으로
+죽은 적이 있다. failover가 있어도 timeout을 한 번 문 뒤의 일이라 지연은 그대로다.
 
-떼어낼 때는 `.env`에서 `POLYMARKET_PROXY_URL`을 지우고 재기동하면 된다.
-완전히 걷어내려면(신호로서 가치가 없다고 판단한 경우) 이 값을 지운 뒤
-`polymarket_proxy.py` 파일과 `feature.py`·`polymarket_backfill.py`의
-`build_polymarket_session` 호출 두 곳도 함께 지운다.
+> 현황(2026-08-26 실측): 한국(AWS 서울·KT 회선)은 451, 도쿄(`ap-northeast-1`)는
+> 200이다. 이것이 서버를 도쿄에 둔 이유이고, 그래서 지금 `.env`에
+> `POLYMARKET_PROXY_URL`은 비어 있다. 도쿄 출구까지 막히면 위 절차로 켠다.
 
-이걸로도 안 풀리면(프록시 출구도 막히거나, 프록시를 구할 수 없으면) 8-5를
-밟는다.
+**(2) `manifest exceeds 16777216 bytes: N bytes / M events`** — 열린 event가
+늘어 compact manifest가 16 MiB 상한을 넘었다. **상한을 올려서 넘기지 않는다.**
+webpub이 이 파일을 통째로 파이썬 객체로 올리고 `MemoryMax=192M`이 걸려 있어,
+올리면 화면이 비는 대신 웹 프로세스가 OOM으로 죽는다.
 
-#### 프록시 현황: 지금은 없다 (2026-08-26)
+무엇이 자리를 먹는지부터 잰다. 실패한 실행이 남긴 shard를 읽으므로 API를 다시
+부르지 않는다(다음 실행이 그 디렉토리를 지우기 전에 돌린다).
 
-한국(AWS 서울·KT 회선 둘 다) 전부 `gamma-api.polymarket.com`·`clob.polymarket.com`이
-451이고 도쿄(`ap-northeast-1`)는 둘 다 200이다 — 이 실측이 서버를 도쿄로 옮긴
-이유다. 봇 자체가 도쿄에 있게 된 뒤로 프록시는 필요가 없어졌다.
+```bash
+cd ~/stock_chatbot && ./venv/bin/python tests/polymarket_manifest_size_probe.py
+```
 
-| 항목 | 현재 |
-|---|---|
-| 프록시 인스턴스 | 없음. `ap-northeast-1`에 남은 Lightsail 인스턴스는 `stock-chatbot` 하나뿐이다 |
-| 서버 `.env`의 `POLYMARKET_PROXY_URL` | 없음(2026-08-26 제거) |
-| 실제 호출 | 직접 연결로 `200` |
+고치는 방향은 **compact에서 목록·순위·필터·정렬이 읽지 않는 필드를 detail로
+내리는 것**이다(`polymarket_dashboard/models.py`의 `normalize_event`). detail은
+byte-addressed라 옮기는 비용이 사실상 없다. 2026-09-01에 7개(`slug`·
+`category_reason`·`system_tags`·`liquidity_source`·`volume`·`market_count`·
+`runner_up_probability`)를 내려 826 → 638 B/event로 줄였다. 더 내릴 것이
+없으면 계획서 7-4가 정한 대로 카테고리 shard 설계로 간다.
 
-**걷어낼 때는 인스턴스 삭제와 `.env` 정리를 같은 날 한다.** 8/25에 스냅숏을
-통째로 잃은 것이 순서를 어긴 결과다 — 인스턴스는 이미 없는데 `.env`에 URL이
-남아 세 번의 재시도가 전부 `ConnectTimeout`으로 죽었다. 커밋 `5f05f00`(8/26)부터는
-프록시가 연결 불능이면 직접 연결로 failover하지만, 그건 timeout을 한 번 문 뒤의
-일이라 지연이 그대로 붙는다. 설정을 지우는 쪽이 항상 낫다.
+**(3) 디스크가 찬다** — generation 하나가 detail shard만 116 MiB다. 정상이면
+`generations/`에 **두 개만** 있다(current와 직전). 세 개 이상 쌓여 있으면
+정리가 실패하는 것이므로 `journalctl`에서 `generation 정리 실패`를 찾는다.
+남는 디렉토리는 손으로 지워도 안전하다 — `current.json`이 가리키는 것과 그
+직전만 아니면 참조하는 곳이 없다.
 
-다시 필요해지면(도쿄 출구까지 막히면) 위 절차대로 세우고 `.env` 한 줄로 켠다.
-상태를 갖지 않는 부속물이라 다시 만드는 비용이 낮다. **이 인스턴스는 terraform이
-관리하지 않는다** — 붙였다 뗄 수 있는 부속물로 두는 게 목적이라 본
-배포(`iac/terraform/`)에 편입하지 않는다. 유지보수는 Lightsail 콘솔의 브라우저
-SSH로 한다(`GetInstanceAccessDetails`는 IAM에 없어 로컬 CLI로 키를 뽑을 수 없다).
+**(4) 웹 프로세스 메모리** — `current.json`을 처음 요청받을 때 통째로 올린다.
 
-### 8-5. 철수 (하나라도 미달이면)
+```bash
+systemctl status stock-chatbot-web | grep -i memory
+```
 
-기준 미달을 "조금만 더 보자"로 넘기지 않는다.
+**페이지를 한 번 연 뒤에 재야 한다** — 열기 전에는 아직 안 읽어 낮게 나온다.
+계획서 7-4의 예산은 96 MiB이고 유닛 상한은 192 MiB다. 2026-09-01 실측은
+event 21,872건에 89.8 MiB(swap 22.5 MiB)로 예산에 턱걸이였다. 여기가 먼저
+아프면 event 목록을 카테고리 shard로 나눈다.
 
-1. `config.py`의 `POLYMARKET_ENABLED`·`POLYMARKET_PANEL_ENABLED`를 둘 다
-   `False`로 바꾸고 커밋·배포한다. 서버 `.env`에 `POLYMARKET_PROXY_URL`이
-   있으면 지우고 재기동한다.
-2. 서버·로컬의 `data/market_sentiment/polymarket_consensus.json`과
-   `polymarket_backfill.json` 삭제.
-3. 코드 제거 — 파일 통째 삭제:
-   - `app/features/market_sentiment/polymarket.py`
-   - `app/features/market_sentiment/polymarket_rules.py`
-   - `app/features/market_sentiment/polymarket_history.py`
-   - `app/features/market_sentiment/polymarket_proxy.py`(8-4에서 붙였다면)
-   - `app/features/market_sentiment/snapshot.py`
-   - `app/polymarket_backfill.py`
-   - `app/state/polymarket_consensus.py`
-   - `tests/test_polymarket_{client,rules,consensus,panel,wiring,history,smoke,proxy}.py`
-4. 코드 제거 — 부분 되돌리기:
-   - `app/core/config.py`의 `POLYMARKET_*` 블록
-   - `app/features/market_sentiment/feature.py`의 서비스·job 조립
-   - `app/features/market_sentiment/handlers.py`의 `_consensus_panel_series`,
-     패널 상수 2개, 캡션 주석
-   - `app/features/market_sentiment/chart.py`의 `_draw_consensus_panel`과
-     `consensus` 인자(2패널 레이아웃으로 환원)
-   - `app/features/system_admin/handlers.py`의 `polymarket` 하위 명령과 라벨·포매터
-   - `app/features/system_admin/feature.py`의 usage 문자열
-   - `app/state/__init__.py`의 export 2개
-   - `pytest.ini`의 `polymarket_smoke` 마커
-   - `.env.example`·`README.md`·`CLAUDE.md`·`app/features/README.md`의 관련 문단
-5. `python -m pytest -q`와 `ruff check app tests`로 원상 복구를 확인한다.
+### 8-5. 철수
+
+이 화면이 쓸모없다고 판단하면 timer를 끄고 산출물을 지운다. 봇은 영향받지 않는다.
+
+```bash
+sudo systemctl disable --now stock-chatbot-polymarket-refresh.timer
+sudo rm /etc/systemd/system/stock-chatbot-polymarket-refresh.{service,timer}
+sudo systemctl daemon-reload
+rm -rf ~/stock_chatbot/data/webpub/polymarket
+```
+
+화면까지 걷어내려면 `webpub.py`의 `/polymarket`·`/api/polymarket/*` 라우트와
+`webpub_pages.py`의 `POLYMARKET_HTML`, `app/polymarket_dashboard/`,
+`app/webpub_polymarket.py`를 지우고 웹을 재기동한다.
 
 ## 9. 백업·복구·재부팅
 

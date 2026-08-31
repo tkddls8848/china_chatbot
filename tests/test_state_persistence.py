@@ -19,7 +19,6 @@ import pytest
 from core import storage
 from core.storage import write_json_atomic
 from state.market_digest import MarketDigestStore
-from state.polymarket_consensus import PolymarketConsensusStore
 from watchlist.manager import WatchlistManager
 
 
@@ -56,20 +55,6 @@ def test_digest_day_is_not_remembered_when_it_was_never_written(tmp_path, monkey
 
     # 디스크에 없는 날을 확정으로 기억하면 /market이 영영 그 날을 건너뛴다.
     assert day in asyncio.run(store.missing_digest_days({"KR"}, 2))["KR"]
-
-
-def test_snapshot_write_failure_is_not_reported_as_stored(tmp_path, monkeypatch):
-    store = PolymarketConsensusStore(tmp_path / "polymarket.json", retention_days=31)
-    day = date.today()
-    contracts = {"0xabc": {"price": 0.5, "polarity": 1, "theme": "macro"}}
-
-    _break_replace(monkeypatch)
-    with pytest.raises(OSError):
-        asyncio.run(store.put_snapshot(day, contracts))
-    monkeypatch.undo()
-
-    # 못 쓴 날이 "이미 있는 날"로 남으면 재시도가 조용히 False로 막힌다.
-    assert asyncio.run(store.put_snapshot(day, contracts)) is True
 
 
 def test_watchlist_change_is_dropped_when_it_cannot_be_saved(tmp_path, monkeypatch):

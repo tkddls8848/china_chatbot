@@ -341,9 +341,9 @@ NEWS_SOURCE_MARKETS = {
     "gnews_kr": "KR",
     "mk-stock": "KR",
 }
-# market_sentiment 세 화면(감성·아노말리·폴리마켓)이 기본 조회 일수와 대상
-# 시장 집합으로 공유한다 — 접두사가 "CHART"라 /market 전용처럼 보이지만
-# 아니다(cmd_market·cmd_anomaly·cmd_polymarket 전부 참조).
+# market_sentiment 두 화면(감성·아노말리)이 기본 조회 일수와 대상 시장
+# 집합으로 공유한다 — 접두사가 "CHART"라 /market 전용처럼 보이지만
+# 아니다(cmd_market·cmd_anomaly 둘 다 참조).
 MARKET_CHART_LOOKBACK_DAYS = 7
 MARKET_CHART_MARKETS = frozenset({"CN", "HK", "US", "KR"})
 # 아래 셋은 그 이름대로 /market(cmd_market)의 일별 감성 다이제스트 전용이다.
@@ -397,37 +397,6 @@ MARKET_ANOMALY_INDEX_TICKERS = {
     "HK": "^HSI",
     "US": "^GSPC",
 }
-
-
-# ── Polymarket 라이브 컨센서스(철수 진행 중, 봇에서 이미 배선 해제) ────────
-# `/polymarket` 명령·메뉴·08:35 스냅숏 job은 feature.py·navigation.py에서 이미
-# 떼어냈다. 아래 값들은 아직 남아 있는 handlers.py·snapshot.py·chart.py·
-# polymarket_backfill.py와 그 테스트가 읽는다 — 이름을 지우면 features 패키지가
-# import되지 않아 봇 전체가 기동하지 않는다(실제로 그렇게 깨진 적이 있다).
-# 지우는 시점은 `docs/polymarket-dashboard.md` §10-3이 정한 대로 **아래 웹
-# 대시보드가 generation을 실제로 굽는 것을 확인한 뒤**이며, 그때 이 블록과
-# 해당 모듈·테스트를 함께 제거한다. 그전까지 값은 마지막 운영값 그대로 둔다 —
-# 여기만 바꾸면 남은 코드가 읽는 기준이 소리 없이 달라진다.
-POLYMARKET_CONSENSUS_FILE = DATA_DIR / "market_sentiment" / "polymarket_consensus.json"
-# 백필(`app/polymarket_backfill.py`)이 쓰는 별도 파일. 라이브 스냅숏과 섞지
-# 않는다 — 백필 값에는 과거 호가가 없고 수량 게이트가 조회 시점 값으로
-# 적용돼 있어, 같은 파일에 넣으면 라이브 판정의 근거가 오염된다.
-POLYMARKET_BACKFILL_FILE = DATA_DIR / "market_sentiment" / "polymarket_backfill.json"
-# 과거 시세는 Gamma가 아니라 CLOB에 있다. 인증은 마찬가지로 없다.
-POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
-POLYMARKET_ENABLED = True
-POLYMARKET_PANEL_ENABLED = True
-# 선택 게이트. 유동성이 얕은 계약은 하루 변화가 호가 한 번에 흔들려 컨센서스가
-# 아니라 잡음이 된다. 실측 기준(volume 10,000 · liquidity 1,000)을 쓴다.
-POLYMARKET_MIN_VOLUME = 10000.0
-POLYMARKET_MIN_LIQUIDITY = 1000.0
-# 승격 게이트의 "median spread 5%p 이하"와 같은 기준을 수집 단계에서도 쓴다.
-POLYMARKET_MAX_SPREAD = 0.05
-# 만기가 너무 먼 계약은 하루 단위로 거의 움직이지 않아 신호를 희석한다.
-POLYMARKET_MAX_HORIZON_DAYS = 365
-# 라이브 스토어 보관 기간. 승격 게이트 평가 창(PROMOTION_WINDOW_DAYS=30)과는
-# 별개다 — 게이트 임계값은 30일 창을 전제로 정해 놓았다(app/polymarket_backfill.py).
-POLYMARKET_RETENTION_DAYS = 91
 
 
 # ── 현재 Polymarket 전체 웹 대시보드 ───────────────────────────────────────
