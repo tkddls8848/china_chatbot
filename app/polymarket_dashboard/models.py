@@ -211,34 +211,42 @@ def normalize_event(
     else:
         data_status = "ok"
     taxonomy = classify(extract_tags(event))
+    # compact는 event 전부가 current.json 한 파일에 들어가므로 **한 필드의 크기가
+    # event 수만큼 곱해진다.** 실측 21,877건에서 필드 하나가 20 B면 0.42 MiB다.
+    # 그래서 여기에는 목록·순위·필터·정렬이 실제로 읽는 것만 둔다. 나머지는
+    # detail로 내린다 — detail은 byte-addressed라 한 행만 seek해서 읽는다.
+    # 필드를 여기 추가하기 전에 tests/polymarket_manifest_size_probe.py로
+    # 16 MiB 상한(docs/polymarket-dashboard.md 7-4)에 여유가 있는지 먼저 잰다.
     common = {
         "id": identity,
-        "slug": str(event.get("slug") or ""),
         "title": str(event.get("title") or event.get("question") or "제목 없음"),
         "category": taxonomy["category"],
         "category_label": taxonomy["category_label"],
-        "category_reason": taxonomy["category_reason"],
         "tags": taxonomy["tags"],
         "regions": taxonomy["regions"],
-        "system_tags": taxonomy["system_tags"],
         "event_type": event_type,
         "data_status": data_status,
         "price_status": consensus["price_status"],
         "liquidity_status": liquidity_status,
         "liquidity": liquidity,
-        "liquidity_source": liquidity_source,
         "volume24hr": _number(event.get("volume24hr")),
-        "volume": _number(event.get("volume")),
         "end_date": event.get("endDate"),
-        "market_count": len(markets),
         "leader": consensus["leader"],
         "leader_probability": consensus["leader_probability"],
-        "runner_up_probability": consensus["runner_up_probability"],
         "leader_margin": consensus["leader_margin"],
     }
     compact = dict(common)
+    # detail 전용. 어느 것도 목록 화면이 읽지 않는다 — slug는 상세의 Polymarket
+    # 링크(eventUrl)가, 나머지는 상세 본문과 수집 집계가 쓴다.
     detail = {
         **common,
+        "slug": str(event.get("slug") or ""),
+        "category_reason": taxonomy["category_reason"],
+        "system_tags": taxonomy["system_tags"],
+        "liquidity_source": liquidity_source,
+        "volume": _number(event.get("volume")),
+        "market_count": len(markets),
+        "runner_up_probability": consensus["runner_up_probability"],
         "description": str(event.get("description") or ""),
         "image": str(event.get("image") or event.get("icon") or ""),
         "restricted": event.get("restricted"),

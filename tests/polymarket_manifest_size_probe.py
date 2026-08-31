@@ -6,8 +6,12 @@ detail shard는 이미 전부 기록돼 있다. 이 프로브는 그 shard만 �
 같은 방식으로 재구성하고 계획서(``docs/polymarket-dashboard.md`` 7-4)의 상한과
 비교한다. **API를 호출하지 않는다** — 실패한 실행이 남긴 파일만 읽는다.
 
-compact 필드 목록은 하드코딩하지 않고 detail 행에서 detail 전용 키를 빼서
-얻는다. ``models.normalize_event``가 필드를 늘리거나 줄여도 같이 따라간다.
+compact 필드 목록은 하드코딩하지 않고 ``normalize_event``를 실제로 한 번 불러
+얻는다. 어떤 필드를 compact에 두고 어떤 것을 detail로 내릴지가 바로 이 프로브가
+재려는 대상이므로, 목록을 베껴 두면 고친 뒤의 예측이 조용히 틀린다.
+
+detail 행 자체는 compact를 옮겨도 내용이 그대로다. 그래서 **고치기 전에 남은
+shard로 고친 뒤의 크기를 미리 잴 수 있다** — API를 다시 순회하지 않아도 된다.
 
     ./venv/bin/python tests/polymarket_manifest_size_probe.py
     ./venv/bin/python tests/polymarket_manifest_size_probe.py <generation_dir>
@@ -22,12 +26,14 @@ import sys
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 GENERATIONS_DIR = BASE_DIR / "data" / "webpub" / "polymarket" / "generations"
-MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+sys.path.insert(0, str(BASE_DIR / "app"))
 
-# normalize_event가 detail에만 얹는 키. 나머지가 곧 compact다.
-DETAIL_ONLY = frozenset(
-    {"description", "image", "restricted", "active", "closed", "raw_yes_sum",
-     "warnings", "markets"}
+from polymarket_dashboard.models import normalize_event  # noqa: E402
+from polymarket_dashboard.storage import MAX_MANIFEST_BYTES  # noqa: E402
+
+# 현재 코드가 compact에 두는 키. 빈 event 하나를 정규화해서 그대로 받아 온다.
+COMPACT_KEYS = frozenset(
+    normalize_event({"id": "0", "markets": []}, identity="0", low_liquidity=0.0)[0]
 )
 
 
@@ -56,7 +62,8 @@ def measure(generation_dir: Path) -> dict[str, object]:
             for line in handle:
                 detail = json.loads(line)
                 # write_generation이 만드는 manifest 항목을 그대로 재현한다.
-                entry = {key: value for key, value in detail.items() if key not in DETAIL_ONLY}
+                entry = {key: value for key, value in detail.items() if key in COMPACT_KEYS}
+                entry["generation_id"] = detail.get("generation_id")
                 entry["detail_ref"] = {
                     "shard": shard.name,
                     "offset": offset,

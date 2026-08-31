@@ -166,8 +166,10 @@ def refresh(*, root: Path = POLYMARKET_WEB_DIR) -> dict[str, Any]:
                 category_counts[compact["category"]] += 1
                 type_counts[compact["event_type"]] += 1
                 status_counts[compact["data_status"]] += 1
-                raw_tags.update(compact["tags"] + compact["regions"] + compact["system_tags"])
-                activity["market_count"] += compact["market_count"]
+                # system_tags·market_count는 compact에 없다(크기 때문에 detail 전용).
+                # detail이 common의 상위집합이라 집계는 여기서 그대로 읽는다.
+                raw_tags.update(compact["tags"] + compact["regions"] + detail["system_tags"])
+                activity["market_count"] += detail["market_count"]
                 if compact["volume24hr"] is None:
                     activity["volume24hr_missing_count"] += 1
                 else:
