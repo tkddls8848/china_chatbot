@@ -17,7 +17,13 @@ import json
 import pytest
 
 from polymarket_dashboard.taxonomy import assign_brief_group, brief_groups
-from polymarket_sector_brief import build, collect_groups, named_events, summarize
+from polymarket_sector_brief import (
+    build,
+    collect_groups,
+    named_events,
+    summarize,
+    title_probability,
+)
 
 
 class _Analyzer:
@@ -138,6 +144,48 @@ def test_named_events_take_the_largest_by_volume():
     assert [row["title"] for row in named] == ["event 9", "event 8", "event 7"]
 
 
+def test_binary_probability_is_normalised_to_the_title_direction():
+    """leader_probability는 부호가 없다. 제목 기준으로 돌려놓고 넘긴다.
+
+    실측(2026-09-01): leader와 확률을 그대로 넘기면 모델이 셋 중 둘꼴로
+    "제재 완화 가능성 74%"라고 쓴다 — 74%는 완화되지 **않을** 확률인데도.
+    힌트를 더 줘도 제목 표현에 앵커링한다. 그래서 숫자를 모델이 읽는 방향에
+    맞춘다.
+    """
+    yes = {"leader": "Yes", "leader_probability": 0.82, "event_type": "binary"}
+    no = {"leader": "No", "leader_probability": 0.82, "event_type": "binary"}
+
+    assert title_probability(yes) == 0.82
+    assert title_probability(no) == 0.18
+    assert title_probability({"leader": "No", "leader_probability": None}) is None
+
+
+def test_binary_events_carry_only_the_title_probability():
+    rows = named_events(
+        [{"title": "Will X happen?", "leader": "No", "leader_probability": 0.74,
+          "volume24hr": 1.0, "event_type": "binary"}],
+        1,
+    )
+
+    assert rows[0]["title_probability"] == 0.26
+    # leader를 같이 보내면 모델이 둘을 섞어 쓴다.
+    assert "leader" not in rows[0]
+    assert "leader_probability" not in rows[0]
+
+
+def test_multi_choice_events_keep_the_leading_candidate():
+    """다지선다는 제목이 참·거짓 명제가 아니라 정규화할 대상이 없다."""
+    rows = named_events(
+        [{"title": "Who wins?", "leader": "Candidate A", "leader_probability": 0.55,
+          "volume24hr": 1.0, "event_type": "exclusive_multi"}],
+        1,
+    )
+
+    assert rows[0]["leader"] == "Candidate A"
+    assert rows[0]["leader_probability"] == 0.55
+    assert "title_probability" not in rows[0]
+
+
 def test_aggregate_is_not_truncated_by_the_name_limit(tmp_path):
     root = tmp_path / "polymarket"
     _write_current(root, [_event(i, ["stocks"], volume=1.0) for i in range(50)])
@@ -238,6 +286,10 @@ def test_previous_probabilities_are_stored_for_the_next_run(tmp_path):
 
 
 # ── 응답 검증 ──────────────────────────────────────────────────────────────
+#
+# 응답은 평문 단락이다. JSON 봉투로 받지 않는다 — 출력이 문자열 하나뿐이라
+# 봉투가 검증에 보태는 것이 없고, 실측에서 모델이 봉투를 무시하고 평문만
+# 돌려줬다(2026-09-01). 검증은 여기서 직접 한다.
 
 def _analyzer(tmp_path, raw):
     from llm.polymarket_brief import PolymarketBriefAnalyzer
@@ -252,23 +304,36 @@ def _analyzer(tmp_path, raw):
     return PolymarketBriefAnalyzer(_Backend(), prompt, 900)
 
 
-def test_a_valid_paragraph_is_returned_with_whitespace_collapsed(tmp_path):
+def test_plain_prose_is_accepted_with_whitespace_collapsed(tmp_path):
     body = "가" * 100
-    analyzer = _analyzer(tmp_path, json.dumps({"paragraph": f"  {body}\n\n{body} "}))
+    analyzer = _analyzer(tmp_path, f"\n\n  {body}\n\n{body} ")
 
     assert analyzer.analyze("주식·시장", {}, [{"title": "t"}]) == f"{body} {body}"
+
+
+def test_an_empty_thinking_block_is_stripped(tmp_path):
+    body = "가" * 100
+    analyzer = _analyzer(tmp_path, f"<think>\n\n</think>\n\n{body}")
+
+    assert analyzer.analyze("주식·시장", {}, [{"title": "t"}]) == body
+
+
+def test_a_fenced_paragraph_is_unwrapped(tmp_path):
+    body = "가" * 100
+    analyzer = _analyzer(tmp_path, f"```\n{body}\n```")
+
+    assert analyzer.analyze("주식·시장", {}, [{"title": "t"}]) == body
 
 
 @pytest.mark.parametrize(
     "raw",
     [
         "",
-        "not json",
-        json.dumps(["list"]),
-        json.dumps({"paragraph": None}),
-        json.dumps({"paragraph": "   "}),
-        json.dumps({"paragraph": "너무 짧다"}),
-        json.dumps({"paragraph": "가" * 2000}),
+        "   \n  ",
+        "너무 짧다",
+        "가" * 2000,
+        # 봉투를 다시 만들어 보낸 응답은 단락이 아니다.
+        json.dumps({"paragraph": "가" * 100}, ensure_ascii=False),
     ],
 )
 def test_bad_responses_are_rejected(tmp_path, raw):
@@ -284,9 +349,7 @@ def test_a_paragraph_that_echoes_an_event_title_is_rejected(tmp_path):
     from llm import PolymarketBriefError
 
     title = "Will the Fed cut rates before December 2027?"
-    analyzer = _analyzer(
-        tmp_path, json.dumps({"paragraph": "가" * 80 + title + "가" * 80})
-    )
+    analyzer = _analyzer(tmp_path, "가" * 80 + title + "가" * 80)
 
     with pytest.raises(PolymarketBriefError, match="echoes"):
         analyzer.analyze("거시·통화", {}, [{"title": title}])
@@ -295,7 +358,7 @@ def test_a_paragraph_that_echoes_an_event_title_is_rejected(tmp_path):
 def test_an_empty_group_never_reaches_the_backend(tmp_path):
     from llm import PolymarketBriefError
 
-    analyzer = _analyzer(tmp_path, json.dumps({"paragraph": "가" * 100}))
+    analyzer = _analyzer(tmp_path, "가" * 100)
 
     with pytest.raises(PolymarketBriefError, match="no events"):
         analyzer.analyze("주식·시장", {}, [])

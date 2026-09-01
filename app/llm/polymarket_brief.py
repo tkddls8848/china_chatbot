@@ -56,27 +56,32 @@ class PolymarketBriefAnalyzer:
         return self._parse(raw, events)
 
     def _parse(self, raw: str, events: list[dict[str, Any]]) -> str:
-        if not raw.strip():
-            raise PolymarketBriefError("empty brief response content")
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            # 원문은 남기지 않는다. 길이만으로도 잘림 여부는 판단할 수 있다.
-            raise PolymarketBriefError(
-                f"brief JSON parse failed ({exc}); raw_chars={len(raw)}"
-            ) from exc
-        if not isinstance(data, dict):
-            raise PolymarketBriefError("brief JSON must be an object")
+        """평문 단락을 받아 검증한다.
 
-        paragraph = data.get("paragraph")
-        if not isinstance(paragraph, str):
-            raise PolymarketBriefError("brief paragraph must be a string")
-        paragraph = " ".join(paragraph.split())
+        JSON 봉투로 받지 않는다. 출력이 문자열 하나뿐이라 봉투가 검증에 보태는
+        것이 없고, 실측에서 모델이 봉투를 무시하고 평문만 돌려줬다. 대신 여기서
+        길이·반향·군더더기를 직접 본다.
+        """
+        text = raw.strip()
+        # /no_think를 붙여도 빈 thinking 블록이 앞에 붙어 오는 응답이 있다.
+        if text.startswith("<think>") and "</think>" in text:
+            text = text.split("</think>", 1)[1].strip()
+        # 코드 블록으로 감싸 보내면 벗겨서 본다. 지시를 어긴 것이지만 내용은
+        # 멀쩡하므로 이것 하나로 단락을 버리지 않는다.
+        if text.startswith("```"):
+            lines = [line for line in text.splitlines() if not line.startswith("```")]
+            text = " ".join(lines).strip()
+        paragraph = " ".join(text.split())
 
         if len(paragraph) < MIN_PARAGRAPH_CHARS:
-            raise PolymarketBriefError(f"brief paragraph too short: {len(paragraph)}")
+            raise PolymarketBriefError(
+                f"brief paragraph too short: {len(paragraph)}; head={paragraph[:80]!r}"
+            )
         if len(paragraph) > MAX_PARAGRAPH_CHARS:
             raise PolymarketBriefError(f"brief paragraph too long: {len(paragraph)}")
+        if paragraph.lstrip().startswith(("{", "[")):
+            # 봉투를 다시 만들어 보낸 응답. 단락이 아니다.
+            raise PolymarketBriefError(f"brief paragraph is not prose; head={paragraph[:80]!r}")
         # 제목을 그대로 되돌려준 응답은 요약이 아니라 반향이다. 상위 베팅의
         # 제목이 통째로 들어 있으면 나열한 것으로 본다.
         for event in events[:5]:

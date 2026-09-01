@@ -83,21 +83,52 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def title_probability(event: dict[str, Any]) -> float | None:
+    """binary event에서 **제목이 사실로 판명될 확률**을 돌려준다.
+
+    `leader_probability`는 항상 우세한 쪽의 값이라 부호가 없다. leader가
+    "No"인 0.82는 "일어날 확률 0.82"가 아니라 "일어나지 않을 확률 0.82"다.
+
+    모델에게 이 조합을 맡기면 셋 중 둘꼴로 방향을 뒤집어 쓴다(실측
+    2026-09-01). 힌트를 더 줘도 제목 표현에 앵커링해서 "제재 완화 가능성
+    74%"라고 쓴다 — 74%는 완화되지 **않을** 확률인데도.
+
+    그래서 숫자를 모델이 읽는 방향에 맞춰 보낸다. 제목 기준으로 정규화하면
+    앵커링이 오히려 정답이 된다. 이 값은 나중에 주기 간 이동을 계산할 때
+    필요한 부호 안정 값과도 같다.
+    """
+    probability = _number(event.get("leader_probability"))
+    if probability is None:
+        return None
+    leader = str(event.get("leader") or "").strip().lower()
+    if leader in {"no", "아니오"}:
+        return round(1.0 - probability, 4)
+    return probability
+
+
 def named_events(events: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     """거래량 상위부터 이름을 채운다. 프롬프트에 들어가는 것은 이것뿐이다."""
     ordered = sorted(events, key=lambda e: _number(e.get("volume24hr")) or 0.0, reverse=True)
-    return [
-        {
+    rows = []
+    for event in ordered[:limit]:
+        row = {
             "title": str(event.get("title") or ""),
-            "leader": event.get("leader"),
-            "probability": _number(event.get("leader_probability")),
             "volume24hr": _number(event.get("volume24hr")),
             "end_date": event.get("end_date"),
             "event_type": event.get("event_type"),
             "data_status": event.get("data_status"),
         }
-        for event in ordered[:limit]
-    ]
+        if event.get("event_type") == "binary":
+            # 제목 기준 확률 하나만 넘긴다. leader를 같이 보내면 모델이 둘을
+            # 섞어 쓴다.
+            row["title_probability"] = title_probability(event)
+        else:
+            # 다지선다는 제목이 참·거짓 명제가 아니다. 앞선 후보와 그 확률을
+            # 그대로 넘긴다.
+            row["leader"] = event.get("leader")
+            row["leader_probability"] = _number(event.get("leader_probability"))
+        rows.append(row)
+    return rows
 
 
 def snapshot_probabilities(buckets: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
