@@ -108,3 +108,83 @@ def classify(tags: list[dict[str, str]]) -> dict[str, Any]:
         "regions": sorted(slugs & REGION_TAGS),
         "system_tags": sorted(slugs & SYSTEM_TAGS),
     }
+
+
+# ── 섹터 줄글 브리프의 감시 태그 ───────────────────────────────────────────
+# 이 목록은 `classify()`가 매기는 category와 **독립이다.** classify는 둘 이상
+# 분야에 걸린 event를 `other`로 보내는데, 지정학과 경제가 동시에 걸린 event가
+# 바로 브리프가 보려는 것이라 그 경로로는 잡히지 않는다. 그래서 브리프는
+# category를 보지 않고 tags를 직접 본다 — detail seek도 필요 없고 classify를
+# 건드리지 않아 대시보드의 다른 분야 숫자도 움직이지 않는다.
+#
+# 국가 태그(iran·russia·china·middle-east)는 넣지 않는다. 축구 리그와 선거까지
+# 끌고 들어와 노이즈가 크다. 지정학을 뜻하는 태그만 본다.
+BRIEF_ECON_TAGS = frozenset(
+    {"economy", "finance", "fed", "fed-rates", "interest-rates", "inflation",
+     "equities", "stocks", "pre-market", "macro-indicators"}
+)
+BRIEF_GEO_TAGS = frozenset({"geopolitics", "foreign-policy"})
+
+# 그룹은 **순서가 곧 우선순위다.** 태그를 여럿 단 event는 첫 일치 그룹에 넣는다.
+# 매번 같은 결과가 나와야 "지난번과 뭐가 달라졌나"를 비교할 수 있다.
+#
+# 금리·물가를 따로 두지 않는 이유: 2026-09-01 실측에서 fed·fed-rates·
+# interest-rates·inflation이 전부 39건 미만이었다. 각각 그룹으로 두면 매 주기
+# "표본 부족"만 뜬다. 이 태그들이 커지면 그때 쪼갠다.
+BRIEF_GROUPS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "equities",
+        "label": "주식·시장",
+        "sector": "economy_finance",
+        "tags": frozenset({"equities", "stocks", "pre-market"}),
+    },
+    {
+        "key": "macro",
+        "label": "거시·통화",
+        "sector": "economy_finance",
+        "tags": frozenset(
+            {"macro-indicators", "fed", "fed-rates", "interest-rates", "inflation"}
+        ),
+    },
+    {
+        "key": "general",
+        "label": "기타 경제·금융",
+        "sector": "economy_finance",
+        "tags": frozenset({"economy", "finance"}),
+    },
+)
+COMPOSITE_GROUP = {
+    "key": "composite",
+    "label": "복합(경제·지정학)",
+    "sector": "composite",
+}
+GEOPOLITICS_GROUP = {
+    "key": "geopolitics",
+    "label": "지정학",
+    "sector": "geopolitics",
+}
+
+
+def assign_brief_group(tags: list[str]) -> dict[str, Any] | None:
+    """event의 tags로 브리프 그룹을 정한다. 감시 대상이 아니면 None.
+
+    섹터는 서로 겹치지 않는다 — event 하나는 정확히 한 그룹에만 들어간다.
+    """
+    slugs = set(tags)
+    has_econ = bool(slugs & BRIEF_ECON_TAGS)
+    has_geo = bool(slugs & BRIEF_GEO_TAGS)
+    if has_econ and has_geo:
+        return COMPOSITE_GROUP
+    if has_geo:
+        return GEOPOLITICS_GROUP
+    if not has_econ:
+        return None
+    for group in BRIEF_GROUPS:
+        if slugs & group["tags"]:
+            return group
+    return None
+
+
+def brief_groups() -> tuple[dict[str, Any], ...]:
+    """화면에 그릴 순서. 복합을 먼저 둔다 — 교차 event가 가장 읽을 값어치가 있다."""
+    return (COMPOSITE_GROUP, *BRIEF_GROUPS, GEOPOLITICS_GROUP)

@@ -28,6 +28,9 @@ from core.config import (
     NEWS_REPORT_NUM_PREDICT,
     NEWS_REPORT_PROMPT_FILE,
     NEWS_REPORT_TIMEOUT,
+    POLYMARKET_BRIEF_NUM_PREDICT,
+    POLYMARKET_BRIEF_PROMPT_FILE,
+    POLYMARKET_BRIEF_TIMEOUT,
     PROMPT_DIR,
     RESEARCH_ANALYSIS_NUM_PREDICT,
     RESEARCH_ANALYSIS_PROMPT_FILE,
@@ -43,6 +46,7 @@ from llm.market_digest import MarketDigestAnalyzer
 from llm.market_view import MarketViewAnalyzer
 from llm.news_report import NewsReportAnalyzer
 from llm.overnight_tone import OvernightToneAnalyzer
+from llm.polymarket_brief import PolymarketBriefAnalyzer
 from llm.translator import TranslationService
 
 logger = logging.getLogger(__name__)
@@ -131,6 +135,18 @@ def build_news_report_analyzer() -> NewsReportAnalyzer:
         prompt_file=NEWS_REPORT_PROMPT_FILE,
         num_predict=NEWS_REPORT_NUM_PREDICT,
         max_highlights=NEWS_REPORT_MAX_HIGHLIGHTS,
+    )
+
+
+def build_polymarket_brief_analyzer() -> PolymarketBriefAnalyzer:
+    return PolymarketBriefAnalyzer(
+        backend=build_backend(
+            "polymarket_brief",
+            model=CLOUDFLARE_MODEL,
+            timeout=POLYMARKET_BRIEF_TIMEOUT,
+        ),
+        prompt_file=POLYMARKET_BRIEF_PROMPT_FILE,
+        num_predict=POLYMARKET_BRIEF_NUM_PREDICT,
     )
 
 

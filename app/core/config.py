@@ -417,6 +417,24 @@ POLYMARKET_WEB_MAX_DAILY_CPU_SECONDS = 900.0
 POLYMARKET_WEB_MAX_DAILY_REQUESTS = 3000
 
 
+# ── 섹터 줄글 브리프 ───────────────────────────────────────────────────────
+# 경제·금융과 지정학에 한정해 컨센서스를 줄글로 정리한다. refresh가 성공한 뒤
+# 별도 one-shot이 돌며, 봇 프로세스와 무관하다. 계획서는
+# docs/polymarket-sector-brief.md.
+POLYMARKET_BRIEF_FILE = POLYMARKET_WEB_DIR / "sector_brief.json"
+# 프롬프트에 제목을 넣을 최대 event 수. 집계는 전부 반영하고 이름만 자른다.
+# 대상이 1,000건을 넘어 이 상한이 실제로 걸린다 — 거래량 상위부터 채운다.
+POLYMARKET_BRIEF_NAMED_LIMIT = 120
+# 이 미만이면 LLM을 부르지 않고 "표본 부족"으로 비운다. 모델은 3건짜리
+# 그룹에도 그럴듯한 단락을 써 주는데 그게 제일 위험하다.
+POLYMARKET_BRIEF_MIN_EVENTS = 10
+POLYMARKET_BRIEF_PROMPT_FILE = PROMPT_DIR / "polymarket_brief_ko.txt"
+POLYMARKET_BRIEF_TIMEOUT = 180
+# 단락 하나라 출력이 짧다. 다만 finish_reason=length는 재시도 없이 실패이므로
+# 프롬프트가 지시한 길이의 두 배 남짓을 예약해 둔다.
+POLYMARKET_BRIEF_NUM_PREDICT = 900
+
+
 NEWS_MARKET_BACKFILL_QUERIES = {
     "CN": "China stock market",
     "HK": "Hong Kong stock market",

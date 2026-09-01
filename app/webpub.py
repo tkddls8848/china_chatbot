@@ -93,6 +93,16 @@ def build_app() -> FastAPI:
             request, POLYMARKET_REPOSITORY.categories(), "categories"
         )
 
+    @app.api_route("/api/polymarket/sector-brief", methods=["GET", "HEAD"])
+    def polymarket_sector_brief(request: Request) -> Response:
+        payload = _read_json("polymarket/sector_brief.json")
+        # previous는 다음 실행이 이동을 계산할 기준일 뿐이다. 화면이 쓰지 않고
+        # event 수천 건짜리라 내보내지 않는다.
+        payload.pop("previous", None)
+        if not payload:
+            raise HTTPException(status_code=503, detail="아직 섹터 브리프가 없습니다.")
+        return polymarket_json(request, payload, "sector_brief")
+
     @app.api_route("/api/polymarket/health", methods=["GET", "HEAD"])
     def polymarket_health(request: Request) -> Response:
         payload = POLYMARKET_REPOSITORY.health()

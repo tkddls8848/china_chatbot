@@ -7,12 +7,14 @@ from llm.factory import (
     build_market_view_analyzer,
     build_news_report_analyzer,
     build_overnight_tone_analyzer,
+    build_polymarket_brief_analyzer,
     build_translation_service,
 )
 from llm.market_digest import MarketDigestAnalyzer, MarketDigestError
 from llm.market_view import MarketViewAnalyzer
 from llm.news_report import NewsReportAnalyzer, NewsReportError
 from llm.overnight_tone import OvernightToneAnalyzer, OvernightToneError
+from llm.polymarket_brief import PolymarketBriefAnalyzer, PolymarketBriefError
 from llm.translator import TranslationQualityError, TranslationService
 
 __all__ = [
@@ -24,6 +26,8 @@ __all__ = [
     "NewsReportError",
     "OvernightToneAnalyzer",
     "OvernightToneError",
+    "PolymarketBriefAnalyzer",
+    "PolymarketBriefError",
     "TranslationQualityError",
     "TranslationService",
     "build_briefing_writer",
@@ -31,5 +35,6 @@ __all__ = [
     "build_market_view_analyzer",
     "build_news_report_analyzer",
     "build_overnight_tone_analyzer",
+    "build_polymarket_brief_analyzer",
     "build_translation_service",
 ]
