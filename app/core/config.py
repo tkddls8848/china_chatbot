@@ -427,7 +427,12 @@ POLYMARKET_BRIEF_FILE = POLYMARKET_WEB_DIR / "sector_brief.json"
 POLYMARKET_BRIEF_NAMED_LIMIT = 120
 # 이 미만이면 LLM을 부르지 않고 "표본 부족"으로 비운다. 모델은 3건짜리
 # 그룹에도 그럴듯한 단락을 써 주는데 그게 제일 위험하다.
-POLYMARKET_BRIEF_MIN_EVENTS = 10
+# 5다 — 2026-09-01 실측에서 복합(경제·지정학)이 8건이었다. 이 상한 이하의
+# 그룹은 이름 상한(120) 안에 event가 전부 들어가 모델이 완전한 정보를 본다.
+# 위험한 것은 표본이 작은 것 자체가 아니라 일부만 보고 분야 전체를 단정하는
+# 것이다. 더 내리지는 않는다 — 두세 건에 "분야 컨센서스"를 씌우면 그 문장은
+# 표본이 아니라 우연을 서술한다.
+POLYMARKET_BRIEF_MIN_EVENTS = 5
 POLYMARKET_BRIEF_PROMPT_FILE = PROMPT_DIR / "polymarket_brief_ko.txt"
 POLYMARKET_BRIEF_TIMEOUT = 180
 # 단락 하나라 출력이 짧다. 다만 finish_reason=length는 재시도 없이 실패이므로

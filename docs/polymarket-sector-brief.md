@@ -69,11 +69,16 @@ event 하나는 정확히 한 섹터에만 들어간다.
 
 | 섹터 | 그룹 | 태그 | 2026-09-01 실측 |
 |---|---|---|---|
-| 복합 | 복합 | ECON ∩ GEO 동시 | 미측정 |
-| 경제·금융 | 주식·시장 | `equities`, `stocks`, `pre-market` | ~350 |
-| | 거시·통화 | `macro-indicators`, `fed`, `fed-rates`, `interest-rates`, `inflation` | ~150 |
-| | 기타 경제·금융 | `economy`, `finance` | ~450 |
-| 지정학 | 지정학 | `geopolitics`, `foreign-policy` | 411 − 복합 |
+| 복합 | 복합 | ECON ∩ GEO 동시 | **8** |
+| 경제·금융 | 주식·시장 | `equities`, `stocks`, `pre-market` | **349** |
+| | 거시·통화 | `macro-indicators`, `fed`, `fed-rates`, `interest-rates`, `inflation` | **89** |
+| | 기타 경제·금융 | `economy`, `finance` | **304** |
+| 지정학 | 지정학 | `geopolitics`, `foreign-policy` | **405** |
+
+실측(2026-09-01 22:58, 총 1,155건). 호출당 62 Neurons, 하루 7주기 기준 약
+1,700 Neurons(무료 한도의 17%). **복합이 8건**인 것은 폴리마켓이 지정학과
+경제를 한 event에 같이 태깅하는 일이 드물다는 뜻이다 — 지정학 자체는 405건이라
+그 축은 지정학 그룹이 담는다.
 
 한 event가 그룹 태그를 여럿 달면 **고정 우선순위 순서로 첫 일치**에 넣는다
 (위 표의 순서). 매번 같은 결과가 나와야 "지난번과 뭐가 달라졌나"를 비교할 수
@@ -169,18 +174,34 @@ event는 `id`로 조인한다. 양쪽에 다 있는 것만 이동을 계산한�
 
 ### 4-3. 응답 계약
 
-```json
-{"paragraph": "한국어 줄글 …"}
-```
+**평문 단락 하나를 받는다. JSON 봉투를 쓰지 않는다.**
 
-줄글이지만 JSON 봉투로 받는다. 그래야 표시 전에 검증할 수 있다.
+처음에는 `{"paragraph": "..."}`로 받으려 했으나 실측(2026-09-01)에서 모델이 네
+번 다 봉투를 무시하고 평문만 돌려줬다. 출력이 문자열 하나뿐이라 봉투가 검증에
+보태는 것이 없고 출력 토큰만 더 쓴다. 검증은 코드가 직접 한다.
 
 - 빈 문자열·공백만 → 실패
-- 프롬프트·입력 제목을 그대로 되풀이한 응답 → 실패
-- 길이 상한 초과 → 실패
+- 60자 미만 / 1,200자 초과 → 실패
+- `{`나 `[`로 시작(봉투를 다시 만든 응답) → 실패
+- 상위 event 제목을 통째로 되풀이 → 실패
+- 빈 `<think></think>` 블록과 코드 블록 울타리는 벗겨서 본다
 - `finish_reason=length` → `backends.py`가 이미 `truncated`로 실패시키고
   **재시도하지 않는다.** 그래서 프롬프트에 단락 길이를 못박고
   `POLYMARKET_BRIEF_NUM_PREDICT`에 여유를 둔다.
+
+### 4-4. 확률의 방향은 코드가 정한다
+
+`leader_probability`를 그대로 넘기고 방향을 프롬프트로 설명하면 **모델이 셋 중
+둘꼴로 뒤집어 쓴다**(실측 2026-09-01). 제목이 질문형이라 모델이 거기 앵커링해
+"제재 완화 가능성 74%"라고 쓰는데, 74%는 완화되지 **않을** 확률이다. 방향을
+명시한 힌트 필드를 따로 넘겨도 고쳐지지 않았다.
+
+그래서 숫자를 모델이 읽는 방향에 맞춰 보낸다. binary는 `title_probability`
+(제목이 사실로 판명될 확률, `leader == "No"`면 `1 - p`) 하나만 넘기고 `leader`는
+넣지 않는다 — 같이 보내면 둘을 섞어 쓴다. 다지선다는 제목이 참·거짓 명제가
+아니므로 `leader`와 `leader_probability`를 그대로 넘긴다.
+
+이 정규화가 3-3이 요구한 부호 안정 값과 같다. 이동 계산도 이 값을 쓴다.
 
 프롬프트 파일은 `prompts/polymarket_brief_ko.txt`(그룹)와
 `prompts/polymarket_brief_overview_ko.txt`(종합) 둘이다.
@@ -299,7 +320,7 @@ Cloudflare가 죽은 날 확률 숫자까지 멈춘다.
 ```text
 POLYMARKET_BRIEF_FILE
 POLYMARKET_BRIEF_NAMED_LIMIT        120
-POLYMARKET_BRIEF_MIN_EVENTS          10     표본 미달 기준
+POLYMARKET_BRIEF_MIN_EVENTS           5     표본 미달 기준(실측 뒤 10→5)
 POLYMARKET_BRIEF_MOVE_THRESHOLD_PP    3.0
 POLYMARKET_BRIEF_QUIET_HOURS         {3}
 POLYMARKET_BRIEF_PROMPT_FILE
