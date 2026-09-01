@@ -80,6 +80,13 @@ event 하나는 정확히 한 섹터에만 들어간다.
 경제를 한 event에 같이 태깅하는 일이 드물다는 뜻이다 — 지정학 자체는 405건이라
 그 축은 지정학 그룹이 담는다.
 
+**복합은 표본 기준을 훨씬 낮게 둔다**(`POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP`).
+두 목록의 태그를 동시에 달아야 들어오는 구조라 얇을 수밖에 없는데, 지정학을
+감시 목록에 넣은 이유가 바로 이 교차 지점이다. 얇다고 비워 두면 그 이유가
+화면에서 사라진다. 대신 프롬프트가 `event_count`를 보고 10건 미만이면 분야
+전체를 단정하지 않고 그 몇 건만 서술하게 한다 — 표본이 아니라 우연을 서술하는
+문장을 막는 것은 임계값이 아니라 이 지시다.
+
 한 event가 그룹 태그를 여럿 달면 **고정 우선순위 순서로 첫 일치**에 넣는다
 (위 표의 순서). 매번 같은 결과가 나와야 "지난번과 뭐가 달라졌나"를 비교할 수
 있다.
@@ -321,6 +328,7 @@ Cloudflare가 죽은 날 확률 숫자까지 멈춘다.
 POLYMARKET_BRIEF_FILE
 POLYMARKET_BRIEF_NAMED_LIMIT        120
 POLYMARKET_BRIEF_MIN_EVENTS           5     표본 미달 기준(실측 뒤 10→5)
+POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP {"composite": 2}  복합만 예외
 POLYMARKET_BRIEF_MOVE_THRESHOLD_PP    3.0
 POLYMARKET_BRIEF_QUIET_HOURS         {3}
 POLYMARKET_BRIEF_PROMPT_FILE

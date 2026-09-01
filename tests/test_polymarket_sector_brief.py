@@ -217,6 +217,40 @@ def test_thin_groups_are_left_blank_without_calling_the_model(tmp_path):
     assert analyzer.calls == []
 
 
+def test_composite_has_a_much_lower_bar_than_the_other_groups(tmp_path):
+    """복합은 두 태그를 동시에 단 event만 들어와 구조적으로 얇다(실측 8건).
+
+    지정학을 감시 목록에 넣은 이유가 이 교차 지점이라, 표본이 얇다고 비워 두면
+    그 이유가 화면에서 사라진다.
+    """
+    root = tmp_path / "polymarket"
+    _write_current(
+        root,
+        [_event(i, ["geopolitics", "economy"]) for i in range(3)]
+        + [_event(100 + i, ["stocks"]) for i in range(3)],
+    )
+    analyzer = _Analyzer()
+
+    result = build(root=root, target=tmp_path / "brief.json", analyzer=analyzer,
+                   min_events=10, min_events_by_group={"composite": 2})
+
+    statuses = {g["key"]: g["status"] for g in result["groups"]}
+    assert statuses["composite"] == "ok"
+    # 다른 그룹은 같은 3건이어도 일반 기준을 그대로 받는다.
+    assert statuses["equities"] == "insufficient_sample"
+    assert [call[0] for call in analyzer.calls] == ["복합(경제·지정학)"]
+
+
+def test_the_shipped_override_lets_a_two_event_composite_through():
+    from core.config import (
+        POLYMARKET_BRIEF_MIN_EVENTS,
+        POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP,
+    )
+
+    assert POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP["composite"] < POLYMARKET_BRIEF_MIN_EVENTS
+    assert POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP["composite"] >= 2
+
+
 def test_one_failing_group_does_not_block_the_others(tmp_path):
     root = tmp_path / "polymarket"
     _write_current(

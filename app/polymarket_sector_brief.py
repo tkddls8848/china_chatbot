@@ -22,6 +22,7 @@ from core.clock import now
 from core.config import (
     POLYMARKET_BRIEF_FILE,
     POLYMARKET_BRIEF_MIN_EVENTS,
+    POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP,
     POLYMARKET_BRIEF_NAMED_LIMIT,
     POLYMARKET_WEB_DIR,
 )
@@ -155,6 +156,7 @@ def build(
     analyzer: Any | None = None,
     named_limit: int = POLYMARKET_BRIEF_NAMED_LIMIT,
     min_events: int = POLYMARKET_BRIEF_MIN_EVENTS,
+    min_events_by_group: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
     manifest = _read_json(root / "current.json")
     events = manifest.get("events")
@@ -171,6 +173,11 @@ def build(
         if isinstance(group, dict)
     }
 
+    overrides = (
+        POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP
+        if min_events_by_group is None
+        else min_events_by_group
+    )
     groups: list[dict[str, Any]] = []
     written = 0
     for spec in brief_groups():
@@ -183,7 +190,7 @@ def build(
             **totals,
             "named_count": min(len(selected), named_limit),
         }
-        if len(selected) < min_events:
+        if len(selected) < overrides.get(spec["key"], min_events):
             # 모델은 3건짜리 그룹에도 그럴듯한 단락을 써 준다. 그게 제일 위험하다.
             row["status"] = "insufficient_sample"
             groups.append(row)

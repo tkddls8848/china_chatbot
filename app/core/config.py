@@ -430,9 +430,14 @@ POLYMARKET_BRIEF_NAMED_LIMIT = 120
 # 5다 — 2026-09-01 실측에서 복합(경제·지정학)이 8건이었다. 이 상한 이하의
 # 그룹은 이름 상한(120) 안에 event가 전부 들어가 모델이 완전한 정보를 본다.
 # 위험한 것은 표본이 작은 것 자체가 아니라 일부만 보고 분야 전체를 단정하는
-# 것이다. 더 내리지는 않는다 — 두세 건에 "분야 컨센서스"를 씌우면 그 문장은
-# 표본이 아니라 우연을 서술한다.
+# 것이다.
 POLYMARKET_BRIEF_MIN_EVENTS = 5
+# 복합만 예외로 훨씬 낮게 둔다. 경제와 지정학 태그를 **동시에** 단 event만
+# 들어오는 구조라 얇을 수밖에 없는데(실측 8건), 지정학을 감시 목록에 넣은
+# 이유가 바로 이 교차 지점이다. 표본이 얇다고 비워 두면 그 이유가 화면에서
+# 사라진다. 대신 프롬프트가 event_count를 보고 분야 전체를 단정하지 않게 한다 —
+# 몇 건일 때 그 문장은 컨센서스가 아니라 그 베팅들 자체의 서술이다.
+POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP = {"composite": 2}
 POLYMARKET_BRIEF_PROMPT_FILE = PROMPT_DIR / "polymarket_brief_ko.txt"
 POLYMARKET_BRIEF_TIMEOUT = 180
 # 단락 하나라 출력이 짧다. 다만 finish_reason=length는 재시도 없이 실패이므로
