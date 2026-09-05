@@ -24,7 +24,9 @@ from core.config import (
     MARKET_DIGEST_PROMPT_FILE,
     MARKET_DIGEST_TIMEOUT,
     MARKET_ANOMALY_PROMPT_FILE,
+    NEWS_REPORT_HIGHLIGHT_RATIO,
     NEWS_REPORT_MAX_HIGHLIGHTS,
+    NEWS_REPORT_MIN_HIGHLIGHTS,
     NEWS_REPORT_NUM_PREDICT,
     NEWS_REPORT_PROMPT_FILE,
     NEWS_REPORT_TIMEOUT,
@@ -135,6 +137,8 @@ def build_news_report_analyzer() -> NewsReportAnalyzer:
         prompt_file=NEWS_REPORT_PROMPT_FILE,
         num_predict=NEWS_REPORT_NUM_PREDICT,
         max_highlights=NEWS_REPORT_MAX_HIGHLIGHTS,
+        min_highlights=NEWS_REPORT_MIN_HIGHLIGHTS,
+        highlight_ratio=NEWS_REPORT_HIGHLIGHT_RATIO,
     )
 
 

@@ -88,6 +88,16 @@ class _FakeBackend:
         return json.dumps(self.payload, ensure_ascii=False)
 
 
+class _SequenceBackend:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.calls = []
+
+    def generate(self, *, system_prompt, user_prompt, max_tokens, temperature):
+        self.calls.append(json.loads(user_prompt))
+        return next(self.responses)
+
+
 class _App:
     def __init__(self, **bot_data):
         self.bot = bot_data.pop("bot", _RecordingBot())
@@ -321,19 +331,79 @@ def test_analyzer_returns_analysis_and_highlights(tmp_path):
     assert result["highlights"][0]["title"] == "한국어 제목 0"
 
 
-def test_analyzer_rejects_an_index_that_was_not_sent(tmp_path):
-    """없는 index를 받아들이면 엉뚱한 기사에 감성이 붙는다."""
-    analyzer = _analyzer(tmp_path, _payload(indexes=(7,)))
+def test_analyzer_uses_first_complete_json_object_and_ignores_trailing_text(tmp_path):
+    backend = _SequenceBackend(
+        [json.dumps(_payload(), ensure_ascii=False) + "\n추가 설명입니다."]
+    )
+    analyzer = NewsReportAnalyzer(
+        backend=backend,
+        prompt_file=_prompt_file(),
+        num_predict=2048,
+        max_highlights=8,
+    )
+
+    result = analyzer.analyze("US", "창", [{"index": 0, "title": "t"}])
+
+    assert result["analysis"] == "현재 시장상황 요약이다."
+    assert len(backend.calls) == 1
+
+
+def test_analyzer_retries_once_when_response_validation_fails(tmp_path):
+    backend = _SequenceBackend(
+        [
+            '{"analysis":"깨진 응답",',
+            json.dumps(_payload(), ensure_ascii=False),
+        ]
+    )
+    analyzer = NewsReportAnalyzer(
+        backend=backend,
+        prompt_file=_prompt_file(),
+        num_predict=2048,
+        max_highlights=8,
+    )
+
+    result = analyzer.analyze("KR", "창", [{"index": 0, "title": "t"}])
+
+    assert result["analysis"] == "현재 시장상황 요약이다."
+    assert len(backend.calls) == 2
+
+
+def test_analyzer_stops_after_one_validation_retry(tmp_path):
+    backend = _SequenceBackend(['{"analysis":', '{"analysis":'])
+    analyzer = NewsReportAnalyzer(
+        backend=backend,
+        prompt_file=_prompt_file(),
+        num_predict=2048,
+        max_highlights=8,
+    )
 
     with pytest.raises(NewsReportError):
-        analyzer.analyze("US", "창", [{"index": 0, "title": "t"}])
+        analyzer.analyze("KR", "창", [{"index": 0, "title": "t"}])
+
+    assert len(backend.calls) == 2
+
+
+def test_analyzer_rejects_an_index_that_was_not_sent(tmp_path):
+    """없는 index를 받아들이면 엉뚱한 기사에 감성이 붙는다.
+
+    두 번 다 어긋나면 그 행을 버린다. 보고서를 통째로 버리지는 않지만,
+    **어긋난 행이 결과에 남지 않는다**는 것이 이 테스트가 지키는 규칙이다.
+    """
+    analyzer = _analyzer(tmp_path, _payload(indexes=(7,)))
+
+    result = analyzer.analyze("US", "창", [{"index": 0, "title": "t"}])
+
+    assert result["highlights"] == []
+    assert result["analysis"] == "현재 시장상황 요약이다."
 
 
 def test_analyzer_rejects_a_repeated_index(tmp_path):
+    """같은 기사를 두 번 세면 감성이 이중으로 기록된다."""
     analyzer = _analyzer(tmp_path, _payload(indexes=(0, 0)))
 
-    with pytest.raises(NewsReportError):
-        analyzer.analyze("US", "창", [{"index": 0, "title": "t"}])
+    result = analyzer.analyze("US", "창", [{"index": 0, "title": "t"}])
+
+    assert [row["index"] for row in result["highlights"]] == [0]
 
 
 def test_analyzer_caps_highlights_at_the_configured_limit(tmp_path):
@@ -521,3 +591,140 @@ def test_report_prompt_requires_market_inference_instead_of_article_translation(
     assert "UTC +9" in prompt
     assert "기사를 차례로 번역하거나 나열하지 않는다" in prompt
     assert "야간" not in prompt
+
+
+# ── 마지막 시도의 근거 기사 건져내기 ──────────────────
+
+def _bad_highlight_payload(bad):
+    """정상 highlight 하나와 어긋난 하나를 섞은 응답."""
+    payload = _payload(indexes=(0,))
+    payload["highlights"].append(bad)
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _two_attempt_analyzer(responses):
+    return NewsReportAnalyzer(
+        backend=_SequenceBackend(responses),
+        prompt_file=_prompt_file(),
+        num_predict=2048,
+        max_highlights=8,
+    )
+
+
+def test_a_broken_highlight_no_longer_throws_the_whole_report_away(tmp_path):
+    """실측(2026-09-02 CN): 8건 중 하나가 title이 없어 400자 본문이 통째로
+    버려지고 원문 제목만 남았다. 비싼 것은 analysis이고 highlight는 근거다."""
+    broken = {"index": 1, "sentiment": 0.1, "impact": "low", "mentioned_stocks": []}
+    analyzer = _two_attempt_analyzer([_bad_highlight_payload(broken)] * 2)
+
+    result = analyzer.analyze(
+        "CN", "창", [{"index": 0, "title": "a"}, {"index": 1, "title": "b"}]
+    )
+
+    assert result["analysis"] == "현재 시장상황 요약이다."
+    assert [row["index"] for row in result["highlights"]] == [0]
+
+
+def test_a_repeated_highlight_index_is_dropped_not_fatal(tmp_path):
+    duplicate = {
+        "index": 0,
+        "title": "같은 기사를 두 번",
+        "sentiment": 0.2,
+        "impact": "low",
+        "mentioned_stocks": [],
+    }
+    analyzer = _two_attempt_analyzer([_bad_highlight_payload(duplicate)] * 2)
+
+    result = analyzer.analyze("CN", "창", [{"index": 0, "title": "a"}])
+
+    assert [row["index"] for row in result["highlights"]] == [0]
+
+
+def test_the_first_attempt_still_retries_instead_of_salvaging(tmp_path):
+    """건져내기는 마지막 시도에서만 한다. 먼저 8건을 온전히 받을 기회를 준다."""
+    broken = {"index": 1, "sentiment": 0.1, "impact": "low", "mentioned_stocks": []}
+    backend = _SequenceBackend(
+        [_bad_highlight_payload(broken), json.dumps(_payload(indexes=(0, 1)), ensure_ascii=False)]
+    )
+    analyzer = NewsReportAnalyzer(
+        backend=backend, prompt_file=_prompt_file(), num_predict=2048, max_highlights=8
+    )
+
+    result = analyzer.analyze(
+        "CN", "창", [{"index": 0, "title": "a"}, {"index": 1, "title": "b"}]
+    )
+
+    assert len(backend.calls) == 2
+    assert [row["index"] for row in result["highlights"]] == [0, 1]
+
+
+def test_an_empty_report_still_falls_back_to_raw_titles(tmp_path):
+    """본문도 없고 근거도 다 버렸으면 빈 섹션보다 제목 나열이 낫다."""
+    broken = {"index": 9, "title": "범위 밖", "sentiment": 0, "impact": "low",
+              "mentioned_stocks": []}
+    raw = json.dumps({"analysis": "  ", "highlights": [broken]}, ensure_ascii=False)
+    analyzer = _two_attempt_analyzer([raw, raw])
+
+    with pytest.raises(NewsReportError, match="neither analysis nor highlights"):
+        analyzer.analyze("CN", "창", [{"index": 0, "title": "a"}])
+
+
+def test_envelope_errors_are_still_fatal_after_the_retry(tmp_path):
+    """봉투가 깨진 것은 건져낼 대상이 아니다. 두 번 다 실패하면 실패다."""
+    analyzer = _two_attempt_analyzer(['{"analysis":"깨진', '{"analysis":"깨진'])
+
+    with pytest.raises(NewsReportError, match="JSON parse failed"):
+        analyzer.analyze("CN", "창", [{"index": 0, "title": "a"}])
+
+
+# ── 근거 기사 수는 수집량에 비례한다 ──────────────────
+
+def _ratio_analyzer(responses, *, ratio=0.25, minimum=3, maximum=8):
+    return NewsReportAnalyzer(
+        backend=_SequenceBackend(responses),
+        prompt_file=_prompt_file(),
+        num_predict=2048,
+        max_highlights=maximum,
+        min_highlights=minimum,
+        highlight_ratio=ratio,
+    )
+
+
+@pytest.mark.parametrize(
+    ("articles", "expected"),
+    [
+        (1, 3),    # 최소값이 받친다
+        (11, 3),   # 실측(한국) — 고정 8이면 전체의 73%를 고르라는 요구였다
+        (20, 5),
+        (32, 8),
+        (93, 8),   # 최대값이 막는다
+    ],
+)
+def test_highlight_count_scales_with_the_articles_collected(articles, expected):
+    analyzer = _ratio_analyzer([])
+
+    assert analyzer._highlight_limit(articles) == expected
+
+
+def test_the_prompt_carries_the_scaled_count_not_the_ceiling():
+    """프롬프트가 '최대'라고 말해도 제시된 숫자가 모델의 목표가 된다."""
+    analyzer = _ratio_analyzer([json.dumps(_payload(), ensure_ascii=False)])
+
+    analyzer.analyze("KR", "창", [{"index": i, "title": "t"} for i in range(11)])
+
+    prompt = analyzer._prompt_template.replace("{max_highlights}", "3")
+    assert "최대 3건" in prompt
+    assert "{max_highlights}" not in prompt
+
+
+def test_extra_highlights_beyond_the_scaled_count_are_cut():
+    """모델이 상한을 넘겨 보내면 비례 수량까지만 남긴다."""
+    analyzer = _ratio_analyzer(
+        [json.dumps(_payload(indexes=(0, 1, 2, 3, 4)), ensure_ascii=False)]
+    )
+
+    result = analyzer.analyze(
+        "KR", "창", [{"index": i, "title": "t"} for i in range(11)]
+    )
+
+    assert len(result["highlights"]) == 3
