@@ -178,12 +178,26 @@ def format_china_time_as_jst(
         return f"{raw} JST"
 
 
+OFFSET_LABEL = "UTC +9"
+
+
 def compact_jst_time(formatted_time: str) -> str:
     """날짜가 포함된 JST 문자열에서 기사 표시용 시간만 남긴다."""
     # 전환 전에 큐·로그에 저장된 KST 표기도 UTC +9라 값 변환 없이 JST로
     # 다시 표기할 수 있다. 기존 야간 큐를 비우지 않고 배포할 수 있게 받는다.
     match = re.search(r"(\d{1,2}:\d{2}(?::\d{2})?\s+(?:JST|KST))$", formatted_time)
     return match.group(1).replace("KST", "JST") if match else formatted_time
+
+
+def display_time(formatted_time: str) -> str:
+    """화면에 내보낼 시각 라벨. 저장 문자열의 `JST`를 표기용으로 바꾼다.
+
+    값은 그대로다 — `JST`도 `KST`도 UTC +9라 변환이 아니라 표기만 바꾼다.
+    저장 쪽(`compact_jst_time`)은 건드리지 않는다: 큐·로그에 이미 `JST`·`KST`로
+    적힌 문자열을 계속 파싱해야 한다. 읽는 사람에게 일본 표준시로 보이지 않게
+    하는 것이 목적이므로 표시 직전에만 바꾼다.
+    """
+    return compact_jst_time(formatted_time).replace("JST", OFFSET_LABEL)
 
 
 def compact_sentiment_line(sentiment: float | None, impact: str = "") -> str:

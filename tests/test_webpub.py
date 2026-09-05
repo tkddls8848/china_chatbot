@@ -72,3 +72,19 @@ def test_research_metadata_uses_the_same_section_card_pattern():
     assert "</span>연구 결과</div>" in body
     assert "<dl class='brief research-meta'>" in body
     assert "<div class='statstrip'>" not in body
+
+
+def test_pages_label_the_clock_as_an_offset_not_japan_standard_time():
+    """읽는 사람은 한국에 있다. 값은 같아도 `JST`는 남의 나라 시간으로 읽힌다.
+
+    저장 문자열(`compact_jst_time`)은 그대로 두고 표시 직전에만 바꾼다 — 큐·로그에
+    이미 `JST`·`KST`로 적힌 값을 계속 파싱해야 한다.
+    """
+    for body in (
+        webpub.INDEX_HTML,
+        webpub.ABOUT_HTML,
+        webpub.RESEARCH_HTML,
+        webpub.POLYMARKET_HTML,
+    ):
+        assert "JST" not in body
+        assert "UTC +9" in body

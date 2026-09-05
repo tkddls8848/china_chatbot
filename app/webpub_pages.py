@@ -400,7 +400,7 @@ _SITE_FOOT = (
     "<dt>다루는 시장</dt><dd>중국 본토 · 홍콩 · 미국 · 한국</dd>"
     "<dt>값의 성격</dt><dd>뉴스 보도의 논조를 집계한 관측치입니다. 시세·수익률·"
     "매매 신호가 아니며, 원시 가격 데이터는 제공하지 않습니다.</dd>"
-    "<dt>시각 기준</dt><dd>모든 날짜와 시각은 <code>JST</code>입니다. 소스 타임존은 "
+    "<dt>시각 기준</dt><dd>모든 날짜와 시각은 <code>UTC +9</code>입니다. 소스 타임존은 "
     "수집 단계에서 변환합니다.</dd>"
     "<dt>갱신</dt><dd>뉴스 주기마다 갱신하며, 화면의 값은 마지막 계산 시점에 고정됩니다.</dd>"
     "<dt>제공 형식</dt><dd><code>GET /api/market</code> · <code>GET /api/research</code> · "
@@ -463,7 +463,7 @@ fetch('/api/meta').then(r=>r.json()).then(d=>{
   const stat=document.getElementById('asof-stat');
   const statT=document.getElementById('asof-stat-t');
   if(parts.length){
-    date.textContent=parts.join(' · ')+' JST';
+    date.textContent=parts.join(' · ')+' UTC +9';
     statT.textContent='산출물 있음';
   }else{
     date.textContent='아직 산출물이 없습니다';
@@ -719,7 +719,7 @@ _ABOUT_MAIN = (
         "<dt>대상 시장</dt><dd>중국 본토 · 홍콩 · 미국 · 한국</dd>"
         "<dt>감성 척도</dt><dd><code>-1.00</code> 부정 ~ <code>+1.00</code> 긍정. "
         "화면에서는 <b>빨강이 긍정, 파랑이 부정</b>입니다.</dd>"
-        "<dt>시각 기준</dt><dd>모든 날짜와 시각은 <code>JST</code>입니다. 소스 타임존은 "
+        "<dt>시각 기준</dt><dd>모든 날짜와 시각은 <code>UTC +9</code>입니다. 소스 타임존은 "
         "수집 단계에서 변환합니다.</dd>"
         "<dt>갱신</dt><dd>뉴스 주기마다 수집하고, 화면의 수치는 마지막 계산 시점에 "
         "고정됩니다.</dd>"
@@ -842,11 +842,11 @@ const prob=v=>v==null?'–':(Number(v)*100).toFixed(1)+'%';const eventUrl=e=>'ht
 function rankRows(items){if(!items||!items.length)return "<p class='empty'>해당 event가 없습니다.</p>";return items.map(e=>"<button type='button' class='pm-rank' data-event='"+esc(e.id)+"'><b>"+esc(e.title)+"</b><small>"+esc(e.leader||PM_STATUS[e.data_status]||'')+" · "+prob(e.leader_probability)+" · "+money(e.volume24hr)+"</small></button>").join('')}
 function bindDetails(root=document){root.querySelectorAll('[data-event]').forEach(b=>b.addEventListener('click',()=>openDetail(b.dataset.event)))}
 function renderSummary(d){pmGeneration=d.generation_id;const a=d.accounting||{},x=d.activity||{};document.getElementById('pm-events').textContent=(a.open_event_count||0).toLocaleString();document.getElementById('pm-markets').textContent=(x.market_count||0).toLocaleString();document.getElementById('pm-volume').textContent=money(x.volume24hr);document.getElementById('pm-liquidity').textContent=money(x.liquidity);document.getElementById('pm-category-cover').textContent=prob(d.named_category_ratio);document.getElementById('pm-price-cover').textContent=prob(a.open_event_count?(a.consensus_ready_event_count/a.open_event_count):0);
- const fresh=d.freshness||{},alert=document.getElementById('pm-alert');alert.className='pm-alert '+(['delayed','stale'].includes(fresh.state)?'warn':'');alert.textContent='기준 '+stamp(d.generated_at)+' JST · '+(d.coverage_status==='complete'?'전수 순회 완료':'범위 '+d.coverage_status)+' · freshness '+(fresh.state||'unknown')+' · 순위 기본 표본은 데이터 상태 정상 event입니다.';document.getElementById('asof-date').textContent='Polymarket '+stamp(d.generated_at)+' JST';
+ const fresh=d.freshness||{},alert=document.getElementById('pm-alert');alert.className='pm-alert '+(['delayed','stale'].includes(fresh.state)?'warn':'');alert.textContent='기준 '+stamp(d.generated_at)+' UTC +9 · '+(d.coverage_status==='complete'?'전수 순회 완료':'범위 '+d.coverage_status)+' · freshness '+(fresh.state||'unknown')+' · 순위 기본 표본은 데이터 상태 정상 event입니다.';document.getElementById('asof-date').textContent='Polymarket '+stamp(d.generated_at)+' UTC +9';
  const cats=(d.category_activity||[]).slice().sort((a,b)=>b.volume24hr-a.volume24hr),max=Math.max(...cats.map(c=>c.volume24hr||0),1);document.getElementById('pm-bars').innerHTML=cats.map(c=>"<div class='pm-bar'><span class='pm-bar-label'>"+esc(c.label)+"</span><span class='pm-bar-track'><i class='pm-bar-fill' style='width:"+((c.volume24hr||0)/max*100).toFixed(1)+"%'></i></span><span class='pm-bar-value'>"+money(c.volume24hr)+"</span></div>").join('');
  document.getElementById('pm-categories').innerHTML=cats.map(c=>"<button type='button' class='pm-cat' data-category='"+esc(c.key)+"'><b>"+esc(c.label)+"</b><span>event "+Number(c.event_count||0).toLocaleString()+" · 정상 "+Number(c.ok_count||0).toLocaleString()+" · "+money(c.volume24hr)+"</span></button>").join('');const binary=(d.rankings||{}).binary||{};document.getElementById('pm-strong').innerHTML=rankRows(binary.strong);document.getElementById('pm-tight').innerHTML=rankRows(binary.tight);document.getElementById('pm-active').innerHTML=rankRows(d.most_active);bindDetails();document.querySelectorAll('[data-category]').forEach(b=>b.addEventListener('click',()=>{document.getElementById('pm-category').value=b.dataset.category;pmPage=1;loadEvents();document.getElementById('pm-explorer-title').scrollIntoView({behavior:'smooth'})}))}
 async function loadBrief(){const m=document.getElementById('pm-brief-meta'),b=document.getElementById('pm-brief');const r=await fetch('/api/polymarket/sector-brief');if(!r.ok){m.textContent='아직 컨센서스 정리가 없습니다.';b.innerHTML='';return}const d=await r.json();
- m.textContent='기준 '+stamp(d.written_at)+' JST'+(d.generation_id!==pmGeneration&&pmGeneration?' · 이전 스냅숏 기준입니다':'')+' · 집계는 전체, 인용은 거래량 상위 '+(d.named_limit||0)+'건';
+ m.textContent='기준 '+stamp(d.written_at)+' UTC +9'+(d.generation_id!==pmGeneration&&pmGeneration?' · 이전 스냅숏 기준입니다':'')+' · 집계는 전체, 인용은 거래량 상위 '+(d.named_limit||0)+'건';
  b.innerHTML=(d.groups||[]).map(g=>{const head="<div class='pm-brief-h'><b>"+esc(g.label)+"</b><span>event "+Number(g.event_count||0).toLocaleString()+" · 24h "+money(g.volume24hr)+(g.probability&&g.probability.tight?' · 경합 '+g.probability.tight:'')+"</span></div>";
  const body=g.status==='ok'||g.paragraph?"<p>"+esc(g.paragraph)+(g.stale?" (직전 정리)":"")+"</p>":"<p class='empty'>"+(g.status==='insufficient_sample'?'표본이 부족해 정리하지 않았습니다.':'이번 주기에는 정리하지 못했습니다.')+"</p>";
  return "<div class='pm-brief-g'>"+head+body+"</div>"}).join('')||"<p class='empty'>정리된 분야가 없습니다.</p>"}

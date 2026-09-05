@@ -15,7 +15,7 @@ from news.collection import collect_source_candidates
 from news.models import PreparedGlobalArticle, SourceCandidate
 from news.registry import NewsSourceRegistry, SourceSpec
 from news.utils import (
-    compact_jst_time,
+    display_time,
     compact_sentiment_line,
     format_china_time_as_jst,
     format_digest_article,
@@ -98,7 +98,7 @@ async def prepare_global_source(
             text = format_digest_article(
                 translated.title,
                 translated.content,
-                compact_jst_time(formatted_time),
+                display_time(formatted_time),
                 sentiment_line,
                 alert,
                 safe_url,

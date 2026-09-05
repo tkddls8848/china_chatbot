@@ -28,7 +28,7 @@ from news.collection import collect_source_candidates
 from news.registry import NewsSourceRegistry, SourceSpec
 from news.utils import (
     chunk_message_items,
-    compact_jst_time,
+    display_time,
     compact_sentiment_line,
     format_china_time_as_jst,
     format_digest_article,
@@ -190,7 +190,7 @@ def _window_label(opened_at: str, closed_at: datetime) -> str:
 
 def _report_time_label(value: str) -> str:
     """기존 UTC +9 변환기를 사용하되 사용자 표기에서 지역 약어를 제거한다."""
-    return compact_jst_time(value).replace("JST", "UTC +9")
+    return display_time(value)
 
 
 def _headline_payload(items: list[dict]) -> list[dict]:

@@ -20,4 +20,8 @@ data/yfinance_cache/
 *.log
 *.tmp
 
-.claude/settings.local.json
+# 영상 제작 스킬 번들(heygen-com/hyperframes). 이 저장소 코드가 아니고
+# .claude/skills의 심볼릭 링크가 절대경로라 다른 기계에서 전부 깨진다.
+.agents/
+.claude/
+skills-lock.json

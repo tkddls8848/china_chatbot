@@ -728,3 +728,13 @@ def test_extra_highlights_beyond_the_scaled_count_are_cut():
     )
 
     assert len(result["highlights"]) == 3
+
+
+def test_display_time_relabels_without_changing_the_value():
+    """`JST`도 옛 `KST`도 UTC +9다. 값이 아니라 표기만 바꾼다."""
+    from news.utils import display_time
+
+    assert display_time("2026-09-05 14:30 JST") == "14:30 UTC +9"
+    assert display_time("2026-09-05 14:30 KST") == "14:30 UTC +9"
+    # 형식이 다르면 손대지 않는다.
+    assert display_time("알 수 없음") == "알 수 없음"
