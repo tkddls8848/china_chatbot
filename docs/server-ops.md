@@ -314,6 +314,7 @@ ls ~/stock_chatbot/data/webpub/polymarket/generations/
 | `"last_result": "failed"` | `error` 필드가 원인을 말한다 → 8-4 |
 | `freshness.state`가 `delayed`·`stale` | timer가 멈췄거나 순회가 계속 실패한다 |
 | `generations/`가 3개 이상 | 정리가 실패하고 있다. 디스크를 본다 |
+| `"last_result": "skipped_budget"` | 24시간 CPU·요청 예산을 넘겨 그 주기를 건너뛰었다 → 8-4(5) |
 
 화면이 "현재 Polymarket generation을 읽지 못했습니다"만 띄우면 `current.json`이
 없다는 뜻이고, **웹 프로세스를 재기동해도 고쳐지지 않는다** — webpub은 그 파일을
@@ -379,6 +380,19 @@ byte-addressed라 옮기는 비용이 사실상 없다. 2026-09-01에 7개(`slug
 정리가 실패하는 것이므로 `journalctl`에서 `generation 정리 실패`를 찾는다.
 남는 디렉토리는 손으로 지워도 안전하다 — `current.json`이 가리키는 것과 그
 직전만 아니면 참조하는 곳이 없다.
+
+**(5) `last_result: "skipped_budget"`** — 최근 24시간 사용량이
+`POLYMARKET_WEB_MAX_DAILY_CPU_SECONDS`(900 CPU-second) 또는
+`POLYMARKET_WEB_MAX_DAILY_REQUESTS`(3,000회)를 넘어 순회를 시작하지 않았다.
+`status.json`의 `rolling_cpu_seconds`·`rolling_requests`가 현재 합계다.
+
+의도된 정지이므로 systemd는 성공으로 본다. **한 번 뜨는 것은 정상이 아니다** —
+하루 8회 순회가 이 예산 안에 들어오도록 잡아 놓았으므로, 뜬다면 한 번이 예상보다
+오래 돌았거나(정규화가 느려졌거나 event가 늘었거나) 실패가 반복되며 CPU를
+태우고 있다는 뜻이다. `cpu_samples`에서 어느 실행이 컸는지 본다.
+
+주기를 줄이는 것은 마지막 수단이다. 먼저 `journalctl`에서 실패가 반복되는지,
+`walk_seconds`가 평소(20~60초)보다 긴지 확인한다.
 
 **(4) 웹 프로세스 메모리** — `current.json`을 처음 요청받을 때 통째로 올린다.
 

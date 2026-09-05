@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 from pathlib import Path
@@ -15,13 +15,15 @@ import statistics
 import time
 from typing import Any, Iterator
 
-from core.clock import now
+from core.clock import ensure_jst, now
 from core.config import (
     POLYMARKET_BASE_URL,
     POLYMARKET_PROXY_URL,
     POLYMARKET_TIMEOUT,
     POLYMARKET_WEB_DIR,
     POLYMARKET_WEB_LOW_LIQUIDITY,
+    POLYMARKET_WEB_MAX_DAILY_CPU_SECONDS,
+    POLYMARKET_WEB_MAX_DAILY_REQUESTS,
 )
 from core.storage import write_json_atomic
 from polymarket_dashboard.client import EventsClient
@@ -35,6 +37,9 @@ from polymarket_dashboard.taxonomy import (
 from polymarket_dashboard.transport import build_session
 
 logger = logging.getLogger(__name__)
+
+# 일일 예산을 세는 창. 상수는 core/config.py에 있다.
+BUDGET_WINDOW_HOURS = 24
 
 # manifest에 남길 태그 수. 태그 필터는 event_count 상위 200개만 그리므로
 # (webpub_pages.py의 `slice(0,200)`) 그 아래는 아무도 읽지 않는다. 전부 담으면
@@ -89,6 +94,43 @@ def _mem_available_kib() -> int | None:
     return None
 
 
+def recent_usage(previous: dict[str, Any], *, hours: int = BUDGET_WINDOW_HOURS) -> dict[str, Any]:
+    """최근 `hours` 시간 안의 CPU·요청 사용량을 더한다.
+
+    개수가 아니라 시각으로 자른다 — 주기가 바뀌면 "표본 12개"가 덮는 시간이
+    같이 바뀌어 하루 예산이 하루를 뜻하지 않게 된다.
+    """
+    cutoff = now() - timedelta(hours=hours)
+    samples: list[dict[str, Any]] = []
+    for sample in previous.get("cpu_samples", []):
+        if not isinstance(sample, dict):
+            continue
+        stamp = _iso(str(sample.get("at", "")))
+        # 저장된 값에 오프셋이 없을 수 있다(CLAUDE.md의 시각 규칙).
+        if stamp is None or ensure_jst(stamp) < cutoff:
+            continue
+        samples.append(sample)
+    return {
+        "samples": samples,
+        "cpu_seconds": round(sum(float(s.get("cpu_seconds") or 0.0) for s in samples), 3),
+        "requests": sum(int(s.get("requests") or 0) for s in samples),
+    }
+
+
+def over_budget(usage: dict[str, Any]) -> str:
+    """예산을 넘겼으면 어느 쪽인지 돌려준다. 넘지 않았으면 빈 문자열.
+
+    Nice·CPUWeight는 **경쟁이 있을 때만** 양보시킨다. 새벽에 봇이 한가하면
+    이 프로세스가 CPU를 100% 쓰고 그만큼 Lightsail 버스트 크레딧이 탄다 —
+    총량을 막는 것은 이 함수뿐이다.
+    """
+    if usage["cpu_seconds"] >= POLYMARKET_WEB_MAX_DAILY_CPU_SECONDS:
+        return "cpu"
+    if usage["requests"] >= POLYMARKET_WEB_MAX_DAILY_REQUESTS:
+        return "requests"
+    return ""
+
+
 def _base_status(previous: dict[str, Any], attempted_at: str) -> dict[str, Any]:
     attempts, observed = _attempt_history(previous, attempted_at)
     return {
@@ -108,6 +150,33 @@ def refresh(*, root: Path = POLYMARKET_WEB_DIR) -> dict[str, Any]:
     status_path = root / "status.json"
     previous = _read_json(status_path)
     status = _base_status(previous, attempted_at)
+
+    usage = recent_usage(previous)
+    exceeded = over_budget(usage)
+    if exceeded:
+        logger.warning(
+            "[POLYMARKET_WEB] 24시간 예산 초과(%s)라 이번 주기를 건너뛴다: "
+            "cpu=%.1f/%.1fs requests=%d/%d",
+            exceeded, usage["cpu_seconds"], POLYMARKET_WEB_MAX_DAILY_CPU_SECONDS,
+            usage["requests"], POLYMARKET_WEB_MAX_DAILY_REQUESTS,
+        )
+        status.update({
+            "last_result": "skipped_budget",
+            "skipped_reason": exceeded,
+            "rolling_cpu_seconds": usage["cpu_seconds"],
+            "rolling_requests": usage["requests"],
+            "cpu_samples": usage["samples"],
+            "error": None,
+        })
+        write_json_atomic(status_path, status)
+        # current는 건드리지 않는다. 직전 generation이 그대로 남아 화면이 산다.
+        return {
+            "state": "skipped_budget",
+            "reason": exceeded,
+            "cpu_seconds": usage["cpu_seconds"],
+            "requests": usage["requests"],
+        }
+
     generation_id = now().strftime("%Y%m%dT%H%M%S%f%z")
     client = EventsClient(
         base_url=POLYMARKET_BASE_URL,
@@ -247,11 +316,13 @@ def refresh(*, root: Path = POLYMARKET_WEB_DIR) -> dict[str, Any]:
         cpu_after, peak_rss_kib = _resource_usage()
         if cpu_before is not None and cpu_after is not None:
             process_cpu_seconds = cpu_after - cpu_before
-        samples = [
-            sample for sample in previous.get("cpu_samples", [])
-            if isinstance(sample, dict) and _iso(str(sample.get("at", "")))
-        ][-11:]
-        samples.append({"at": attempted_at, "cpu_seconds": round(process_cpu_seconds, 3)})
+        samples = usage["samples"] + [
+            {
+                "at": attempted_at,
+                "cpu_seconds": round(process_cpu_seconds, 3),
+                "requests": client.endpoint.metrics.request_count,
+            }
+        ]
         result["walk"]["walk_seconds"] = round(wall_seconds, 3)
         status.update(
             {
@@ -263,7 +334,10 @@ def refresh(*, root: Path = POLYMARKET_WEB_DIR) -> dict[str, Any]:
                 "response_bytes": client.endpoint.metrics.response_bytes,
                 "walk_seconds": round(wall_seconds, 3),
                 "process_cpu_seconds": round(process_cpu_seconds, 3),
-                "rolling_cpu_seconds": round(sum(item["cpu_seconds"] for item in samples), 3),
+                "rolling_cpu_seconds": round(
+                    sum(float(item.get("cpu_seconds") or 0.0) for item in samples), 3
+                ),
+                "rolling_requests": sum(int(item.get("requests") or 0) for item in samples),
                 "cpu_samples": samples,
                 "peak_rss_kib": peak_rss_kib,
                 "mem_available_kib": _mem_available_kib(),
@@ -273,13 +347,33 @@ def refresh(*, root: Path = POLYMARKET_WEB_DIR) -> dict[str, Any]:
         write_json_atomic(status_path, status)
         return result
     except BaseException as error:
+        # 실패해도 쓴 것은 쓴 것이다. manifest 상한 초과처럼 219 page를 전부
+        # 돌고 나서 죽는 실패가 있어, 여기서 세지 않으면 반복 실패가 예산을
+        # 그대로 통과한다.
+        failed_cpu = time.process_time() - started_cpu
+        cpu_after, _peak = _resource_usage()
+        if cpu_before is not None and cpu_after is not None:
+            failed_cpu = cpu_after - cpu_before
+        samples = usage["samples"] + [
+            {
+                "at": attempted_at,
+                "cpu_seconds": round(failed_cpu, 3),
+                "requests": client.endpoint.metrics.request_count,
+            }
+        ]
         status.update(
             {
                 "last_result": "failed",
                 "coverage_status": "failed",
                 "error": f"{type(error).__name__}: {error}"[:500],
                 "walk_seconds": round(time.monotonic() - started_wall, 3),
-                "process_cpu_seconds": round(time.process_time() - started_cpu, 3),
+                "process_cpu_seconds": round(failed_cpu, 3),
+                "source_request_count": client.endpoint.metrics.request_count,
+                "rolling_cpu_seconds": round(
+                    sum(float(item.get("cpu_seconds") or 0.0) for item in samples), 3
+                ),
+                "rolling_requests": sum(int(item.get("requests") or 0) for item in samples),
+                "cpu_samples": samples,
             }
         )
         write_json_atomic(status_path, status)
@@ -289,6 +383,10 @@ def refresh(*, root: Path = POLYMARKET_WEB_DIR) -> dict[str, Any]:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     result = refresh()
+    if result.get("state") == "skipped_budget":
+        # 의도된 정지다. systemd가 실패로 세지 않게 0으로 끝낸다.
+        print(json.dumps(result, ensure_ascii=False))
+        return
     print(
         json.dumps(
             {

@@ -139,6 +139,16 @@ callback, persistent label을 한 곳에서 등록하고 `FEATURES_ENABLED` 기�
   곱해진다** — 20 B짜리 필드 하나가 0.42 MiB다. 목록·순위·필터·정렬이 읽지
   않는 값은 detail로 내린다(detail은 byte-addressed라 한 행만 seek한다).
   추가 전에 `tests/polymarket_manifest_size_probe.py`로 여유를 먼저 잰다.
+- **두 one-shot은 봇의 9% CPU 회계 밖이다. 대신 자기 예산을 스스로 지킨다.**
+  별도 프로세스라 `burst_phase`·`is_burst_active`가 닿지 않는다. 유닛의
+  `Nice=10`·`CPUWeight=20`은 **경쟁이 있을 때만** 양보시켜서, 새벽에 봇이
+  한가하면 CPU를 100% 쓰고 버스트 크레딧이 탄다. 그래서 refresh가 순회를
+  시작하기 전에 `status.json`의 최근 24시간 표본을 더해
+  `POLYMARKET_WEB_MAX_DAILY_CPU_SECONDS`(900)·`POLYMARKET_WEB_MAX_DAILY_REQUESTS`
+  (3,000)와 비교하고, 넘었으면 그 주기를 건너뛴다(`last_result:
+  "skipped_budget"`, 종료 코드 0). **실패한 실행도 센다** — manifest 상한
+  초과처럼 219 page를 전부 돌고 죽는 실패가 있어, 세지 않으면 반복 실패가
+  예산을 그대로 통과한다.
 - **generation은 두 벌만 남긴다.** detail shard가 generation 하나에 116 MiB라
   쌓이면 디스크가 상한보다 먼저 찬다. 직전 하나를 남기는 것은 이력이 아니라,
   승격 순간에 이미 들어와 있던 요청이 자기가 읽던 shard를 계속 seek할 수 있게
