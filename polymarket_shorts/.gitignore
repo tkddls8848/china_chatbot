@@ -1,9 +1,0 @@
-.env
-.venv/
-__pycache__/
-.pytest_cache/
-.test-tmp/
-output/
-state/
-client_secret.json
-youtube_token.json
