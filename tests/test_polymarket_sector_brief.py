@@ -300,6 +300,58 @@ def test_total_failure_leaves_the_last_good_file_untouched(tmp_path):
     assert target.read_text(encoding="utf-8") == before
 
 
+def test_quiet_hours_skip_the_model_without_touching_the_file(tmp_path, monkeypatch):
+    """야간에는 줄글만 멈춘다. 직전 파일을 건드리지 않아 화면은 그것을 계속 본다."""
+    from datetime import datetime
+
+    from core.clock import JST
+
+    root = tmp_path / "polymarket"
+    target = tmp_path / "brief.json"
+    _write_current(root, [_event(i, ["stocks"]) for i in range(12)])
+    build(root=root, target=target, analyzer=_Analyzer(), min_events=10)
+    before = target.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        "polymarket_sector_brief.now",
+        lambda: datetime(2026, 9, 5, 3, 30, tzinfo=JST),
+    )
+    analyzer = _Analyzer()
+    result = build(root=root, target=target, analyzer=analyzer,
+                   min_events=10, quiet_hours={3})
+
+    assert result == {"state": "skipped_quiet_hours", "hour": 3}
+    assert analyzer.calls == []
+    assert target.read_text(encoding="utf-8") == before
+
+
+def test_outside_quiet_hours_the_run_proceeds(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    from core.clock import JST
+
+    root = tmp_path / "polymarket"
+    _write_current(root, [_event(i, ["stocks"]) for i in range(12)])
+    monkeypatch.setattr(
+        "polymarket_sector_brief.now",
+        lambda: datetime(2026, 9, 5, 6, 0, tzinfo=JST),
+    )
+    analyzer = _Analyzer()
+
+    result = build(root=root, target=tmp_path / "brief.json", analyzer=analyzer,
+                   min_events=10, quiet_hours={3})
+
+    assert result["state"] == "ok"
+    assert analyzer.calls
+
+
+def test_the_shipped_quiet_hours_skip_only_0300():
+    """06시를 거르면 기상 후 첫 화면이 미장 마감 전 상태가 된다."""
+    from core.config import POLYMARKET_BRIEF_QUIET_HOURS
+
+    assert set(POLYMARKET_BRIEF_QUIET_HOURS) == {3}
+
+
 def test_missing_generation_is_a_quiet_exit(tmp_path):
     analyzer = _Analyzer()
 

@@ -1,0 +1,3 @@
+[console_scripts]
+polymarket-shorts = polymarket_shorts.cli:main
+polymarket-shorts-auth = polymarket_shorts.youtube:auth_main

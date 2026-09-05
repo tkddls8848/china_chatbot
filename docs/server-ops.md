@@ -255,7 +255,7 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 
 **봇과 완전히 분리된 경로다.** 텔레그램 `/polymarket`, 08:35 스냅숏 job, 거시
 위험선호 컨센서스, 90일 이력, 승격 게이트, CLOB 백필은 2026-09-01에 모두
-철수했다. 지금 있는 것은 systemd timer가 2시간마다 굽는 **현재 스냅숏 하나**와
+철수했다. 지금 있는 것은 systemd timer가 3시간마다 굽는 **현재 스냅숏 하나**와
 그것을 내보내는 공개 웹 화면뿐이다. 봇을 재기동해도, 봇이 죽어 있어도 이
 화면은 마지막 generation을 계속 보여 준다.
 
@@ -276,13 +276,19 @@ journalctl -u stock-chatbot | grep PREFILTER | grep 중단= | tail -20
 
 ```bash
 sudo cp ~/stock_chatbot/deploy/stock-chatbot-polymarket-refresh.{service,timer} /etc/systemd/system/
+sudo cp ~/stock_chatbot/deploy/stock-chatbot-polymarket-brief.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now stock-chatbot-polymarket-refresh.timer
 systemctl list-timers | grep polymarket
 ```
 
-`enable --now`는 `OnBootSec=3min`·`Persistent=true` 때문에 **즉시 한 번
-발화한다.** 전수 순회가 바로 돌기 시작하므로 놀라지 않아도 된다.
+timer는 UTC +9 `00·03·06·09·12·15·18·21시` 고정 캘린더다(`OnCalendar`).
+`Persistent=true`라 서버가 꺼져 있어 지나친 슬롯이 있으면 기동 직후 한 번
+따라잡는다.
+
+**refresh가 성공하면 섹터 줄글이 이어서 돈다**(`OnSuccess=`). 줄글 유닛은
+`enable`하지 않는다 — timer가 아니라 refresh가 부른다. 03시에는 줄글만
+건너뛰고(`POLYMARKET_BRIEF_QUIET_HOURS`) refresh는 그대로 돈다.
 
 기다리지 않고 지금 굽고 싶으면:
 

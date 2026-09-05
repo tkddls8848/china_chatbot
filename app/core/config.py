@@ -409,7 +409,10 @@ MARKET_ANOMALY_INDEX_TICKERS = {
 # ── 현재 Polymarket 전체 웹 대시보드 ───────────────────────────────────────
 # 텔레그램·봇 scheduler와 독립된 systemd one-shot이 현재 열린 event를 읽는다.
 # G0(2026-08-30)에서 /events/keyset이 limit=500 요청을 100으로 잘라 221 page를
-# 반환했으므로, timer는 2시간으로 두어 공개 API 요청을 3,000회/일 아래로 유지한다.
+# 반환했다. timer는 UTC +9 00·03·06…21시 고정 캘린더(하루 8회)라 공개 API
+# 요청은 219 x 8 = 약 1,750회/일로 3,000회 아래다. 3시간으로 둔 것은 요청
+# 때문이 아니라 줄글 브리프가 이 주기를 따라가기 때문이다
+# (docs/polymarket-sector-brief.md 6절).
 POLYMARKET_BASE_URL = "https://gamma-api.polymarket.com"
 POLYMARKET_PROXY_URL = os.environ.get("POLYMARKET_PROXY_URL", "").strip()
 POLYMARKET_TIMEOUT = 20
@@ -445,6 +448,14 @@ POLYMARKET_BRIEF_MIN_EVENTS = 5
 # 사라진다. 대신 프롬프트가 event_count를 보고 분야 전체를 단정하지 않게 한다 —
 # 몇 건일 때 그 문장은 컨센서스가 아니라 그 베팅들 자체의 서술이다.
 POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP = {"composite": 2}
+# 이 시각(UTC +9)에는 LLM을 부르지 않고 끝낸다. refresh는 계속 돌아 확률
+# 숫자는 갱신되고, 줄글만 멈춘다 — 비용의 실체는 LLM이고 API 순회는 공짜다.
+# 03시만 거른다. 그 시각 글은 06시에 덮이는데 그 사이 세 시간은 읽는 사람이
+# 자고 있어 읽힐 가능성이 하루 중 가장 낮다. 06시는 절대 거르지 않는다 —
+# 미장이 막 끝난 직후라 하루치가 확정된 시점이고 기상 후 첫 화면이 그것이다.
+# (KST 03시는 ET 14시로 장중이지만, 이 줄글은 변화 로그가 아니라 그 시점의
+#  현재 상태 요약이라 한 슬롯을 걸러도 06시 글에 그대로 반영된다.)
+POLYMARKET_BRIEF_QUIET_HOURS = frozenset({3})
 POLYMARKET_BRIEF_PROMPT_FILE = PROMPT_DIR / "polymarket_brief_ko.txt"
 POLYMARKET_BRIEF_TIMEOUT = 180
 # 단락 하나라 출력이 짧다. 다만 finish_reason=length는 재시도 없이 실패이므로

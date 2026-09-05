@@ -24,6 +24,7 @@ from core.config import (
     POLYMARKET_BRIEF_MIN_EVENTS,
     POLYMARKET_BRIEF_MIN_EVENTS_BY_GROUP,
     POLYMARKET_BRIEF_NAMED_LIMIT,
+    POLYMARKET_BRIEF_QUIET_HOURS,
     POLYMARKET_WEB_DIR,
 )
 from core.storage import write_json_atomic
@@ -157,7 +158,18 @@ def build(
     named_limit: int = POLYMARKET_BRIEF_NAMED_LIMIT,
     min_events: int = POLYMARKET_BRIEF_MIN_EVENTS,
     min_events_by_group: dict[str, int] | None = None,
+    quiet_hours: set[int] | None = None,
 ) -> dict[str, Any] | None:
+    # 야간에는 줄글만 멈춘다. refresh는 계속 돌아 확률 숫자는 미장 마감 직전
+    # 구간을 놓치지 않는다 — 비용의 실체는 LLM이고 API 순회는 공짜다.
+    # 파일을 건드리지 않으므로 직전 줄글이 last-good으로 남고, 화면은 그것을
+    # 계속 보여 준다. 실패가 아니라 의도된 정지라 종료 코드도 0이다.
+    hours = POLYMARKET_BRIEF_QUIET_HOURS if quiet_hours is None else quiet_hours
+    hour = now().hour
+    if hour in hours:
+        logger.info("[POLYMARKET_BRIEF] %d시는 야간 정지 구간이라 건너뛴다.", hour)
+        return {"state": "skipped_quiet_hours", "hour": hour}
+
     manifest = _read_json(root / "current.json")
     events = manifest.get("events")
     if not manifest.get("generation_id") or not isinstance(events, list):
@@ -237,6 +249,10 @@ def main() -> None:
     result = build()
     if result is None:
         raise SystemExit(1)
+    if result.get("state") == "skipped_quiet_hours":
+        # 의도된 정지다. systemd가 실패로 세지 않게 0으로 끝낸다.
+        print(json.dumps(result, ensure_ascii=False))
+        return
     print(
         json.dumps(
             {

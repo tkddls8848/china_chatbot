@@ -1,0 +1,13 @@
+requests<3,>=2.31
+Pillow<12,>=10.4
+edge-tts<8,>=7
+python-dotenv<2,>=1
+google-api-python-client<3,>=2.0
+google-auth-oauthlib<2,>=1.2
+google-auth-httplib2<1,>=0.2
+
+[:platform_system == "Windows"]
+tzdata>=2024.1
+
+[dev]
+pytest<9,>=8
