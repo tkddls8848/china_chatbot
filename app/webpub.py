@@ -166,11 +166,20 @@ def build_app() -> FastAPI:
         return polymarket_json(request, payload, "event_detail", {"event_id": event_id})
 
     @app.get("/market_chart.png")
-    def market_chart() -> FileResponse:
+    def market_chart(request: Request) -> Response:
         path = WEBPUB_DIR / "market_chart.png"
         if not path.is_file():
             raise HTTPException(status_code=404, detail="시장 산출물이 아직 없습니다.")
-        return FileResponse(path, media_type="image/png")
+        # URL은 고정이고 파일만 새로 구워진다. 캐시 지시가 없으면 브라우저가
+        # Last-Modified로 휴리스틱 유효기간을 잡아(RFC 9111 4.2.2) 새 차트를
+        # 며칠씩 건너뛴다 — 화면이 옛 추이를 계속 보여 주는 원인이다.
+        # 매번 되묻게 하고, 안 바뀌었으면 304로 끝낸다.
+        stat = path.stat()
+        etag = f'"{int(stat.st_mtime)}-{stat.st_size}"'
+        headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return FileResponse(path, media_type="image/png", headers=headers)
 
     return app
 

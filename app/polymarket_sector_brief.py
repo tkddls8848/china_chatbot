@@ -211,6 +211,7 @@ def build(
             row["paragraph"] = analyzer.analyze(
                 spec["label"], totals, named_events(selected, named_limit)
             )
+            row["overview"] = row["paragraph"].split(". ", 1)[0].rstrip(".") + "."
             row["status"] = "ok"
             written += 1
         except PolymarketBriefError as error:
@@ -222,6 +223,8 @@ def build(
             stale = previous_groups.get(spec["key"], {})
             if stale.get("paragraph"):
                 row["paragraph"] = stale["paragraph"]
+                if stale.get("overview"):
+                    row["overview"] = stale["overview"]
                 row["stale"] = True
         groups.append(row)
 

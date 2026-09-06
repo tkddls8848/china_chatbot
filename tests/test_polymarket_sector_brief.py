@@ -448,3 +448,52 @@ def test_an_empty_group_never_reaches_the_backend(tmp_path):
 
     with pytest.raises(PolymarketBriefError, match="no events"):
         analyzer.analyze("주식·시장", {}, [])
+
+
+def test_overview_must_precede_individual_probabilities(tmp_path):
+    from llm import PolymarketBriefError
+    raw = "전체적으로 서로 다른 정책 질문의 전망이 섞여 있어 하나의 방향으로 묶기 어렵다. 상위 질문에서 참여자들은 정책 변경 가능성을 25%로 보고 있다."
+    assert _analyzer(tmp_path, raw).analyze("거시·통화", {"event_count": 20}, [{"title": "t"}]) == raw
+    with pytest.raises(PolymarketBriefError, match="overview"):
+        _analyzer(tmp_path, "정책 변경 가능성은 25%이다. " + raw).analyze(
+            "거시·통화", {"event_count": 20}, [{"title": "t"}])
+
+
+def test_build_exposes_overview_as_first_sentence(tmp_path):
+    root = tmp_path / "polymarket"
+    _write_current(root, [_event(i, ["stocks"]) for i in range(12)])
+    result = build(root=root, target=tmp_path / "brief.json", analyzer=_Analyzer(), min_events=10,
+                   quiet_hours=set())
+    row = next(group for group in result["groups"] if group["status"] == "ok")
+    assert row["overview"] == row["paragraph"].rstrip(".") + "."
+
+
+@pytest.mark.parametrize("opening", [
+    "전체적으로 다양한 이슈에 대한 시장 전망이 분산되어 있습니다.",
+    "전체적으로 베팅에 대한 참여자들의 판단이 갈립니다.",
+    "전체적으로 기업과 암호자산 관련 이벤트에 대한 예측이 주를 이룬다.",
+    "전체적으로 금과 원유에 대한 기대가 주를 이룬다.",
+    "전체적으로 베팅에 대한 참여자들의 판단이 갈린다.",
+])
+def test_editorial_violations_get_exactly_one_correction(tmp_path, opening):
+    from llm.polymarket_brief import PolymarketBriefAnalyzer
+    good = "전체적으로 질문별 전망의 차이가 커 하나의 정책 방향으로 묶기 어렵다. 상위 질문에서 시장 참여자들은 정책 변경 가능성을 낮게 보고 있다."
+    calls = []
+    class Backend:
+        def generate(self, **kwargs):
+            calls.append(json.loads(kwargs["user_prompt"]))
+            return opening + " 상위 질문에서 시장 참여자들은 정책 변경 가능성을 낮게 보고 있다." if len(calls) == 1 else good
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("test", encoding="utf-8")
+    analyzer = PolymarketBriefAnalyzer(Backend(), prompt, 900)
+    assert analyzer.analyze("거시", {"event_count": 20}, [{"title": "t"}]) == good
+    assert len(calls) == 2
+    assert calls[1]["revision"]["reason"]
+    assert calls[1]["events"] == calls[0]["events"]
+
+
+def test_invalid_correction_is_not_accepted(tmp_path):
+    from llm import PolymarketBriefError
+    raw = "전체적으로 기업과 암호자산 관련 이벤트에 대한 예측이 주를 이룬다. 상위 질문에서는 여러 기업과 자산에 대한 질문이 포함되어 있다."
+    with pytest.raises(PolymarketBriefError, match="전체 요약"):
+        _analyzer(tmp_path, raw).analyze("주식", {"event_count": 20}, [{"title": "t"}])

@@ -88,3 +88,24 @@ def test_pages_label_the_clock_as_an_offset_not_japan_standard_time():
     ):
         assert "JST" not in body
         assert "UTC +9" in body
+
+
+def test_market_chart_is_revalidated_instead_of_heuristically_cached(tmp_path, monkeypatch):
+    """차트 URL은 고정이라 캐시 지시가 없으면 브라우저가 옛 그림을 계속 쓴다."""
+    monkeypatch.setattr(webpub, "WEBPUB_DIR", tmp_path)
+    chart = tmp_path / "market_chart.png"
+    chart.write_bytes(b"png-bytes")
+
+    client = TestClient(webpub.build_app())
+    first = client.get("/market_chart.png")
+    assert first.status_code == 200
+    assert first.headers["cache-control"] == "no-cache"
+
+    etag = first.headers["etag"]
+    assert client.get("/market_chart.png", headers={"if-none-match": etag}).status_code == 304
+
+    # 새로 구운 차트는 같은 URL로도 곧바로 나가야 한다.
+    chart.write_bytes(b"new-png-bytes")
+    fresh = client.get("/market_chart.png", headers={"if-none-match": etag})
+    assert fresh.status_code == 200
+    assert fresh.content == b"new-png-bytes"

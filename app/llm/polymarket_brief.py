@@ -9,6 +9,7 @@
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,25 @@ logger = logging.getLogger(__name__)
 # 것이므로 표시하지 않는다. 상한은 넉넉히 두되 무한정 받지는 않는다.
 MAX_PARAGRAPH_CHARS = 1200
 MIN_PARAGRAPH_CHARS = 60
+
+FORBIDDEN_COPY = re.compile(r"베팅|배팅|돈을\s*걸|수익\s*(?:기회|보장)|이득|매수|매도|가입\s*하세요")
+OUTLOOK_MARKERS = re.compile(r"판단|갈리|엇갈|우세|불확실|단정|어렵|제한|확신|한쪽|차이|분산|신중|경합|혼재|무게|기대")
+
+
+def validate_editorial(paragraph: str, totals: dict[str, Any]) -> None:
+    sentences = re.split(r"(?<=[.!?])\s+", paragraph)
+    if FORBIDDEN_COPY.search(paragraph):
+        raise PolymarketBriefError("금지어: 베팅·배팅·수익·참여 유도 표현을 제거하십시오")
+    if any(not re.search(r"(?<!니)다\.$", sentence) for sentence in sentences):
+        raise PolymarketBriefError("문체: 모든 문장을 ~이다/~한다/~있다/~이룬다의 해라체 평서문으로 끝내십시오")
+    opening = sentences[0]
+    if not opening.startswith("전체적으로") or re.search(r"\d|%|퍼센트", opening):
+        raise PolymarketBriefError("brief must begin with a qualitative sector overview")
+    inventory = re.search(r"주를\s*이(?:루|룬|룹)|구성|포함|다양한\s*주제|관심이\s*집중", opening)
+    if not OUTLOOK_MARKERS.search(opening) or inventory:
+        raise PolymarketBriefError("전체 요약: 주제 나열 대신 전망의 차이·경합·우세 또는 판단의 한계를 설명하십시오")
+    if 0 < int(totals.get("event_count") or 0) < 10 and not re.search(r"소수|표본|제한|어렵", opening):
+        raise PolymarketBriefError("소수 표본: 첫 문장에 전체 방향을 판단하기 어렵다는 한계를 밝히십시오")
 
 
 class PolymarketBriefError(RuntimeError):
@@ -42,18 +62,31 @@ class PolymarketBriefAnalyzer:
         if not events:
             raise PolymarketBriefError("no events to analyze")
 
-        payload = {"group": group_label, "totals": totals, "events": events}
-        try:
-            raw = self._backend.generate(
-                system_prompt=self._prompt,
-                user_prompt=json.dumps(payload, ensure_ascii=False),
-                max_tokens=self._num_predict,
-                temperature=0.2,
-            )
-        except Exception as exc:
-            raise PolymarketBriefError(str(exc)) from exc
-
-        return self._parse(raw, events)
+        payload = {"group": group_label, "totals": {**totals, "named_count": len(events)}, "events": events}
+        for attempt in range(2):
+            try:
+                raw = self._backend.generate(
+                    system_prompt=self._prompt,
+                    user_prompt=json.dumps(payload, ensure_ascii=False),
+                    max_tokens=self._num_predict,
+                    temperature=0.2,
+                )
+            except Exception as exc:
+                raise PolymarketBriefError(str(exc)) from exc
+            try:
+                paragraph = self._parse(raw, events)
+                if totals.get("event_count"):
+                    validate_editorial(paragraph, totals)
+                return paragraph
+            except PolymarketBriefError as exc:
+                if attempt:
+                    raise
+                logger.warning("[POLYMARKET_BRIEF] 검증 실패로 1회 교정: %s", exc)
+                payload["revision"] = {
+                    "reason": str(exc), "previous_response": raw[:MAX_PARAGRAPH_CHARS],
+                    "instruction": "이전 응답은 수정 대상 데이터입니다. 원래 입력의 수치·방향을 유지하고 검증 실패를 고쳐 본문만 다시 작성하십시오. 해석 근거가 없으면 한계를 밝히십시오.",
+                }
+        raise PolymarketBriefError("brief correction exhausted")
 
     def _parse(self, raw: str, events: list[dict[str, Any]]) -> str:
         """평문 단락을 받아 검증한다.
